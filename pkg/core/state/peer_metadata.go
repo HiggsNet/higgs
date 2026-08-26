@@ -14,30 +14,33 @@ type PatchField[T any] struct {
 	Value T
 }
 
-// PeerMetadataPatch is a replayable, typed peer-sync metadata mutation. It
+// PeerCheckpointPatch is a replayable, typed restart-hint mutation. It
 // cannot modify verified Network state or install live session resources.
-type PeerMetadataPatch struct {
+type PeerCheckpointPatch struct {
 	LastSyncUnix       PatchField[int64]
 	LastAttemptUnix    PatchField[int64]
 	BackoffUntilUnix   PatchField[int64]
 	FailureCount       PatchField[int]
-	LastError          PatchField[string]
+	LastRelayUnix      PatchField[int64]
+	LastRelayRootHex   PatchField[string]
+	RelaySuppressedAt  PatchField[int64]
 	DiscoveredEndpoint PatchField[string]
 	DiscoveredAtUnix   PatchField[int64]
 	ObservedEndpoint   PatchField[string]
+	ObservedFirstUnix  PatchField[int64]
+	ObservedLastUnix   PatchField[int64]
+	ObservedSyncUnix   PatchField[int64]
 	ObservedUntilUnix  PatchField[int64]
-	HintAccepted       PatchField[int64]
-	HintSuppressed     PatchField[int64]
-	Datagram           PatchField[PeerDatagramCounters]
-	ObjectPull         PatchField[PeerObjectPullCounters]
+	ObservedFailures   PatchField[int]
+	ObservedGrace      PatchField[[]ObservedGraceEndpoint]
 	Reject             map[zone.ZonePath]RejectedObject
 	ClearRejected      []zone.ZonePath
 }
 
-// UpdatePeerMetadata commits a metadata-only transaction. The verified
+// UpdatePeerCheckpoint commits a loss-tolerant checkpoint transaction. The verified
 // revision and Network pointer are unaffected; Repository still observes the
 // same commit-before-publish ordering as verified transactions.
-func (store *Store) UpdatePeerMetadata(ctx context.Context, expected Revisions, peerID string, patch PeerMetadataPatch) (CommitResult, error) {
+func (store *Store) UpdatePeerCheckpoint(ctx context.Context, expected Revisions, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
 	var out CommitResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
@@ -57,36 +60,37 @@ func (store *Store) UpdatePeerMetadata(ctx context.Context, expected Revisions, 
 		return out, ErrVerifiedStoreClosed
 	}
 	baseRevisions := store.revisions
-	candidate := cloneVerifiedState(store.state)
+	verified := cloneVerifiedState(store.state)
+	candidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 	if expected != baseRevisions {
 		return out, ErrVerifiedRevisionStale
 	}
 
 	before, existed := candidate.Peers[peerID]
-	after := clonePeerSyncMetadata(before)
-	applyPeerMetadataPatch(&after, patch)
-	if (!existed && peerMetadataEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
+	after := clonePeerCheckpoint(before)
+	applyPeerCheckpointPatch(&after, patch)
+	if (!existed && peerCheckpointEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
 		out.Changes.Revisions = baseRevisions
 		return out, nil
 	}
 	candidate.Peers[peerID] = after
 	nextRevisions := baseRevisions
-	nextRevisions.Metadata++
-	changes := ChangeSet{Revisions: nextRevisions, PeerMetadataChanged: true}
+	nextRevisions.Checkpoint++
+	changes := ChangeSet{Revisions: nextRevisions, GossipCheckpointChanged: true}
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneVerifiedState(candidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(verified, candidate), changes); err != nil {
 			return CommitResult{}, err
 		}
 	}
 	store.mu.Lock()
-	store.state = candidate
+	store.gossip = candidate
 	store.revisions = nextRevisions
 	store.mu.Unlock()
 	return CommitResult{Committed: true, Changes: changes}, nil
 }
 
-func applyPeerMetadataPatch(metadata *PeerSyncMetadata, patch PeerMetadataPatch) {
+func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatch) {
 	if metadata == nil {
 		return
 	}
@@ -94,15 +98,20 @@ func applyPeerMetadataPatch(metadata *PeerSyncMetadata, patch PeerMetadataPatch)
 	applyPatchField(&metadata.LastAttemptUnix, patch.LastAttemptUnix)
 	applyPatchField(&metadata.BackoffUntilUnix, patch.BackoffUntilUnix)
 	applyPatchField(&metadata.FailureCount, patch.FailureCount)
-	applyPatchField(&metadata.LastError, patch.LastError)
+	applyPatchField(&metadata.LastRelayUnix, patch.LastRelayUnix)
+	applyPatchField(&metadata.LastRelayCatalogRootHex, patch.LastRelayRootHex)
+	applyPatchField(&metadata.LastRelaySuppressedAt, patch.RelaySuppressedAt)
 	applyPatchField(&metadata.DiscoveredEndpoint, patch.DiscoveredEndpoint)
 	applyPatchField(&metadata.DiscoveredAtUnix, patch.DiscoveredAtUnix)
 	applyPatchField(&metadata.ObservedEndpoint, patch.ObservedEndpoint)
+	applyPatchField(&metadata.ObservedFirstSeenUnix, patch.ObservedFirstUnix)
+	applyPatchField(&metadata.ObservedLastSeenUnix, patch.ObservedLastUnix)
+	applyPatchField(&metadata.ObservedLastSyncUnix, patch.ObservedSyncUnix)
 	applyPatchField(&metadata.ObservedUntilUnix, patch.ObservedUntilUnix)
-	applyPatchField(&metadata.HintAccepted, patch.HintAccepted)
-	applyPatchField(&metadata.HintSuppressed, patch.HintSuppressed)
-	applyPatchField(&metadata.Datagram, patch.Datagram)
-	applyPatchField(&metadata.ObjectPull, patch.ObjectPull)
+	applyPatchField(&metadata.ObservedFailureCount, patch.ObservedFailures)
+	if patch.ObservedGrace.Set {
+		metadata.ObservedGraceEndpoints = append([]ObservedGraceEndpoint(nil), patch.ObservedGrace.Value...)
+	}
 	if len(patch.Reject) > 0 && metadata.RejectedObjects == nil {
 		metadata.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(patch.Reject))
 	}
@@ -124,8 +133,9 @@ func applyPatchField[T any](target *T, field PatchField[T]) {
 	}
 }
 
-func clonePeerSyncMetadata(metadata PeerSyncMetadata) PeerSyncMetadata {
+func clonePeerCheckpoint(metadata PeerCheckpoint) PeerCheckpoint {
 	out := metadata
+	out.ObservedGraceEndpoints = append([]ObservedGraceEndpoint(nil), metadata.ObservedGraceEndpoints...)
 	if metadata.RejectedObjects != nil {
 		out.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(metadata.RejectedObjects))
 		for path, rejected := range metadata.RejectedObjects {
@@ -136,7 +146,8 @@ func clonePeerSyncMetadata(metadata PeerSyncMetadata) PeerSyncMetadata {
 	return out
 }
 
-func peerMetadataEmpty(metadata PeerSyncMetadata) bool {
+func peerCheckpointEmpty(metadata PeerCheckpoint) bool {
+	metadata.ObservedGraceEndpoints = nil
 	metadata.RejectedObjects = nil
-	return reflect.DeepEqual(metadata, PeerSyncMetadata{})
+	return reflect.DeepEqual(metadata, PeerCheckpoint{})
 }

@@ -88,6 +88,20 @@ Zone snapshot；这是防止意外远程泄漏，不是把进程内 Store 当作
 sign/verify。Windows 与 Linux 不维护两套 signer/key-store adapter，也不为硬件不可导出密钥改变
 state transaction 语义。未来若需要平台加固，只能作为兼容相同持久化和签名语义的可选扩展。
 
+### 3.2 Verified state 与 Gossip runtime 边界
+
+`VerifiedState` 只保存会影响信任结论的事实：managed Zone、已验证 Network、root pin 以及本机
+raw private key。它不包含 peer session 或同步统计。
+
+Gossip 状态分成两类：session phase、round/catalog cursor、timer generation、chunk assembly、repair
+cache 和在途 object-pull 是协议正确性所需的活状态，只存在于 Engine/HostRuntime 内存，重启后重新同步；
+backoff、最近 endpoint、observed grace、relay suppression 和 rejected digest TTL 是可丢失的
+`GossipCheckpoint`，丢失最多带来额外重试或重新发现，不能改变验签、授权与最终收敛。attempt/error、
+hint/responder、datagram/object-pull 等纯统计进入有界 observability/metrics，不进入公共持久状态。
+
+Verified 与 checkpoint 使用独立 revision，但平台 RuntimeStateStore 可在一次 bbolt transaction 中原子保存
+两个 sub-root。这里的分根不会创建第二个 DB handle、writer goroutine 或 event loop。
+
 ## 4. 代码边界
 
 ```text

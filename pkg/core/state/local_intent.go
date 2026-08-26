@@ -77,6 +77,7 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, in
 	}
 	baseRevisions := store.revisions
 	candidate := cloneVerifiedState(store.state)
+	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 	if expected != baseRevisions {
 		return out, ErrVerifiedRevisionStale
@@ -95,7 +96,7 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, in
 		out.Revocation, changed, err = applyRevokeDelegationIntent(candidate, typed, now)
 		if err == nil {
 			securityPriority = true
-			metadataChanged = cleanupRevokedPeerMetadata(candidate, typed.Child)
+			metadataChanged = cleanupRevokedPeerCheckpoint(gossipCandidate, typed.Child)
 		}
 	default:
 		err = fmt.Errorf("unsupported local intent %T", intent)
@@ -110,22 +111,23 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, in
 	nextRevisions := baseRevisions
 	nextRevisions.Verified++
 	if metadataChanged {
-		nextRevisions.Metadata++
+		nextRevisions.Checkpoint++
 	}
 	changes := ChangeSet{
-		Revisions:           nextRevisions,
-		ChangedZones:        []zone.ZonePath{changed},
-		NetworkChanged:      true,
-		PeerMetadataChanged: metadataChanged,
-		SecurityPriority:    securityPriority,
+		Revisions:               nextRevisions,
+		ChangedZones:            []zone.ZonePath{changed},
+		NetworkChanged:          true,
+		GossipCheckpointChanged: metadataChanged,
+		SecurityPriority:        securityPriority,
 	}
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneVerifiedState(candidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return LocalIntentResult{}, err
 		}
 	}
 	store.mu.Lock()
 	store.state = candidate
+	store.gossip = gossipCandidate
 	store.revisions = nextRevisions
 	store.mu.Unlock()
 	out.Committed = true
@@ -299,7 +301,7 @@ func ensureZoneCollections(state *zone.ZoneState) {
 	}
 }
 
-func cleanupRevokedPeerMetadata(state *VerifiedState, revoked zone.ZonePath) bool {
+func cleanupRevokedPeerCheckpoint(state *GossipCheckpoint, revoked zone.ZonePath) bool {
 	if state == nil || !revoked.Valid() {
 		return false
 	}

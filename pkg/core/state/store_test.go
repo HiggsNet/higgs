@@ -16,12 +16,12 @@ type memoryVerifiedRepository struct {
 	mu       sync.Mutex
 	commits  int
 	expected Revisions
-	state    *VerifiedState
+	state    *CommitCandidate
 	changes  ChangeSet
 	err      error
 }
 
-func (repository *memoryVerifiedRepository) Commit(_ context.Context, expected Revisions, state *VerifiedState, changes ChangeSet) error {
+func (repository *memoryVerifiedRepository) Commit(_ context.Context, expected Revisions, state *CommitCandidate, changes ChangeSet) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.err != nil {
@@ -29,7 +29,7 @@ func (repository *memoryVerifiedRepository) Commit(_ context.Context, expected R
 	}
 	repository.commits++
 	repository.expected = expected
-	repository.state = cloneVerifiedState(state)
+	repository.state = cloneCommitCandidate(state.Verified, state.Gossip)
 	repository.changes = changes
 	return nil
 }
@@ -69,7 +69,7 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
 	}
-	if !result.Committed || !result.Changes.NetworkChanged || !result.Changes.PeerMetadataChanged {
+	if !result.Committed || !result.Changes.NetworkChanged || !result.Changes.GossipCheckpointChanged {
 		t.Fatalf("commit result = %+v, want network and metadata commit", result.CommitResult)
 	}
 	if len(result.Outcomes) != 3 || result.Outcomes[0].Err != nil || !errors.Is(result.Outcomes[1].Err, ErrSnapshotRootMismatch) || result.Outcomes[2].Err != nil {
@@ -79,11 +79,11 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	if got := string(view.State.Network.Zones["catofes."].Records["identity"].Value); got != "v2" {
 		t.Fatalf("identity = %q, want v2", got)
 	}
-	rejected := view.State.Peers["peer-a"].RejectedObjects["evil.catofes."]
+	rejected := view.Gossip.Peers["peer-a"].RejectedObjects["evil.catofes."]
 	if rejected.Reason != "root_mismatch" || !bytes.Equal(rejected.RootHash, []byte("advertised-root")) {
 		t.Fatalf("rejected metadata = %#v", rejected)
 	}
-	if view.Revisions != (Revisions{Verified: 1, Metadata: 1}) {
+	if view.Revisions != (Revisions{Verified: 1, Checkpoint: 1}) {
 		t.Fatalf("revisions = %+v, want 1/1", view.Revisions)
 	}
 	if repository.commits != 1 || repository.expected != (Revisions{}) {
@@ -203,35 +203,36 @@ func TestStoreConcurrentReadersSeeWholeRevisions(t *testing.T) {
 	readers.Wait()
 }
 
-func TestStoreUpdatePeerMetadataIsTypedDetachedAndMetadataOnly(t *testing.T) {
+func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T) {
 	initial, _ := testNetwork(t)
 	repository := &memoryVerifiedRepository{}
 	store := NewStore(&VerifiedState{Network: initial}, repository)
 	root := []byte("rejected-root")
-	result, err := store.UpdatePeerMetadata(context.Background(), Revisions{}, "peer-a", PeerMetadataPatch{
+	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
+	result, err := store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{
 		LastSyncUnix:       PatchField[int64]{Set: true, Value: 100},
 		BackoffUntilUnix:   PatchField[int64]{Set: true, Value: 150},
 		FailureCount:       PatchField[int]{Set: true, Value: 2},
 		DiscoveredEndpoint: PatchField[string]{Set: true, Value: "192.0.2.1:4242"},
-		HintAccepted:       PatchField[int64]{Set: true, Value: 3},
-		ObjectPull:         PatchField[PeerObjectPullCounters]{Set: true, Value: PeerObjectPullCounters{Attempts: 2, Successes: 1, Failures: 1}},
+		ObservedGrace:      PatchField[[]ObservedGraceEndpoint]{Set: true, Value: grace},
 		Reject: map[zone.ZonePath]RejectedObject{
 			"bad.catofes.": {RootHash: root, Reason: "untrusted_zone", UpdatedUnix: 100},
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdatePeerMetadata: %v", err)
+		t.Fatalf("UpdatePeerCheckpoint: %v", err)
 	}
-	if !result.Committed || result.Changes.NetworkChanged || !result.Changes.PeerMetadataChanged {
+	if !result.Committed || result.Changes.NetworkChanged || !result.Changes.GossipCheckpointChanged {
 		t.Fatalf("commit result = %+v", result)
 	}
-	if result.Changes.Revisions != (Revisions{Metadata: 1}) {
+	if result.Changes.Revisions != (Revisions{Checkpoint: 1}) {
 		t.Fatalf("revisions = %+v, want metadata=1", result.Changes.Revisions)
 	}
 	root[0] = 'X'
+	grace[0].Endpoint = "mutated"
 	view := store.ReadView()
-	peer := view.State.Peers["peer-a"]
-	if peer.LastSyncUnix != 100 || peer.BackoffUntilUnix != 150 || peer.FailureCount != 2 || peer.ObjectPull.Successes != 1 {
+	peer := view.Gossip.Peers["peer-a"]
+	if peer.LastSyncUnix != 100 || peer.BackoffUntilUnix != 150 || peer.FailureCount != 2 || peer.ObservedGraceEndpoints[0].Endpoint != "192.0.2.2:4242" {
 		t.Fatalf("peer metadata = %+v", peer)
 	}
 	if string(peer.RejectedObjects["bad.catofes."].RootHash) != "rejected-root" {
@@ -241,36 +242,35 @@ func TestStoreUpdatePeerMetadataIsTypedDetachedAndMetadataOnly(t *testing.T) {
 		t.Fatalf("repository commit = %d/%+v", repository.commits, repository.changes)
 	}
 
-	clearResult, err := store.UpdatePeerMetadata(context.Background(), view.Revisions, "peer-a", PeerMetadataPatch{
-		LastError:     PatchField[string]{Set: true, Value: ""},
+	clearResult, err := store.UpdatePeerCheckpoint(context.Background(), view.Revisions, "peer-a", PeerCheckpointPatch{
 		ClearRejected: []zone.ZonePath{"bad.catofes."},
 	})
 	if err != nil || !clearResult.Committed {
 		t.Fatalf("clear rejected result/error = %+v/%v", clearResult, err)
 	}
-	if len(store.ReadView().State.Peers["peer-a"].RejectedObjects) != 0 {
+	if len(store.ReadView().Gossip.Peers["peer-a"].RejectedObjects) != 0 {
 		t.Fatal("clear rejected patch did not remove entry")
 	}
 }
 
-func TestStoreUpdatePeerMetadataNoopAndRepositoryFailure(t *testing.T) {
+func TestStoreUpdatePeerCheckpointNoopAndRepositoryFailure(t *testing.T) {
 	repository := &memoryVerifiedRepository{}
 	store := NewStore(nil, repository)
-	result, err := store.UpdatePeerMetadata(context.Background(), Revisions{}, "peer-a", PeerMetadataPatch{})
+	result, err := store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{})
 	if err != nil || result.Committed || repository.commits != 0 {
 		t.Fatalf("empty patch result/error/commits = %+v/%v/%d", result, err, repository.commits)
 	}
 
 	wantErr := errors.New("metadata persistence failed")
 	repository.err = wantErr
-	_, err = store.UpdatePeerMetadata(context.Background(), Revisions{}, "peer-a", PeerMetadataPatch{
+	_, err = store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{
 		LastAttemptUnix: PatchField[int64]{Set: true, Value: 100},
 	})
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("UpdatePeerMetadata error = %v, want %v", err, wantErr)
+		t.Fatalf("UpdatePeerCheckpoint error = %v, want %v", err, wantErr)
 	}
 	view := store.ReadView()
-	if view.Revisions != (Revisions{}) || len(view.State.Peers) != 0 {
+	if view.Revisions != (Revisions{}) || len(view.Gossip.Peers) != 0 {
 		t.Fatalf("repository failure published metadata: %+v", view)
 	}
 }

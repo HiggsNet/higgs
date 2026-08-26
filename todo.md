@@ -304,8 +304,8 @@ package dependency: app -> host -> gossip -> state -> zone
   owner、persistence ordering 和 ChangeSet dispatch。平台 composition 只注入 UDP/clock/repository、
   lifecycle/logger 与 controller capabilities，不复制 host event/action switch。
 - `pkg/core/state` 提供唯一一套 verified aggregate 与事务语义。公共 HostRuntime 同步调用
-  `state.VerifiedStore`，后者拥有 managed zone、root trust/pin、已验证 Network、本机 raw Ed25519
-  private key material、持久化 peer sync metadata 和 verified revision；它不是第二个后台 runtime，
+  `state.Store`，后者拥有 managed zone、root trust/pin、已验证 Network、本机 raw Ed25519
+  private key material，并以独立 sub-root 原子组合 loss-tolerant `GossipCheckpoint`；它不是第二个后台 runtime，
   不创建 goroutine/写入线程/独立 DB handle，也不拥有 socket、session、timer、object-pull worker、SA、
   route、firewall rule、BIRD process、Wintun/WFP handle 或任何 observed platform object。
 - `pkg/core/gossip` 只拥有 wire codec、receiver/demux、session FSM、Engine、timer action/event types、
@@ -356,17 +356,17 @@ package dependency: app -> host -> gossip -> state -> zone
 
 **公共 state 数据与 API：**
 
-- [ ] 定义不可混入平台字段的 `state.VerifiedState`：至少包含 `ManagedZone`、`Network`、
-  trusted-root identity/hash、root/identity raw Ed25519 private key、`Peers map[PeerID]PeerSyncMetadata`；
-  schema guard 明确禁止 IPsec/link/firewall/routing/BIRD/admission observed state。auto-join pending 尽量
-  从 verified state 推导，只有确需跨重启保留的时间戳/错误才进入明确 metadata。
+- [ ] 定义不可混入平台字段的 `state.VerifiedState`：只包含 `ManagedZone`、`Network`、
+  trusted-root identity/hash 和 root/identity raw Ed25519 private key；schema guard 明确禁止 peer、
+  IPsec/link/firewall/routing/BIRD/admission observed state。peer retry/discovery 提示进入独立、可丢失并可从空状态
+  恢复的 `GossipCheckpoint`，不得影响验签、授权或最终收敛。
 - [ ] 定义 `state.VerifiedStore` 的单 owner/revision 模型和四组窄 API，由 HostRuntime 的唯一 event
   loop 同步调用，而不是暴露通用
   `func(*NetworkState)` callback：
   - `ReadView/ZoneDigests/Catalog/Snapshot`：锁内生成 detached 或 bounded DTO；
   - `ApplyLocalIntent(intent, now)`：从 Store 当前 revision 的本机私钥直接完成 authority-owned mutation；
   - `ApplyRemoteBatch(peer, snapshots, limits, now)`：远端 verified snapshot transaction；
-  - `UpdatePeerMetadata(peer, typed patch)`：不改变 Network 的 sync metadata transaction。
+  - `UpdatePeerCheckpoint(peer, typed patch)`：不改变 Network 的 loss-tolerant gossip checkpoint transaction。
 - [ ] `ApplyLocalIntent` 统一承接 config/DNS/admin/endpoint publisher 产生的 typed intent，包括 signed
   record put/revoke、delegation/revocation 和需要的 recovery mutation。输入 adapter 只做语法解析和
   来源采集；基于当前 revision 的权限、版本、history、跨 record 约束、签名 payload 和最终验证必须
@@ -380,12 +380,12 @@ package dependency: app -> host -> gossip -> state -> zone
   可以更新本地 managed-zone 的 authority envelope，但不能覆盖本地 authority-owned records、child
   delegations、revocations/history；identity key 不匹配、旧 epoch、同 epoch 冲突和无效 parent proof
   均 fail closed。相关 mutable zones 必须由 state transaction 自己正确 COW，不由平台声明。
-- [ ] `PeerSyncMetadata` 从 Linux `internal/state.PeerRuntimeState` 迁入公共 state，至少覆盖 retry/backoff、
-  discovered/observed endpoint、rejected object digest、relay/hint、bounded datagram/object-pull counters；
-  live session state、timer deadline、channel depth、worker/goroutine 不持久化。迁移后删除 Linux alias 壳，
-  observer 通过公共 read model 读取。
-- [ ] `CommitResult` 返回 `VerifiedRevision`、`MetadataRevision`、changed zones/record families、
-  `NetworkChanged`/`PeerMetadataChanged` 和安全优先级；纯 peer metadata commit 不推进 verified revision、
+- [ ] 将 Linux `internal/state.PeerRuntimeState` 逐字段拆分：公共 `GossipCheckpoint` 只覆盖 retry/backoff、
+  discovered/observed endpoint grace、rejected object digest 和 relay suppression 等重启提示；session phase、timer、
+  cursor、chunk assembly、worker/inflight pull 只在 Engine/HostRuntime 内存；hint/responder/last-error 与 datagram/
+  object-pull 计数进入有界 observability/metrics，不持久化。迁移后删除 Linux 大杂烩类型。
+- [ ] `CommitResult` 返回 `VerifiedRevision`、`CheckpointRevision`、changed zones/record families、
+  `NetworkChanged`/`GossipCheckpointChanged` 和安全优先级；纯 checkpoint commit 不推进 verified revision、
   不唤醒数据面。ChangeSet 只描述已成功提交的事实，不携带平台函数或可变 state 指针。
 
 **五条管理调用链必须按以下顺序实现：**
@@ -557,15 +557,14 @@ package dependency: app -> host -> gossip -> state -> zone
       Windows amd64 build）通过。
 - [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
-  - [x] C1：新增公共 `state.Store`/`VerifiedState`、detached `ReadView`/`ZoneDigests`、verified/metadata 双
+  - [x] C1：新增公共 `state.Store`/`VerifiedState`、detached `ReadView`/`ZoneDigests`、verified/checkpoint 双
     revision CAS、`ChangeSet` 和 commit-before-publish `Repository` contract；`ApplyRemoteBatch` 以逐对象
     savepoint 保留 success-reject-success，统一 expected-root/验证拒绝元数据并单批发布。memory repository
     已覆盖持久化失败不发布、输入/读视图不 retain、stale writer、并发 reader 与单 writer race。
-  - [ ] C2：补齐 typed `ApplyLocalIntent`、通用 `UpdatePeerMetadata`、auto-join/managed authority refresh COW
+  - [ ] C2：补齐 typed `ApplyLocalIntent`、通用 `UpdatePeerCheckpoint`、auto-join/managed authority refresh COW
     和 CAS 纯重算，再将 Linux snapshot apply adapter 切到公共 transaction。
-    - [x] C2a：公共 Store 新增 typed `PeerMetadataPatch`，覆盖 sync/backoff、discovered/observed endpoint、
-      hint、datagram/object-pull bounded counters 与 rejected object clear/upsert；metadata-only commit 不推进
-      verified revision。parent snapshot apply 后在同一 savepoint 调用公共 `ReconcileManagedAuthority`，匹配
+    - [x] C2a：公共 Store 新增 typed peer checkpoint patch；parent snapshot apply 后在同一 savepoint 调用公共
+      `ReconcileManagedAuthority`，匹配
       identity 才 adoption，refresh 保留本地 records/delegations/revocations/history，旧 epoch、同 epoch conflict、
       refresh identity mismatch 和无效 chain 均 fail closed；远端 managed-zone snapshot 不再覆盖本地内容。
     - [ ] C2b：实现 typed `ApplyLocalIntent` 与 raw-key/CAS 纯重算，并将 Linux snapshot apply、auto-join 和
@@ -573,12 +572,15 @@ package dependency: app -> host -> gossip -> state -> zone
       - [x] C2b1：公共 Store 新增 sealed local intent：`PutRecordIntent`、`PutDelegationIntent`、
         `RevokeDelegationIntent`；Store 直接持有并持久化 root/identity raw Ed25519 private key，按当前 authority
         选择授权 key 后调用公共 crypto sign/verify。revocation 在同一
-        commit 清理目标及后代 peer metadata，推进 verified/metadata revision 并返回 security-priority
+        commit 清理目标及后代 peer checkpoint，推进 verified/checkpoint revision 并返回 security-priority
         ChangeSet。repository failure、missing/unauthorized key、record history、delegate/revoke ordering 与
         retained pointer 已覆盖。
       - [ ] C2b2：将 DaemonStateStore 的 verified root 嵌入公共 Store 后切换在线
-        record/delegation/revocation、snapshot apply 和 peer metadata；
+        record/delegation/revocation、snapshot apply 和 peer checkpoint；
         迁移完成删除 app 内重复 mutation，不能在双 Store 并存期间切一半 writer。
+        - [x] C2b2a：按字段语义纠正 Store 分根：`VerifiedState` 不再包含 peer；新增独立
+          `GossipCheckpoint`/checkpoint revision，Repository 在同一 candidate 中原子组合 verified + checkpoint。
+          checkpoint 只允许丢失后增加重试/重新发现的行为提示，纯诊断计数继续留在 observability。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema
   migration；覆盖事务失败、close failure、no-op、metadata-only、crash fixture/reload、外部锁冲突及
   Linux/Windows path adapter。

@@ -2,6 +2,9 @@ package state
 
 import "github.com/HiggsNet/photon/pkg/core/zone"
 
+// PeerRuntimeState is the legacy Linux aggregate. C2b2 migrates only fields
+// that qualify as loss-tolerant gossip checkpoints; diagnostics move to the
+// observability layer instead of the verified store.
 type PeerRuntimeState struct {
 	LastSyncUnix            int64                         `json:"last_sync_unix,omitempty"`
 	LastAttemptUnix         int64                         `json:"last_attempt_unix,omitempty"`

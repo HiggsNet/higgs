@@ -29,66 +29,75 @@ type VerifiedState struct {
 	// observer and gossip projections must use DTOs that omit these fields.
 	RootPrivateKey     ed25519.PrivateKey
 	IdentityPrivateKey ed25519.PrivateKey
-	Peers              map[string]PeerSyncMetadata
 }
 
-// PeerSyncMetadata contains only durable protocol metadata. Live sessions,
-// timers, channels and worker state never belong in VerifiedState.
-type PeerSyncMetadata struct {
-	LastSyncUnix       int64
-	LastAttemptUnix    int64
-	BackoffUntilUnix   int64
-	FailureCount       int
-	LastError          string
-	DiscoveredEndpoint string
-	DiscoveredAtUnix   int64
-	ObservedEndpoint   string
-	ObservedUntilUnix  int64
-	HintAccepted       int64
-	HintSuppressed     int64
-	Datagram           PeerDatagramCounters
-	ObjectPull         PeerObjectPullCounters
-	RejectedObjects    map[zone.ZonePath]RejectedObject
+// GossipCheckpoint is a loss-tolerant restart hint. None of its fields may be
+// required for signature verification, authorization or eventual convergence.
+// Live sessions, timers, cursors, chunk assembly and in-flight pulls belong to
+// gossip.Engine/HostRuntime memory and are deliberately absent here.
+type GossipCheckpoint struct {
+	Peers map[string]PeerCheckpoint
 }
 
-type PeerDatagramCounters struct {
-	TooLargeDropped     int64
-	DigestOnlyAnnounces int64
-	ChunkFallbacks      int64
-	ChunkRepairNACKs    int64
-	ChunkRepairChunks   int64
+// PeerCheckpoint contains only restart hints that affect retry/discovery
+// efficiency. Pure diagnostics and counters belong in observability stores.
+type PeerCheckpoint struct {
+	LastSyncUnix            int64
+	LastAttemptUnix         int64
+	BackoffUntilUnix        int64
+	FailureCount            int
+	LastRelayUnix           int64
+	LastRelayCatalogRootHex string
+	LastRelaySuppressedAt   int64
+	DiscoveredEndpoint      string
+	DiscoveredAtUnix        int64
+	ObservedEndpoint        string
+	ObservedFirstSeenUnix   int64
+	ObservedLastSeenUnix    int64
+	ObservedLastSyncUnix    int64
+	ObservedUntilUnix       int64
+	ObservedFailureCount    int
+	ObservedGraceEndpoints  []ObservedGraceEndpoint
+	RejectedObjects         map[zone.ZonePath]RejectedObject
 }
 
-type PeerObjectPullCounters struct {
-	Attempts               int64
-	Successes              int64
-	Failures               int64
-	LargeObjectUnreachable int64
+type ObservedGraceEndpoint struct {
+	Endpoint  string
+	UntilUnix int64
 }
 
 type RejectedObject struct {
 	RootHash    []byte
 	Reason      string
 	UpdatedUnix int64
+	UntilUnix   int64
+}
+
+// CommitCandidate is the atomic common-state repository candidate. Verified facts and the
+// loss-tolerant gossip checkpoint remain distinct sub-roots.
+type CommitCandidate struct {
+	Verified *VerifiedState
+	Gossip   *GossipCheckpoint
 }
 
 type Revisions struct {
-	Verified uint64
-	Metadata uint64
+	Verified   uint64
+	Checkpoint uint64
 }
 
 // View is a detached read model. Callers may freely retain or mutate it.
 type View struct {
 	State     *VerifiedState
+	Gossip    *GossipCheckpoint
 	Revisions Revisions
 }
 
 type ChangeSet struct {
-	Revisions           Revisions
-	ChangedZones        []zone.ZonePath
-	NetworkChanged      bool
-	PeerMetadataChanged bool
-	SecurityPriority    bool
+	Revisions               Revisions
+	ChangedZones            []zone.ZonePath
+	NetworkChanged          bool
+	GossipCheckpointChanged bool
+	SecurityPriority        bool
 }
 
 type CommitResult struct {
@@ -120,23 +129,29 @@ type RemoteBatchResult struct {
 // before publishing the candidate in memory. Implementations must treat the
 // expected revisions as a CAS token and must not retain mutable pointers.
 type Repository interface {
-	Commit(context.Context, Revisions, *VerifiedState, ChangeSet) error
+	Commit(context.Context, Revisions, *CommitCandidate, ChangeSet) error
 }
 
-// Store is an in-memory single-owner verified aggregate. Its mutex protects
+// Store is an in-memory single-owner common-state aggregate. Verified facts
+// and loss-tolerant gossip checkpoints are separate sub-roots. Its mutex protects
 // readers and the CAS/publication boundary; verification and repository I/O
 // run without holding the read lock.
 type Store struct {
 	writeMu    sync.Mutex
 	mu         sync.RWMutex
 	state      *VerifiedState
+	gossip     *GossipCheckpoint
 	revisions  Revisions
 	repository Repository
 	closed     bool
 }
 
 func NewStore(initial *VerifiedState, repository Repository) *Store {
-	return &Store{state: cloneVerifiedState(initial), repository: repository}
+	return NewStoreWithCheckpoint(initial, nil, repository)
+}
+
+func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint, repository Repository) *Store {
+	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), repository: repository}
 }
 
 func (store *Store) ReadView() View {
@@ -145,7 +160,7 @@ func (store *Store) ReadView() View {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return View{State: cloneVerifiedState(store.state), Revisions: store.revisions}
+	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revisions: store.revisions}
 }
 
 func (store *Store) ZoneDigests() ([]ZoneDigest, Revisions) {
@@ -158,7 +173,7 @@ func (store *Store) ZoneDigests() ([]ZoneDigest, Revisions) {
 }
 
 // ApplyRemoteBatch applies every item with an independent savepoint. A
-// rejected item records bounded peer metadata and does not discard earlier or
+// rejected item records a bounded peer checkpoint and does not discard earlier or
 // later successful items. Publication is one CAS commit for the whole batch.
 func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, peerID string, batch []RemoteSnapshot, now time.Time) (RemoteBatchResult, error) {
 	var out RemoteBatchResult
@@ -178,12 +193,14 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 	}
 	baseRevisions := store.revisions
 	base := cloneVerifiedState(store.state)
+	baseGossip := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 	if expected != baseRevisions {
 		return out, ErrVerifiedRevisionStale
 	}
 
 	candidate := base
+	gossipCandidate := baseGossip
 	changedZones := make([]zone.ZonePath, 0, len(batch))
 	metadataChanged := false
 	for _, item := range batch {
@@ -223,7 +240,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 					if managedResult.Adopted || managedResult.Refreshed {
 						changedZones = appendZoneOnce(changedZones, candidate.ManagedZone)
 					}
-					if clearRejectedObject(candidate, peerID, item.Snapshot.Zone) {
+					if clearRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone) {
 						metadataChanged = true
 					}
 				}
@@ -231,7 +248,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 		}
 		if outcome.Err != nil {
 			outcome.RejectReason = remoteRejectReason(outcome.Err)
-			if item.Snapshot != nil && recordRejectedObject(candidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
+			if item.Snapshot != nil && recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
 				metadataChanged = true
 			}
 		}
@@ -248,13 +265,13 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 		nextRevisions.Verified++
 	}
 	if metadataChanged {
-		nextRevisions.Metadata++
+		nextRevisions.Checkpoint++
 	}
 	changes := ChangeSet{
-		Revisions:           nextRevisions,
-		ChangedZones:        append([]zone.ZonePath(nil), changedZones...),
-		NetworkChanged:      networkChanged,
-		PeerMetadataChanged: metadataChanged,
+		Revisions:               nextRevisions,
+		ChangedZones:            append([]zone.ZonePath(nil), changedZones...),
+		NetworkChanged:          networkChanged,
+		GossipCheckpointChanged: metadataChanged,
 	}
 
 	store.mu.RLock()
@@ -268,12 +285,13 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 	}
 	store.mu.RUnlock()
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneVerifiedState(candidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return RemoteBatchResult{}, err
 		}
 	}
 	store.mu.Lock()
 	store.state = candidate
+	store.gossip = gossipCandidate
 	store.revisions = nextRevisions
 	store.mu.Unlock()
 	out.Committed = true
@@ -294,7 +312,7 @@ func (store *Store) Close() {
 
 func cloneVerifiedState(value *VerifiedState) *VerifiedState {
 	if value == nil {
-		return &VerifiedState{Network: zone.NewNetworkState(), Peers: make(map[string]PeerSyncMetadata)}
+		return &VerifiedState{Network: zone.NewNetworkState()}
 	}
 	out := &VerifiedState{
 		ManagedZone:        value.ManagedZone,
@@ -302,21 +320,26 @@ func cloneVerifiedState(value *VerifiedState) *VerifiedState {
 		TrustedRootHash:    append([]byte(nil), value.TrustedRootHash...),
 		RootPrivateKey:     append(ed25519.PrivateKey(nil), value.RootPrivateKey...),
 		IdentityPrivateKey: append(ed25519.PrivateKey(nil), value.IdentityPrivateKey...),
-		Peers:              make(map[string]PeerSyncMetadata, len(value.Peers)),
 	}
 	if out.Network == nil {
 		out.Network = zone.NewNetworkState()
 	}
+	return out
+}
+
+func cloneGossipCheckpoint(value *GossipCheckpoint) *GossipCheckpoint {
+	out := &GossipCheckpoint{Peers: make(map[string]PeerCheckpoint)}
+	if value == nil {
+		return out
+	}
 	for peerID, metadata := range value.Peers {
-		cloned := metadata
-		cloned.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(metadata.RejectedObjects))
-		for path, rejected := range metadata.RejectedObjects {
-			rejected.RootHash = append([]byte(nil), rejected.RootHash...)
-			cloned.RejectedObjects[path] = rejected
-		}
-		out.Peers[peerID] = cloned
+		out.Peers[peerID] = clonePeerCheckpoint(metadata)
 	}
 	return out
+}
+
+func cloneCommitCandidate(verified *VerifiedState, gossip *GossipCheckpoint) *CommitCandidate {
+	return &CommitCandidate{Verified: cloneVerifiedState(verified), Gossip: cloneGossipCheckpoint(gossip)}
 }
 
 func identityPublicKey(privateKey ed25519.PrivateKey) ed25519.PublicKey {
@@ -358,7 +381,7 @@ func remoteRejectReason(err error) string {
 	return "invalid_snapshot"
 }
 
-func recordRejectedObject(state *VerifiedState, peerID string, path zone.ZonePath, root []byte, reason string, now time.Time) bool {
+func recordRejectedObject(state *GossipCheckpoint, peerID string, path zone.ZonePath, root []byte, reason string, now time.Time) bool {
 	if state == nil || peerID == "" || !path.Valid() {
 		return false
 	}
@@ -375,7 +398,7 @@ func recordRejectedObject(state *VerifiedState, peerID string, path zone.ZonePat
 	return true
 }
 
-func clearRejectedObject(state *VerifiedState, peerID string, path zone.ZonePath) bool {
+func clearRejectedObject(state *GossipCheckpoint, peerID string, path zone.ZonePath) bool {
 	if state == nil || peerID == "" {
 		return false
 	}

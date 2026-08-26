@@ -46,7 +46,7 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	if repository.commits != 2 || view.Revisions != (Revisions{Verified: 2}) {
 		t.Fatalf("commits/revisions = %d/%+v", repository.commits, view.Revisions)
 	}
-	if !bytes.Equal(repository.state.IdentityPrivateKey, identityPrivate) || !bytes.Equal(view.State.IdentityPrivateKey, identityPrivate) {
+	if !bytes.Equal(repository.state.Verified.IdentityPrivateKey, identityPrivate) || !bytes.Equal(view.State.IdentityPrivateKey, identityPrivate) {
 		t.Fatal("raw identity private key was not retained in repository/read state")
 	}
 	view.State.IdentityPrivateKey[0] ^= 0xff
@@ -75,7 +75,7 @@ func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	}
 }
 
-func TestStoreApplyLocalDelegationThenRevocationCleansPeerMetadata(t *testing.T) {
+func TestStoreApplyLocalDelegationThenRevocationCleansPeerCheckpoint(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, _, parentPrivate := managedAuthorityFixture(t, true)
 	childPublic, _, err := ed25519.GenerateKey(nil)
@@ -85,11 +85,11 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerMetadata(t *testing.T)
 	childAuthority := &zone.ZoneAuthority{Zone: "new.catofes.", Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
 		Key: childPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}},
 	}}}
-	store := NewStore(&VerifiedState{Network: network, Peers: map[string]PeerSyncMetadata{
+	store := NewStoreWithCheckpoint(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, &GossipCheckpoint{Peers: map[string]PeerCheckpoint{
 		"new.catofes.":      {LastSyncUnix: 1},
 		"leaf.new.catofes.": {LastSyncUnix: 1},
 		"other.catofes.":    {LastSyncUnix: 1},
-	}, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, nil)
+	}}, nil)
 	issued, err := store.ApplyLocalIntent(context.Background(), Revisions{}, PutDelegationIntent{Parent: "catofes.", Authority: childAuthority}, now)
 	if err != nil {
 		t.Fatalf("PutDelegation: %v", err)
@@ -103,7 +103,7 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerMetadata(t *testing.T)
 	if err != nil {
 		t.Fatalf("RevokeDelegation: %v", err)
 	}
-	if revoked.Revocation == nil || !revoked.Changes.SecurityPriority || !revoked.Changes.PeerMetadataChanged {
+	if revoked.Revocation == nil || !revoked.Changes.SecurityPriority || !revoked.Changes.GossipCheckpointChanged {
 		t.Fatalf("revoked result = %+v", revoked)
 	}
 	view := store.ReadView()
@@ -111,16 +111,16 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerMetadata(t *testing.T)
 	if parent.Delegations["new.catofes."] != nil || parent.Revocations["new.catofes."] == nil {
 		t.Fatalf("parent delegation/revocation = %#v/%#v", parent.Delegations["new.catofes."], parent.Revocations["new.catofes."])
 	}
-	if _, ok := view.State.Peers["new.catofes."]; ok {
+	if _, ok := view.Gossip.Peers["new.catofes."]; ok {
 		t.Fatal("revoked peer metadata retained")
 	}
-	if _, ok := view.State.Peers["leaf.new.catofes."]; ok {
+	if _, ok := view.Gossip.Peers["leaf.new.catofes."]; ok {
 		t.Fatal("revoked descendant metadata retained")
 	}
-	if _, ok := view.State.Peers["other.catofes."]; !ok {
+	if _, ok := view.Gossip.Peers["other.catofes."]; !ok {
 		t.Fatal("unrelated peer metadata removed")
 	}
-	if view.Revisions != (Revisions{Verified: 2, Metadata: 1}) {
+	if view.Revisions != (Revisions{Verified: 2, Checkpoint: 1}) {
 		t.Fatalf("revisions = %+v, want verified=2 metadata=1", view.Revisions)
 	}
 }
