@@ -144,6 +144,7 @@ type daemonRecordPut struct {
 
 type daemonEventResult struct {
 	Version        uint64
+	StateCommitted bool
 	CleanedLinks   int
 	CleanedOrphans int
 	Zone           zone.ZonePath
@@ -1002,7 +1003,7 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 					result.Error = err
 				}
 			}
-			if (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.Error == nil {
+			if (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.Error == nil && result.StateCommitted {
 				flushed, err := d.flushFirewallReconcileResult(ctx)
 				firewallFlushed = flushed || firewallFlushed
 				if err != nil {
@@ -1129,11 +1130,11 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		if event.EndpointACL == nil {
 			return daemonEventResult{Error: errors.New("endpoint ACL is required")}, false, false
 		}
-		err := d.handleEndpointACLApplyEvent(*event.EndpointACL)
-		return daemonEventResult{Error: err}, false, false
+		committed, err := d.handleEndpointACLApplyEvent(*event.EndpointACL)
+		return daemonEventResult{StateCommitted: committed, Error: err}, false, false
 	case daemonEventEndpointACLRemove:
-		err := d.handleEndpointACLRemoveEvent(event.Key)
-		return daemonEventResult{Error: err}, false, false
+		committed, err := d.handleEndpointACLRemoveEvent(event.Key)
+		return daemonEventResult{StateCommitted: committed, Error: err}, false, false
 	case daemonEventShutdown:
 		return daemonEventResult{}, false, true
 	default:

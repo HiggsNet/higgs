@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,11 +12,31 @@ import (
 	"time"
 )
 
+const udpDNSReadinessAttempts = 2
+
 func checkSOCKS5UDPDNS(proxyAddress string, resolver resolverConfig, timeout time.Duration) error {
-	target, err := udpDNSProbeTarget(resolver.Servers)
+	return checkSOCKS5UDPDNSWithProbe(proxyAddress, resolver, timeout, checkSOCKS5UDPDNSTarget)
+}
+
+func checkSOCKS5UDPDNSWithProbe(proxyAddress string, resolver resolverConfig, timeout time.Duration, probe func(string, *net.UDPAddr, time.Duration) error) error {
+	targets, err := udpDNSProbeTargets(resolver.Servers)
 	if err != nil {
 		return err
 	}
+	var probeErrors []error
+	for attempt := 1; attempt <= udpDNSReadinessAttempts; attempt++ {
+		for _, target := range targets {
+			if err := probe(proxyAddress, target, timeout); err == nil {
+				return nil
+			} else {
+				probeErrors = append(probeErrors, fmt.Errorf("resolver %s attempt %d: %w", target, attempt, err))
+			}
+		}
+	}
+	return fmt.Errorf("all SOCKS5 UDP DNS readiness probes failed: %w", errors.Join(probeErrors...))
+}
+
+func checkSOCKS5UDPDNSTarget(proxyAddress string, target *net.UDPAddr, timeout time.Duration) error {
 	control, err := net.DialTimeout("tcp", proxyAddress, timeout)
 	if err != nil {
 		return err
@@ -98,7 +119,9 @@ func checkSOCKS5UDPDNS(proxyAddress string, resolver resolverConfig, timeout tim
 	return nil
 }
 
-func udpDNSProbeTarget(servers []string) (*net.UDPAddr, error) {
+func udpDNSProbeTargets(servers []string) ([]*net.UDPAddr, error) {
+	seen := make(map[string]bool)
+	var targets []*net.UDPAddr
 	for _, server := range servers {
 		candidate := strings.TrimSpace(server)
 		if strings.Contains(candidate, "://") {
@@ -112,17 +135,26 @@ func udpDNSProbeTarget(servers []string) (*net.UDPAddr, error) {
 			continue
 		}
 		if ip := net.ParseIP(strings.Trim(candidate, "[]")); ip != nil {
-			return &net.UDPAddr{IP: ip, Port: 53}, nil
+			target := &net.UDPAddr{IP: ip, Port: 53}
+			if !seen[target.String()] {
+				seen[target.String()] = true
+				targets = append(targets, target)
+			}
+			continue
 		}
 		if _, _, err := net.SplitHostPort(candidate); err != nil {
 			candidate = net.JoinHostPort(candidate, "53")
 		}
 		address, err := net.ResolveUDPAddr("udp", candidate)
-		if err == nil {
-			return address, nil
+		if err == nil && !seen[address.String()] {
+			seen[address.String()] = true
+			targets = append(targets, address)
 		}
 	}
-	return nil, fmt.Errorf("SOCKS5 UDP DNS health check requires a plain, udp://, or dns:// resolver")
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("SOCKS5 UDP DNS health check requires a plain, udp://, or dns:// resolver")
+	}
+	return targets, nil
 }
 
 func readSOCKS5Reply(reader io.Reader) (*net.UDPAddr, error) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -186,21 +187,24 @@ func canonicalEndpointPrefixes(prefixes []netip.Prefix) []netip.Prefix {
 	return out
 }
 
-func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) error {
+func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
 	validated, err := validateEndpointACL(acl)
 	if err != nil {
-		return err
-	}
-	if !d.hasEnforcingHostFirewall() {
-		return errors.New("endpoint ACL requires an enabled managed host firewall instance with an available nftables or iptables backend")
+		return false, err
 	}
 	snapshot, rev := d.StateStore.firewallSnapshot()
 	if snapshot == nil || snapshot.Network == nil {
-		return errors.New("daemon state is not loaded")
+		return false, errors.New("daemon state is not loaded")
+	}
+	if !d.hasEnforcingHostFirewall() {
+		return false, errors.New("endpoint ACL requires an enabled managed host firewall instance with an available nftables or iptables backend")
+	}
+	if current, ok := snapshot.EndpointACLs[validated.Name]; ok && endpointACLEqual(current, validated) {
+		return false, nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(snapshot.Network, d.Sync.now())
 	if err != nil {
-		return fmt.Errorf("build route authorization: %w", err)
+		return false, fmt.Errorf("build route authorization: %w", err)
 	}
 	destination, _ := netip.ParseAddr(validated.Destination)
 	owned := false
@@ -211,26 +215,44 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) error {
 		}
 	}
 	if !owned {
-		return fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
+		return false, fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
 	}
 	if snapshot.EndpointACLs == nil {
 		snapshot.EndpointACLs = make(map[string]endpointACL)
 	}
 	snapshot.EndpointACLs[validated.Name] = validated
-	return d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile)
+	if err := d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func (d *DaemonService) handleEndpointACLRemoveEvent(name string) error {
+func (d *DaemonService) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	name, err := photonservice.NormalizeID(name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	snapshot, rev := d.StateStore.firewallSnapshot()
 	if snapshot == nil {
-		return errors.New("daemon state is not loaded")
+		return false, errors.New("daemon state is not loaded")
+	}
+	if _, ok := snapshot.EndpointACLs[name]; !ok {
+		return false, nil
 	}
 	delete(snapshot.EndpointACLs, name)
-	return d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile)
+	if err := d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func endpointACLEqual(left, right endpointACL) bool {
+	return left.Name == right.Name &&
+		left.Destination == right.Destination &&
+		left.Scope == right.Scope &&
+		left.Protocol == right.Protocol &&
+		left.Port == right.Port &&
+		slices.Equal(left.Selectors, right.Selectors)
 }
 
 func (d *DaemonService) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL, reconcile *firewallReconcileState) error {
