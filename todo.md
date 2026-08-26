@@ -656,8 +656,12 @@ package dependency: app -> host -> gossip -> state -> zone
         的 adapter 已保持纯转换，不读取本地 state、不重复 semantic validation，并统一通过公共 preview/commit 返回
         record version。公共 Store + Linux runtime 的组合读取纯函数边界已经落地：公共 `Store.ReadView()` 与
         Linux runtime snapshot 只生成 detached 的临时 `stateFile` 供现有 projection/controller planner 迁移使用，
-        不提供保存或反向写回入口；checkpoint 到旧 peer 形状的映射也仅限读侧。下一步把 daemon reader 接到该
-        组合边界，随后与所有在线 writer 同一批切换并删除 app 内重复 mutation，不能让临时视图重新成为持久化根。
+        不提供保存或反向写回入口；checkpoint 到旧 peer 形状的映射也仅限读侧。`DaemonStateStore` 已新增尚未接入
+        生产启动的组合模式：只把该 detached 结果作为现有 reader 的缓存，公共 local intent 必须先经 `state.Store`
+        成功持久化/发布后才刷新缓存；preview、持久化失败和 no-op 均不发布。组合模式显式拒绝旧通用
+        `Update`、peer、Network/snapshot 和 controller commit writer，防止迁移漏项静默写回临时 `stateFile`。
+        下一步补齐公共 remote/checkpoint 与 Linux runtime typed commit 委托，再与生产启动同批启用并删除 app 内
+        重复 mutation。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"sync"
@@ -36,6 +37,8 @@ type daemonStateStoreMeta struct {
 type DaemonStateStore struct {
 	mu                sync.RWMutex
 	committed         *stateFile
+	common            *corestate.Store
+	runtime           *linuxRuntimeState
 	revision          uint64
 	snapshotTime      time.Time
 	dirty             daemonDirtyFlags
@@ -61,6 +64,66 @@ func NewDaemonStateStore(initial *stateFile) *DaemonStateStore {
 	store := &DaemonStateStore{now: time.Now}
 	store.ReplaceCommitted(initial)
 	return store
+}
+
+// NewComposedDaemonStateStore creates the E-stage Linux composition boundary.
+// committed is only a detached compatibility read view; common and runtime are
+// its owners. Legacy stateFile writers are rejected in this mode so the view
+// cannot silently become a second source of truth.
+func NewComposedDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState) (*DaemonStateStore, error) {
+	if common == nil {
+		return nil, errors.New("common state store is nil")
+	}
+	store := &DaemonStateStore{
+		common:  common,
+		runtime: cloneLinuxRuntimeState(runtime),
+		now:     time.Now,
+	}
+	store.refreshComposedView()
+	if store.committed == nil {
+		return nil, errors.New("composed daemon state is nil")
+	}
+	return store, nil
+}
+
+// ApplyCommonLocalIntent is the only common writer exposed by the first
+// composition cut. Store performs validation/signing/persistence; only after
+// successful publication do we refresh the detached Linux compatibility view.
+func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent corestate.LocalIntent, dryRun bool, now time.Time) (corestate.LocalIntentResult, error) {
+	if s == nil || s.common == nil {
+		return corestate.LocalIntentResult{}, errors.New("daemon common state store is not initialized")
+	}
+	if dryRun {
+		return s.common.PreviewLocalIntent(intent, now)
+	}
+	result, err := s.common.ApplyLocalIntent(ctx, intent, now)
+	if err != nil {
+		return corestate.LocalIntentResult{}, err
+	}
+	if result.Committed {
+		s.refreshComposedView()
+	}
+	return result, nil
+}
+
+func (s *DaemonStateStore) refreshComposedView() {
+	if s == nil || s.common == nil {
+		return
+	}
+	commonView := s.common.ReadView()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.committed = composeLinuxStateView(commonView, s.runtime)
+	s.revision = uint64(commonView.Revision)
+	if s.now != nil {
+		s.snapshotTime = s.now()
+	} else {
+		s.snapshotTime = time.Now()
+	}
+}
+
+func (s *DaemonStateStore) legacyWritable() bool {
+	return s != nil && s.common == nil
 }
 
 func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
@@ -198,6 +261,9 @@ func (s *DaemonStateStore) BeginUpdate() (*DaemonStateUpdate, error) {
 	if s == nil {
 		return nil, errors.New("daemon state store is nil")
 	}
+	if !s.legacyWritable() {
+		return nil, errors.New("legacy daemon state writer is disabled for composed state")
+	}
 	s.mu.RLock()
 	committed := s.committed
 	update := &DaemonStateUpdate{
@@ -267,6 +333,9 @@ func (s *DaemonStateStore) UpdateSyncPeer(peerID string, fn func(*syncPeerState)
 	if s == nil {
 		return 0, errors.New("daemon state store is nil")
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, errors.New("legacy daemon peer writer is disabled for composed state")
+	}
 	if fn == nil {
 		return 0, errors.New("sync peer update function is nil")
 	}
@@ -281,6 +350,9 @@ func (s *DaemonStateStore) UpdateSyncPeer(peerID string, fn func(*syncPeerState)
 func (s *DaemonStateStore) updateSyncPeerWithView(peerID string, fn func(syncPeerMutationView, *syncPeerState) error) (uint64, error) {
 	if s == nil {
 		return 0, errors.New("daemon state store is nil")
+	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, errors.New("legacy daemon peer writer is disabled for composed state")
 	}
 	if peerID == "" {
 		return 0, errors.New("sync peer id is empty")
@@ -345,6 +417,9 @@ func (s *DaemonStateStore) updateSyncPeersWithView(fn func(syncPeerMutationView)
 	if s == nil {
 		return 0, false, errors.New("daemon state store is nil")
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false, errors.New("legacy daemon peer writer is disabled for composed state")
+	}
 	if fn == nil {
 		return 0, false, errors.New("sync peers update function is nil")
 	}
@@ -403,6 +478,9 @@ func (s *DaemonStateStore) CommitIfRevision(rev uint64, fn func(*stateFile) erro
 	if s == nil {
 		return 0, false, errors.New("daemon state store is nil")
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false, errors.New("legacy daemon state writer is disabled for composed state")
+	}
 	if fn == nil {
 		return 0, false, errors.New("daemon state commit function is nil")
 	}
@@ -427,6 +505,9 @@ func (s *DaemonStateStore) commitRoutingIfRevision(rev uint64, birdInstances map
 	if s == nil {
 		return 0, false
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false
+	}
 	nextBirdInstances := cloneBirdInstances(birdInstances)
 	nextReconcile := cloneRoutingReconcileState(reconcile)
 
@@ -447,6 +528,9 @@ func (s *DaemonStateStore) commitRoutingIfRevision(rev uint64, birdInstances map
 func (s *DaemonStateStore) commitIPsecIfRevision(rev uint64, transportKey *ipsecTransportKeyState, portRecord *ipsecPortRecordState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool) {
 	if s == nil {
 		return 0, false
+	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false
 	}
 	nextTransportKey := cloneIPsecTransportKeyState(transportKey)
 	nextPortRecord := cloneIPsecPortRecordState(portRecord)
@@ -473,6 +557,9 @@ func (s *DaemonStateStore) commitFirewallIfRevision(rev uint64, endpointACLs map
 	if s == nil {
 		return 0, false
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false
+	}
 	nextEndpointACLs := cloneEndpointACLs(endpointACLs)
 	nextReconcile := cloneFirewallReconcileState(reconcile)
 
@@ -495,6 +582,9 @@ func (s *DaemonStateStore) commitNetworkCandidateIfRevision(rev uint64, candidat
 	if s == nil || candidate == nil {
 		return 0, false
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.revision != rev {
@@ -514,6 +604,9 @@ func (s *DaemonStateStore) commitSnapshotApplyIfRevision(rev uint64, workspace *
 	if s == nil || workspace == nil {
 		return 0, false
 	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.revision != rev {
@@ -526,6 +619,9 @@ func (s *DaemonStateStore) commitSnapshotApplyIfRevision(rev uint64, workspace *
 func (s *DaemonStateStore) ReplaceCommitted(state *stateFile) uint64 {
 	if s == nil {
 		return 0
+	}
+	if !s.legacyWritable() {
+		return s.Meta().Revision
 	}
 	next := cloneStateFile(state)
 	s.mu.Lock()

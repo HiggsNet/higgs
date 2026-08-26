@@ -50,6 +50,15 @@ func applyLinuxRuntimeReadView(view *stateFile, runtime *linuxRuntimeState) {
 	view.Admission = cloneAdmissionState(runtime.Admission)
 }
 
+func cloneLinuxRuntimeState(runtime *linuxRuntimeState) *linuxRuntimeState {
+	if runtime == nil {
+		return &linuxRuntimeState{}
+	}
+	view := &stateFile{}
+	applyLinuxRuntimeReadView(view, runtime)
+	return linuxRuntimeStateFromLegacy(view)
+}
+
 func syncPeerReadView(checkpoint *corestate.GossipCheckpoint) map[string]syncPeerState {
 	peers := make(map[string]syncPeerState)
 	if checkpoint == nil {
