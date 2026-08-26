@@ -654,8 +654,10 @@ package dependency: app -> host -> gossip -> state -> zone
         route 与 service endpoint 授权；通用 `PutRecordIntent` 在公共层拒绝对应保留 namespace/type。公共 preview
         复用完全相同的 normalization/validation/signing 路径但不落盘、不发布。daemon control request 到公共 intent
         的 adapter 已保持纯转换，不读取本地 state、不重复 semantic validation，并统一通过公共 preview/commit 返回
-        record version。下一步完成公共 Store + Linux runtime 的组合读取边界后，一次性替换 daemon 旧 Network writer，
-        并删除 app 内重复 mutation。
+        record version。公共 Store + Linux runtime 的组合读取纯函数边界已经落地：公共 `Store.ReadView()` 与
+        Linux runtime snapshot 只生成 detached 的临时 `stateFile` 供现有 projection/controller planner 迁移使用，
+        不提供保存或反向写回入口；checkpoint 到旧 peer 形状的映射也仅限读侧。下一步把 daemon reader 接到该
+        组合边界，随后与所有在线 writer 同一批切换并删除 app 内重复 mutation，不能让临时视图重新成为持久化根。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
