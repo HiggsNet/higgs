@@ -49,7 +49,7 @@ func (d *DaemonService) EnableEventLoopSync(clock Clock) {
 	d.timerManager = NewTimerManager(clock, d.syncEvents)
 }
 
-func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) error {
+func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
 	}
@@ -88,11 +88,11 @@ func (d *DaemonService) handleSyncTimerEventLoop(_ context.Context, force bool) 
 			LocalDigests: projection.digests,
 			LocalSummary: projection.summary,
 		}
-		select {
-		case d.syncEvents <- event:
-		default:
-			d.logWarn("sync", "event_loop_full", map[string]any{"peer_id": peerID})
-		}
+		// This function already runs on the daemon event-loop goroutine. Execute
+		// the initial event directly so a saturated internal event queue cannot
+		// leave an idle session behind forever. Such a zombie session suppresses
+		// every later periodic/bootstrap retry as "session_active".
+		d.handleSyncEvent(ctx, event)
 	}
 	return nil
 }

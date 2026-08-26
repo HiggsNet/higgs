@@ -143,6 +143,38 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 }
 
+func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	peerID := "bootstrap.catofes."
+	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
+	state.SyncPeers = map[string]syncPeerState{
+		peerID: {
+			ActivePullState:       string(SyncSessionFailed),
+			ActivePullLastEvent:   "catalog_page_timeout",
+			ActivePullUpdatedUnix: now.Add(-time.Hour).Unix(),
+			BackoffUntilUnix:      now.Add(-time.Minute).Unix(),
+		},
+	}
+	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	service := newDaemonService(rt, state, config, time.Minute)
+	defer service.timerManager.Stop()
+	for len(service.syncEvents) < cap(service.syncEvents) {
+		service.syncEvents <- &SyncTimerEvent{PeerID: "queued.catofes."}
+	}
+
+	if err := service.handleSyncTimerEventLoop(context.Background(), false); err != nil {
+		t.Fatalf("handleSyncTimerEventLoop: %v", err)
+	}
+	session := service.syncSessions[peerID]
+	if session == nil || session.State != SyncSessionSummarySent {
+		t.Fatalf("bootstrap session = %#v, want directly started summary_sent session", session)
+	}
+	if got := len(service.syncEvents); got != cap(service.syncEvents) {
+		t.Fatalf("queued events = %d, want original full queue %d", got, cap(service.syncEvents))
+	}
+}
+
 func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
