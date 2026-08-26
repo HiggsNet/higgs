@@ -644,8 +644,13 @@ package dependency: app -> host -> gossip -> state -> zone
       - [ ] E1b5：补齐并整体切换公共 verified writer。`PutDelegationIntent` 已改为在同一事务同时更新父区
         delegation 与子区 authority，authority epoch 刷新保留子区 records/history，并把父区和子区都放入
         `ChangeSet.ChangedZones`。root authority grant 已有专用 `UpdateRootAuthorityIntent`，强制 epoch 单调、
-        本地 root key 与 trusted root pin 不变且保留根区内容。继续覆盖 join accept、recovery import/purge 及
-        IPAM/route/service typed record intent 后，再一次性替换 daemon 旧 Network writer。
+        本地 root key 与 trusted root pin 不变且保留根区内容。join accept 的公共 `InstallIdentity` 已区分首次
+        安装与同 managed zone refresh，校验 identity key/完整 chain/固定 root pin，拒绝身份切换、epoch 降级和
+        同 epoch 冲突，且持久化成功后才发布。显式 recovery import 也已有公共事务入口，允许恢复 managed zone、
+        保持 trusted root 不变、按字节 no-op 且持久化成功后才发布。revoked purge 的公共层也已收口：只负责
+        verified zone 与 gossip checkpoint，保留父区 tombstone 和本机 identity chain；Linux IPsec/link 清理由
+        平台层按公共 zone plan 执行。继续覆盖 IPAM/route/service typed record intent 后，再一次性替换 daemon
+        旧 Network writer。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
