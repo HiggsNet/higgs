@@ -641,6 +641,11 @@ package dependency: app -> host -> gossip -> state -> zone
         checkpoint 删除并迁入 `PeerDiagnostics`。这些字段只解释最近一次更新/抑制/观察的来源，不参与 relay
         节流或 observed path 有效性判断；在线 inspect/HTTP 继续展示，重启后丢失。relay 抑制诊断不再提交
         metadata，观察来源只在 endpoint 事务提交成功后记录。
+      - [ ] E1b5：补齐并整体切换公共 verified writer。`PutDelegationIntent` 已改为在同一事务同时更新父区
+        delegation 与子区 authority，authority epoch 刷新保留子区 records/history，并把父区和子区都放入
+        `ChangeSet.ChangedZones`。root authority grant 已有专用 `UpdateRootAuthorityIntent`，强制 epoch 单调、
+        本地 root key 与 trusted root pin 不变且保留根区内容。继续覆盖 join accept、recovery import/purge 及
+        IPAM/route/service typed record intent 后，再一次性替换 daemon 旧 Network writer。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	ErrDelegationEpochStale    = errors.New("delegation authority epoch is stale")
-	ErrDelegationEpochConflict = errors.New("delegation authority conflicts at the same epoch")
+	ErrAuthorityEpochStale    = errors.New("authority epoch is stale")
+	ErrAuthorityEpochConflict = errors.New("authority conflicts at the same epoch")
 )
 
 type LocalIntent interface {
@@ -46,11 +46,18 @@ type RevokeDelegationIntent struct {
 
 func (RevokeDelegationIntent) isLocalIntent() {}
 
+type UpdateRootAuthorityIntent struct {
+	Authority *zone.ZoneAuthority
+}
+
+func (UpdateRootAuthorityIntent) isLocalIntent() {}
+
 type LocalIntentResult struct {
 	CommitResult
 	Record     *zone.Record
 	Delegation *zone.Delegation
 	Revocation *zone.DelegationRevocation
+	Authority  *zone.ZoneAuthority
 }
 
 // ApplyLocalIntent validates, signs and commits one authority-owned mutation.
@@ -80,6 +87,7 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 	var changed zone.ZonePath
+	var additionallyChanged []zone.ZonePath
 	var securityPriority bool
 	var metadataChanged bool
 	var err error
@@ -88,12 +96,17 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 		out.Record, changed, err = applyPutRecordIntent(candidate, typed, now)
 	case PutDelegationIntent:
 		out.Delegation, changed, err = applyPutDelegationIntent(candidate, typed, now)
+		if changed != "" {
+			additionallyChanged = append(additionallyChanged, typed.Authority.Zone)
+		}
 	case RevokeDelegationIntent:
 		out.Revocation, changed, err = applyRevokeDelegationIntent(candidate, typed, now)
 		if err == nil {
 			securityPriority = true
 			metadataChanged = cleanupRevokedPeerCheckpoint(gossipCandidate, typed.Child)
 		}
+	case UpdateRootAuthorityIntent:
+		out.Authority, changed, err = applyUpdateRootAuthorityIntent(candidate, typed, now)
 	default:
 		err = fmt.Errorf("unsupported local intent %T", intent)
 	}
@@ -105,9 +118,10 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 		return out, nil
 	}
 	nextRevision := baseRevision + 1
+	changedZones := append([]zone.ZonePath{changed}, additionallyChanged...)
 	changes := ChangeSet{
 		VerifiedRevision:        nextRevision,
-		ChangedZones:            []zone.ZonePath{changed},
+		ChangedZones:            changedZones,
 		NetworkChanged:          true,
 		GossipCheckpointChanged: metadataChanged,
 		SecurityPriority:        securityPriority,
@@ -125,6 +139,44 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 	out.Committed = true
 	out.Changes = changes
 	return cloneLocalIntentResult(out), nil
+}
+
+func applyUpdateRootAuthorityIntent(state *VerifiedState, intent UpdateRootAuthorityIntent, now time.Time) (*zone.ZoneAuthority, zone.ZonePath, error) {
+	if state == nil || state.Network == nil || intent.Authority == nil || intent.Authority.Zone != zone.RootZone {
+		return nil, "", zone.ErrInvalidZonePath
+	}
+	root := state.Network.Zones[zone.RootZone]
+	if root == nil || root.Authority == nil {
+		return nil, "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, zone.RootZone)
+	}
+	nextHash := photoncrypto.AuthorityHash(intent.Authority)
+	currentHash := photoncrypto.AuthorityHash(root.Authority)
+	switch {
+	case intent.Authority.Epoch < root.Authority.Epoch:
+		return nil, "", ErrAuthorityEpochStale
+	case intent.Authority.Epoch == root.Authority.Epoch && !bytes.Equal(nextHash, currentHash):
+		return nil, "", ErrAuthorityEpochConflict
+	case intent.Authority.Epoch == root.Authority.Epoch:
+		return cloneAuthority(root.Authority), "", nil
+	}
+	privateKey, err := localSigningKey(state, zone.RootZone)
+	if err != nil {
+		return nil, "", err
+	}
+	if !authorityHasPublicKey(intent.Authority, privateKey.Public().(ed25519.PublicKey)) {
+		return nil, "", errors.New("updated root authority does not contain the local root key")
+	}
+	state.Network = zone.CloneNetworkStateForZone(state.Network, zone.RootZone)
+	state.Network.Zones[zone.RootZone].Authority = cloneAuthority(intent.Authority)
+	if len(state.TrustedRootPublicKey) != 0 {
+		if err := photoncrypto.VerifyPinnedRoot(state.Network, state.TrustedRootPublicKey); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := photoncrypto.VerifyChain(state.Network, zone.RootZone, now); err != nil {
+		return nil, "", err
+	}
+	return cloneAuthority(intent.Authority), zone.RootZone, nil
 }
 
 func applyPutRecordIntent(state *VerifiedState, intent PutRecordIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
@@ -160,6 +212,9 @@ func applyPutRecordIntent(state *VerifiedState, intent PutRecordIntent, now time
 	return cloneRecord(record), intent.Zone, nil
 }
 
+// applyPutDelegationIntent atomically updates the parent proof and the child
+// authority. Existing child records/history remain owned by the child zone and
+// survive an authority epoch refresh.
 func applyPutDelegationIntent(state *VerifiedState, intent PutDelegationIntent, now time.Time) (*zone.Delegation, zone.ZonePath, error) {
 	if !intent.Parent.Valid() || intent.Authority == nil || !intent.Authority.Zone.Valid() || intent.Authority.Zone.Parent() != intent.Parent {
 		return nil, "", zone.ErrInvalidZonePath
@@ -173,14 +228,16 @@ func applyPutDelegationIntent(state *VerifiedState, intent PutDelegationIntent, 
 		nextHash := photoncrypto.AuthorityHash(intent.Authority)
 		switch {
 		case intent.Authority.Epoch < existing.AuthorityEpoch:
-			return nil, "", ErrDelegationEpochStale
+			return nil, "", ErrAuthorityEpochStale
 		case intent.Authority.Epoch == existing.AuthorityEpoch && !bytes.Equal(nextHash, existing.AuthorityHash):
-			return nil, "", ErrDelegationEpochConflict
-		case intent.Authority.Epoch == existing.AuthorityEpoch && bytes.Equal(nextHash, existing.AuthorityHash) && sameExpiry(existing.ExpiresAt, intent.ExpiresAt):
+			return nil, "", ErrAuthorityEpochConflict
+		case intent.Authority.Epoch == existing.AuthorityEpoch && bytes.Equal(nextHash, existing.AuthorityHash) &&
+			sameExpiry(existing.ExpiresAt, intent.ExpiresAt) && zoneAuthorityEqual(state.Network.Zones[child], intent.Authority):
 			return cloneDelegation(existing), "", nil
 		}
 	}
 	state.Network = zone.CloneNetworkStateForZone(state.Network, intent.Parent)
+	state.Network = zone.CloneNetworkStateForZone(state.Network, child)
 	parent = state.Network.Zones[intent.Parent]
 	ensureZoneCollections(parent)
 	delegation := &zone.Delegation{ZoneName: child, Scope: zone.DelegationScopeDirectChild, Authority: *cloneAuthority(intent.Authority), ExpiresAt: cloneTime(intent.ExpiresAt)}
@@ -198,7 +255,24 @@ func applyPutDelegationIntent(state *VerifiedState, intent PutDelegationIntent, 
 		return nil, "", fmt.Errorf("%w: %s", zone.ErrZoneRevoked, child)
 	}
 	parent.Delegations[child] = delegation
+	childState := state.Network.Zones[child]
+	if childState == nil {
+		childState = zone.NewZoneState(child, cloneAuthority(intent.Authority))
+		state.Network.Zones[child] = childState
+	} else {
+		childState.Authority = cloneAuthority(intent.Authority)
+	}
+	if err := photoncrypto.VerifyChain(state.Network, child, now); err != nil {
+		return nil, "", err
+	}
 	return cloneDelegation(delegation), intent.Parent, nil
+}
+
+func zoneAuthorityEqual(state *zone.ZoneState, authority *zone.ZoneAuthority) bool {
+	return state != nil && state.Authority != nil && bytes.Equal(
+		photoncrypto.AuthorityHash(state.Authority),
+		photoncrypto.AuthorityHash(authority),
+	)
 }
 
 func applyRevokeDelegationIntent(state *VerifiedState, intent RevokeDelegationIntent, now time.Time) (*zone.DelegationRevocation, zone.ZonePath, error) {
@@ -275,6 +349,7 @@ func cloneLocalIntentResult(value LocalIntentResult) LocalIntentResult {
 	value.Record = cloneRecord(value.Record)
 	value.Delegation = cloneDelegation(value.Delegation)
 	value.Revocation = cloneRevocation(value.Revocation)
+	value.Authority = cloneAuthority(value.Authority)
 	return value
 }
 
