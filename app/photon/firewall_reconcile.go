@@ -223,7 +223,10 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 	if firewallReconcileResultEqual(snapshot.EndpointACLs, snapshot.FirewallReconcile, endpointACLs, summary) {
 		return nil
 	}
-	currentRev, committed := d.StateStore.commitFirewallIfRevision(rev, endpointACLs, summary)
+	currentRev, committed, err := d.commitFirewallRuntime(rev, endpointACLs, summary, false)
+	if err != nil {
+		return err
+	}
 	if !committed {
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()
@@ -233,7 +236,7 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 		})
 		return nil
 	}
-	return d.saveCommittedMeta()
+	return nil
 }
 
 func firewallReconcileResultEqual(baseACLs map[string]endpointACL, base *firewallReconcileState, nextACLs map[string]endpointACL, next *firewallReconcileState) bool {

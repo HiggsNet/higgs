@@ -663,8 +663,10 @@ package dependency: app -> host -> gossip -> state -> zone
         公共 remote batch 与 peer checkpoint 已使用相同的 commit-before-refresh 委托；checkpoint-only commit
         不推进 verified revision。Linux routing/IPsec/firewall completion 也已有按唯一 verified revision 检查的
         typed runtime commit，持久化失败、stale 和 no-op 都不发布，真实 BoltStore 关闭重开已证明 runtime 更新不会
-        改动公共 revision。下一步切换对应 daemon 调用点，并补齐 identity/recovery/purge 与其余 Linux runtime 字段，
-        再与生产启动同批启用并删除 app 内重复 mutation。
+        改动公共 revision。daemon 的 routing/IPsec/firewall reconcile、IPsec cleanup 与 Endpoint ACL 调用点已统一
+        进入 runtime typed commit；组合模式不再触发旧 `saveCommittedMeta/saveCommittedState`，旧生产模式在最终启动
+        切换前仍由同一入口维持原持久化行为。下一步补齐 identity/recovery/purge、peer cleanup/admission 与公共
+        checkpoint 调用点，再与生产启动同批启用并删除 app 内重复 mutation。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

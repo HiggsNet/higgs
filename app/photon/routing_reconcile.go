@@ -199,7 +199,10 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 	if routingReconcileResultEqual(baseBird, baseReconcile, result.BirdInstances, result.RoutingReconcile) {
 		return nil
 	}
-	currentRev, committed := d.StateStore.commitRoutingIfRevision(rev, result.BirdInstances, result.RoutingReconcile)
+	currentRev, committed, err := d.commitRoutingRuntime(rev, result.BirdInstances, result.RoutingReconcile)
+	if err != nil {
+		return err
+	}
 	if !committed {
 		d.routingDirty = true
 		d.publishStateStoreRuntimeFlags()
@@ -210,7 +213,7 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 		})
 		return nil
 	}
-	return d.saveCommittedMeta()
+	return nil
 }
 
 func routingReconcileResultEqual(baseBird map[string]*BirdInstanceState, baseReconcile *routingReconcileState, nextBird map[string]*BirdInstanceState, nextReconcile *routingReconcileState) bool {

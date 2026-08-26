@@ -143,17 +143,17 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if err := cleanupState(workspace); err != nil {
 		return cleaned, orphans, err
 	}
-	if _, committed := d.StateStore.commitIPsecIfRevision(
+	if _, committed, err := d.commitIPsecRuntime(
 		rev,
 		workspace.IPsecTransportKey,
 		workspace.IPsecPortRecord,
 		workspace.LinkInstances,
 		workspace.IPsecReconcile,
-	); !committed {
-		return cleaned, orphans, errDaemonStateRevisionStale
-	}
-	if err := d.saveCommittedState(); err != nil {
+		true,
+	); err != nil {
 		return cleaned, orphans, err
+	} else if !committed {
+		return cleaned, orphans, errDaemonStateRevisionStale
 	}
 	d.notifyStateChanged()
 	return cleaned, orphans, nil
