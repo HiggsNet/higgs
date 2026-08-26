@@ -14,22 +14,20 @@ import (
 )
 
 type memoryVerifiedRepository struct {
-	mu       sync.Mutex
-	commits  int
-	expected Revisions
-	state    *CommitCandidate
-	changes  ChangeSet
-	err      error
+	mu      sync.Mutex
+	commits int
+	state   *CommitCandidate
+	changes ChangeSet
+	err     error
 }
 
-func (repository *memoryVerifiedRepository) Commit(_ context.Context, expected Revisions, state *CommitCandidate, changes ChangeSet) error {
+func (repository *memoryVerifiedRepository) Commit(_ context.Context, state *CommitCandidate, changes ChangeSet) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if repository.err != nil {
 		return repository.err
 	}
 	repository.commits++
-	repository.expected = expected
 	repository.state = cloneCommitCandidate(state.Verified, state.Gossip)
 	repository.changes = changes
 	return nil
@@ -62,7 +60,7 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 
 	repository := &memoryVerifiedRepository{}
 	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial}, repository)
-	result, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{
+	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{
 		{Snapshot: snapshotV1, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV1))},
 		{Snapshot: bad, ExpectedRoot: []byte("advertised-root")},
 		{Snapshot: snapshotV2, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV2))},
@@ -84,15 +82,53 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	if rejected.Reason != "root_mismatch" || !bytes.Equal(rejected.RootHash, []byte("advertised-root")) {
 		t.Fatalf("rejected metadata = %#v", rejected)
 	}
-	if view.Revisions != (Revisions{Verified: 1, Checkpoint: 1}) {
-		t.Fatalf("revisions = %+v, want 1/1", view.Revisions)
+	if view.Revision != 1 {
+		t.Fatalf("verified revision = %d, want 1", view.Revision)
 	}
-	if repository.commits != 1 || repository.expected != (Revisions{}) {
-		t.Fatalf("repository commits/expected = %d/%+v", repository.commits, repository.expected)
+	if repository.commits != 1 {
+		t.Fatalf("repository commits = %d, want 1", repository.commits)
 	}
 }
 
-func TestStoreRepositoryFailureLeavesStateAndRevisionsUnchanged(t *testing.T) {
+func TestStoreApplyRemoteBatchRejectsRootAuthorityReplacement(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
+	trustedRoot := append(ed25519.PublicKey(nil), network.Zones[zone.RootZone].Authority.Keys[0].Key...)
+	source := cloneNetworkState(network)
+	otherPublic, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(other root): %v", err)
+	}
+	source.Zones[zone.RootZone].Authority = &zone.ZoneAuthority{
+		Zone: zone.RootZone, Epoch: 2, Threshold: 1,
+		Keys: []zone.AuthorizedKey{{Key: otherPublic}},
+	}
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot(root): %v", err)
+	}
+	store := NewStore(&VerifiedState{
+		ManagedZone:          "node-a.catofes.",
+		Network:              network,
+		TrustedRootPublicKey: trustedRoot,
+		IdentityPrivateKey:   identityPrivate,
+	}, nil)
+	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
+		Snapshot: snapshot, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
+	}}, now)
+	if err != nil {
+		t.Fatalf("ApplyRemoteBatch: %v", err)
+	}
+	if len(result.Outcomes) != 1 || !errors.Is(result.Outcomes[0].Err, ErrTrustedRootAuthorityChange) {
+		t.Fatalf("outcomes = %#v, want trusted-root authority rejection", result.Outcomes)
+	}
+	view := store.ReadView()
+	if view.Revision != 0 || !bytes.Equal(view.State.Network.Zones[zone.RootZone].Authority.Keys[0].Key, trustedRoot) {
+		t.Fatalf("root replacement changed verified state at revision %d", view.Revision)
+	}
+}
+
+func TestStoreRepositoryFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 	now := time.Unix(1000, 0)
 	initial, privateKey := testNetwork(t)
 	source := cloneNetworkState(initial)
@@ -107,20 +143,20 @@ func TestStoreRepositoryFailureLeavesStateAndRevisionsUnchanged(t *testing.T) {
 	}
 	wantErr := errors.New("disk unavailable")
 	store := NewStore(&VerifiedState{Network: initial}, &memoryVerifiedRepository{err: wantErr})
-	_, err = store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now)
+	_, err = store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ApplyRemoteBatch error = %v, want %v", err, wantErr)
 	}
 	view := store.ReadView()
-	if view.Revisions != (Revisions{}) {
-		t.Fatalf("revisions = %+v, want zero", view.Revisions)
+	if view.Revision != 0 {
+		t.Fatalf("verified revision = %d, want zero", view.Revision)
 	}
 	if view.State.Network.Zones["catofes."].Records["identity"] != nil {
 		t.Fatal("repository failure published candidate")
 	}
 }
 
-func TestStoreReadViewIsDetachedAndCASRejectsStaleWriter(t *testing.T) {
+func TestStoreReadViewIsDetached(t *testing.T) {
 	now := time.Unix(1000, 0)
 	initial, privateKey := testNetwork(t)
 	source := cloneNetworkState(initial)
@@ -134,7 +170,7 @@ func TestStoreReadViewIsDetachedAndCASRejectsStaleWriter(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	store := NewStore(&VerifiedState{Network: initial, TrustedRootPublicKey: ed25519.PublicKey("root")}, nil)
-	if _, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
+	if _, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
 	}
 	view := store.ReadView()
@@ -143,9 +179,6 @@ func TestStoreReadViewIsDetachedAndCASRejectsStaleWriter(t *testing.T) {
 	fresh := store.ReadView()
 	if string(fresh.State.TrustedRootPublicKey) != "root" || string(fresh.State.Network.Zones["catofes."].Records["identity"].Value) != "committed" {
 		t.Fatal("mutating read view changed committed state")
-	}
-	if _, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", nil, now); !errors.Is(err, ErrVerifiedRevisionStale) {
-		t.Fatalf("stale ApplyRemoteBatch error = %v, want ErrVerifiedRevisionStale", err)
 	}
 }
 
@@ -164,7 +197,7 @@ func TestStoreDoesNotRetainInitialState(t *testing.T) {
 	}
 }
 
-func TestStoreConcurrentReadersSeeWholeRevisions(t *testing.T) {
+func TestStoreConcurrentReadersSeeWholeRevision(t *testing.T) {
 	now := time.Unix(1000, 0)
 	initial, privateKey := testNetwork(t)
 	source := cloneNetworkState(initial)
@@ -187,18 +220,18 @@ func TestStoreConcurrentReadersSeeWholeRevisions(t *testing.T) {
 			for range 100 {
 				view := store.ReadView()
 				record := view.State.Network.Zones[zone.ZonePath("catofes.")].Records["identity"]
-				if view.Revisions.Verified == 0 && record != nil {
+				if view.Revision == 0 && record != nil {
 					t.Errorf("reader saw new state at old revision")
 					return
 				}
-				if view.Revisions.Verified == 1 && (record == nil || string(record.Value) != "committed") {
+				if view.Revision == 1 && (record == nil || string(record.Value) != "committed") {
 					t.Errorf("reader saw incomplete state at new revision")
 					return
 				}
 			}
 		}()
 	}
-	if _, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
+	if _, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
 	}
 	readers.Wait()
@@ -210,7 +243,7 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	store := NewStore(&VerifiedState{Network: initial}, repository)
 	root := []byte("rejected-root")
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
-	result, err := store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{
+	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		LastSyncUnix:       PatchField[int64]{Set: true, Value: 100},
 		BackoffUntilUnix:   PatchField[int64]{Set: true, Value: 150},
 		FailureCount:       PatchField[int]{Set: true, Value: 2},
@@ -226,8 +259,8 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	if !result.Committed || result.Changes.NetworkChanged || !result.Changes.GossipCheckpointChanged {
 		t.Fatalf("commit result = %+v", result)
 	}
-	if result.Changes.Revisions != (Revisions{Checkpoint: 1}) {
-		t.Fatalf("revisions = %+v, want metadata=1", result.Changes.Revisions)
+	if result.Changes.VerifiedRevision != 0 {
+		t.Fatalf("checkpoint changed verified revision to %d", result.Changes.VerifiedRevision)
 	}
 	root[0] = 'X'
 	grace[0].Endpoint = "mutated"
@@ -243,7 +276,7 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 		t.Fatalf("repository commit = %d/%+v", repository.commits, repository.changes)
 	}
 
-	clearResult, err := store.UpdatePeerCheckpoint(context.Background(), view.Revisions, "peer-a", PeerCheckpointPatch{
+	clearResult, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		ClearRejected: []zone.ZonePath{"bad.catofes."},
 	})
 	if err != nil || !clearResult.Committed {
@@ -257,21 +290,21 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 func TestStoreUpdatePeerCheckpointNoopAndRepositoryFailure(t *testing.T) {
 	repository := &memoryVerifiedRepository{}
 	store := NewStore(nil, repository)
-	result, err := store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{})
+	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{})
 	if err != nil || result.Committed || repository.commits != 0 {
 		t.Fatalf("empty patch result/error/commits = %+v/%v/%d", result, err, repository.commits)
 	}
 
 	wantErr := errors.New("metadata persistence failed")
 	repository.err = wantErr
-	_, err = store.UpdatePeerCheckpoint(context.Background(), Revisions{}, "peer-a", PeerCheckpointPatch{
+	_, err = store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		LastAttemptUnix: PatchField[int64]{Set: true, Value: 100},
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("UpdatePeerCheckpoint error = %v, want %v", err, wantErr)
 	}
 	view := store.ReadView()
-	if view.Revisions != (Revisions{}) || len(view.Gossip.Peers) != 0 {
+	if view.Revision != 0 || len(view.Gossip.Peers) != 0 {
 		t.Fatalf("repository failure published metadata: %+v", view)
 	}
 }

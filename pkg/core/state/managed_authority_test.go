@@ -64,7 +64,7 @@ func TestStoreApplyRemoteBatchRefreshesAuthorityAndRetainsLocalContents(t *testi
 		Network:            initial,
 		IdentityPrivateKey: identityPrivate,
 	}, nil)
-	result, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{{
+	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
 		Snapshot:     snapshot,
 		ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
 	}}, now)

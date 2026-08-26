@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 var (
-	ErrVerifiedRevisionStale = errors.New("verified state revision is stale")
-	ErrSnapshotRootMismatch  = errors.New("snapshot root does not match advertised catalog digest")
-	ErrVerifiedStoreClosed   = errors.New("verified state store is closed")
+	ErrSnapshotRootMismatch       = errors.New("snapshot root does not match advertised catalog digest")
+	ErrTrustedRootAuthorityChange = errors.New("remote snapshot cannot replace the trusted root authority")
+	ErrVerifiedStoreClosed        = errors.New("verified state store is closed")
 )
 
 // VerifiedState is the platform-neutral persisted root owned by Store. It
@@ -80,20 +81,17 @@ type CommitCandidate struct {
 	Gossip   *GossipCheckpoint
 }
 
-type Revisions struct {
-	Verified   uint64
-	Checkpoint uint64
-}
+type VerifiedRevision uint64
 
 // View is a detached read model. Callers may freely retain or mutate it.
 type View struct {
-	State     *VerifiedState
-	Gossip    *GossipCheckpoint
-	Revisions Revisions
+	State    *VerifiedState
+	Gossip   *GossipCheckpoint
+	Revision VerifiedRevision
 }
 
 type ChangeSet struct {
-	Revisions               Revisions
+	VerifiedRevision        VerifiedRevision
 	ChangedZones            []zone.ZonePath
 	NetworkChanged          bool
 	GossipCheckpointChanged bool
@@ -126,22 +124,22 @@ type RemoteBatchResult struct {
 }
 
 // Repository persists one complete detached candidate. Store calls Commit
-// before publishing the candidate in memory. Implementations must treat the
-// expected revisions as a CAS token and must not retain mutable pointers.
+// before publishing the candidate in memory. Implementations must not retain
+// mutable pointers.
 type Repository interface {
-	Commit(context.Context, Revisions, *CommitCandidate, ChangeSet) error
+	Commit(context.Context, *CommitCandidate, ChangeSet) error
 }
 
 // Store is an in-memory single-owner common-state aggregate. Verified facts
 // and loss-tolerant gossip checkpoints are separate sub-roots. Its mutex protects
-// readers and the CAS/publication boundary; verification and repository I/O
+// readers and the publication boundary; verification and repository I/O
 // run without holding the read lock.
 type Store struct {
 	writeMu    sync.Mutex
 	mu         sync.RWMutex
 	state      *VerifiedState
 	gossip     *GossipCheckpoint
-	revisions  Revisions
+	revision   VerifiedRevision
 	repository Repository
 	closed     bool
 }
@@ -160,22 +158,22 @@ func (store *Store) ReadView() View {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revisions: store.revisions}
+	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revision: store.revision}
 }
 
-func (store *Store) ZoneDigests() ([]ZoneDigest, Revisions) {
+func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
 	if store == nil {
-		return nil, Revisions{}
+		return nil, 0
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return ZoneDigests(store.state.Network), store.revisions
+	return ZoneDigests(store.state.Network), store.revision
 }
 
 // ApplyRemoteBatch applies every item with an independent savepoint. A
 // rejected item records a bounded peer checkpoint and does not discard earlier or
-// later successful items. Publication is one CAS commit for the whole batch.
-func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, peerID string, batch []RemoteSnapshot, now time.Time) (RemoteBatchResult, error) {
+// later successful items. Publication is one serialized commit for the batch.
+func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch []RemoteSnapshot, now time.Time) (RemoteBatchResult, error) {
 	var out RemoteBatchResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
@@ -191,14 +189,10 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 		store.mu.RUnlock()
 		return out, ErrVerifiedStoreClosed
 	}
-	baseRevisions := store.revisions
+	baseRevision := store.revision
 	base := cloneVerifiedState(store.state)
 	baseGossip := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
-	if expected != baseRevisions {
-		return out, ErrVerifiedRevisionStale
-	}
-
 	candidate := base
 	gossipCandidate := baseGossip
 	changedZones := make([]zone.ZonePath, 0, len(batch))
@@ -215,6 +209,8 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 			// may update only the authority envelope through a delegation.
 			out.Outcomes = append(out.Outcomes, outcome)
 			continue
+		} else if item.Snapshot.Zone == zone.RootZone && rootAuthorityChanged(candidate.Network, item.Snapshot.Authority) {
+			outcome.Err = ErrTrustedRootAuthorityChange
 		} else if len(item.ExpectedRoot) > 0 {
 			actual := ZoneRoot(ZoneStateFromSnapshot(item.Snapshot))
 			if !bytes.Equal(actual, item.ExpectedRoot) {
@@ -257,46 +253,40 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, expected Revisions, pe
 
 	networkChanged := len(changedZones) > 0
 	if !networkChanged && !metadataChanged {
-		out.Changes.Revisions = baseRevisions
+		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
 	}
-	nextRevisions := baseRevisions
+	nextRevision := baseRevision
 	if networkChanged {
-		nextRevisions.Verified++
-	}
-	if metadataChanged {
-		nextRevisions.Checkpoint++
+		nextRevision++
 	}
 	changes := ChangeSet{
-		Revisions:               nextRevisions,
+		VerifiedRevision:        nextRevision,
 		ChangedZones:            append([]zone.ZonePath(nil), changedZones...),
 		NetworkChanged:          networkChanged,
 		GossipCheckpointChanged: metadataChanged,
 	}
 
-	store.mu.RLock()
-	if store.closed {
-		store.mu.RUnlock()
-		return RemoteBatchResult{}, ErrVerifiedStoreClosed
-	}
-	if store.revisions != baseRevisions {
-		store.mu.RUnlock()
-		return RemoteBatchResult{}, ErrVerifiedRevisionStale
-	}
-	store.mu.RUnlock()
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return RemoteBatchResult{}, err
 		}
 	}
 	store.mu.Lock()
 	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revisions = nextRevisions
+	store.revision = nextRevision
 	store.mu.Unlock()
 	out.Committed = true
 	out.Changes = changes
 	return out, nil
+}
+
+func rootAuthorityChanged(network *zone.NetworkState, authority *zone.ZoneAuthority) bool {
+	if network == nil || network.Zones[zone.RootZone] == nil || network.Zones[zone.RootZone].Authority == nil || authority == nil {
+		return true
+	}
+	return !bytes.Equal(photoncrypto.AuthorityHash(network.Zones[zone.RootZone].Authority), photoncrypto.AuthorityHash(authority))
 }
 
 func (store *Store) Close() {
@@ -369,6 +359,9 @@ func rejectedRoot(item RemoteSnapshot) []byte {
 }
 
 func remoteRejectReason(err error) string {
+	if errors.Is(err, ErrTrustedRootAuthorityChange) {
+		return "trusted_root_authority_change"
+	}
 	if errors.Is(err, ErrSnapshotRootMismatch) {
 		return "root_mismatch"
 	}

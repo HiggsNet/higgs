@@ -40,7 +40,7 @@ type PeerCheckpointPatch struct {
 // UpdatePeerCheckpoint commits a loss-tolerant checkpoint transaction. The verified
 // revision and Network pointer are unaffected; Repository still observes the
 // same commit-before-publish ordering as verified transactions.
-func (store *Store) UpdatePeerCheckpoint(ctx context.Context, expected Revisions, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
+func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
 	var out CommitResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
@@ -59,33 +59,26 @@ func (store *Store) UpdatePeerCheckpoint(ctx context.Context, expected Revisions
 		store.mu.RUnlock()
 		return out, ErrVerifiedStoreClosed
 	}
-	baseRevisions := store.revisions
+	baseRevision := store.revision
 	verified := cloneVerifiedState(store.state)
 	candidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
-	if expected != baseRevisions {
-		return out, ErrVerifiedRevisionStale
-	}
-
 	before, existed := candidate.Peers[peerID]
 	after := clonePeerCheckpoint(before)
 	applyPeerCheckpointPatch(&after, patch)
 	if (!existed && peerCheckpointEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
-		out.Changes.Revisions = baseRevisions
+		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
 	}
 	candidate.Peers[peerID] = after
-	nextRevisions := baseRevisions
-	nextRevisions.Checkpoint++
-	changes := ChangeSet{Revisions: nextRevisions, GossipCheckpointChanged: true}
+	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(verified, candidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
 			return CommitResult{}, err
 		}
 	}
 	store.mu.Lock()
 	store.gossip = candidate
-	store.revisions = nextRevisions
 	store.mu.Unlock()
 	return CommitResult{Committed: true, Changes: changes}, nil
 }

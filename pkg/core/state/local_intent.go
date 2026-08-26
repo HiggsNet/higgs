@@ -56,7 +56,7 @@ type LocalIntentResult struct {
 // ApplyLocalIntent validates, signs and commits one authority-owned mutation.
 // Private keys are ordinary persisted Store state under the administrator's
 // filesystem/host security policy. Publication occurs only after persistence.
-func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, intent LocalIntent, now time.Time) (LocalIntentResult, error) {
+func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, now time.Time) (LocalIntentResult, error) {
 	var out LocalIntentResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
@@ -75,14 +75,10 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, in
 		store.mu.RUnlock()
 		return out, ErrVerifiedStoreClosed
 	}
-	baseRevisions := store.revisions
+	baseRevision := store.revision
 	candidate := cloneVerifiedState(store.state)
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
-	if expected != baseRevisions {
-		return out, ErrVerifiedRevisionStale
-	}
-
 	var changed zone.ZonePath
 	var securityPriority bool
 	var metadataChanged bool
@@ -105,30 +101,26 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, expected Revisions, in
 		return LocalIntentResult{}, err
 	}
 	if changed == "" {
-		out.Changes.Revisions = baseRevisions
+		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
 	}
-	nextRevisions := baseRevisions
-	nextRevisions.Verified++
-	if metadataChanged {
-		nextRevisions.Checkpoint++
-	}
+	nextRevision := baseRevision + 1
 	changes := ChangeSet{
-		Revisions:               nextRevisions,
+		VerifiedRevision:        nextRevision,
 		ChangedZones:            []zone.ZonePath{changed},
 		NetworkChanged:          true,
 		GossipCheckpointChanged: metadataChanged,
 		SecurityPriority:        securityPriority,
 	}
 	if store.repository != nil {
-		if err := store.repository.Commit(ctx, baseRevisions, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+		if err := store.repository.Commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return LocalIntentResult{}, err
 		}
 	}
 	store.mu.Lock()
 	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revisions = nextRevisions
+	store.revision = nextRevision
 	store.mu.Unlock()
 	out.Committed = true
 	out.Changes = changes

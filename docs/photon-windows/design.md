@@ -100,8 +100,24 @@ backoff、最近 endpoint、observed grace、relay suppression 和 rejected dige
 `GossipCheckpoint`，丢失最多带来额外重试或重新发现，不能改变验签、授权与最终收敛。attempt/error、
 hint/responder、datagram/object-pull 等纯统计进入有界 observability/metrics，不进入公共持久状态。
 
-Verified 与 checkpoint 使用独立 revision，但平台 RuntimeStateStore 可在一次 bbolt transaction 中原子保存
-两个 sub-root。这里的分根不会创建第二个 DB handle、writer goroutine 或 event loop。
+公共状态只保留一个 `VerifiedRevision`，仅在已验证 Network 内容发生变化时推进。
+`GossipCheckpoint` 没有独立 revision；checkpoint-only 保存不会让下游 controller 误以为可信事实变化。
+平台 runtime checkpoint 也不反向修改 verified，只记录它所基于的 `SourceVerifiedRevision`。平台
+RuntimeStateStore 可在一次 bbolt transaction 中原子保存这些 sub-root，但不会创建第二个 DB handle、
+writer goroutine 或 event loop。
+
+公共 bbolt schema 由 `pkg/core/state` 固定为 `photon:common-state` 根 bucket，其下分别保存 schema/revision、
+verified payload 与 gossip checkpoint。codec 只接收平台 RuntimeStateStore 已打开的 `*bolt.Tx`，不打开、
+提交或关闭数据库；Linux/Windows 因而可以在同一个 `Update` 中组合自己的 runtime bucket。写入只检查
+verified payload 变化是否恰好推进一次 `VerifiedRevision`，checkpoint 变化不参与版本竞争；最终
+commit/rollback 仍由平台唯一 writer 决定。
+schema、revision 或 verified payload 损坏时 fail closed；checkpoint JSON 损坏时加载空 checkpoint 并返回
+discard report，重启后的重新发现与同步负责恢复效率提示。
+
+`TrustedRootPublicKey` 是本机 trust-anchor pin，不是可由 gossip 更新的普通 verified 字段。当前协议没有定义
+root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snapshot 也不得替换既有 root authority；
+它只能在 authority 完全相同时更新由该 authority 验证的 root Zone 内容。未来若增加 root rotation，必须
+先定义由旧 trust anchor 授权的新 pin 迁移协议，不能复用普通 snapshot apply。
 
 ## 4. 代码边界
 

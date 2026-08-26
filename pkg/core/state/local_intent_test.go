@@ -17,7 +17,7 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	repository := &memoryVerifiedRepository{}
 	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, repository)
 	value := []byte("v1")
-	first, err := store.ApplyLocalIntent(context.Background(), Revisions{}, PutRecordIntent{
+	first, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: value,
 	}, now)
 	if err != nil {
@@ -29,7 +29,7 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	value[0] = 'X'
 	first.Record.Value[0] = 'Y'
 
-	second, err := store.ApplyLocalIntent(context.Background(), first.Changes.Revisions, PutRecordIntent{
+	second, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("v2"),
 	}, now.Add(time.Second))
 	if err != nil {
@@ -43,8 +43,8 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	if string(managed.Records["config"].Value) != "v2" || len(managed.RecordHistory["config"]) != 1 || string(managed.RecordHistory["config"][0].Value) != "v1" {
 		t.Fatalf("record/history = %#v/%#v", managed.Records["config"], managed.RecordHistory["config"])
 	}
-	if repository.commits != 2 || view.Revisions != (Revisions{Verified: 2}) {
-		t.Fatalf("commits/revisions = %d/%+v", repository.commits, view.Revisions)
+	if repository.commits != 2 || view.Revision != 2 {
+		t.Fatalf("commits/revision = %d/%d", repository.commits, view.Revision)
 	}
 	if !bytes.Equal(repository.state.Verified.IdentityPrivateKey, identityPrivate) || !bytes.Equal(view.State.IdentityPrivateKey, identityPrivate) {
 		t.Fatal("raw identity private key was not retained in repository/read state")
@@ -59,7 +59,7 @@ func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	network, _, _, _ := managedAuthorityFixture(t, true)
 	store := NewStore(&VerifiedState{Network: network}, nil)
 	intent := PutRecordIntent{Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("value")}
-	if _, err := store.ApplyLocalIntent(context.Background(), Revisions{}, intent, time.Unix(1000, 0)); err == nil {
+	if _, err := store.ApplyLocalIntent(context.Background(), intent, time.Unix(1000, 0)); err == nil {
 		t.Fatal("missing private key was accepted")
 	}
 	_, otherPrivate, err := ed25519.GenerateKey(nil)
@@ -67,10 +67,10 @@ func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 		t.Fatalf("GenerateKey(other): %v", err)
 	}
 	store = NewStore(&VerifiedState{Network: network, IdentityPrivateKey: otherPrivate}, nil)
-	if _, err := store.ApplyLocalIntent(context.Background(), Revisions{}, intent, time.Unix(1000, 0)); err == nil {
+	if _, err := store.ApplyLocalIntent(context.Background(), intent, time.Unix(1000, 0)); err == nil {
 		t.Fatal("unauthorized signer was accepted")
 	}
-	if view := store.ReadView(); view.Revisions != (Revisions{}) || view.State.Network.Zones["node-a.catofes."].Records["config"] != nil {
+	if view := store.ReadView(); view.Revision != 0 || view.State.Network.Zones["node-a.catofes."].Records["config"] != nil {
 		t.Fatalf("failed signing published state: %+v", view)
 	}
 }
@@ -90,14 +90,14 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerCheckpoint(t *testing.
 		"leaf.new.catofes.": {LastSyncUnix: 1},
 		"other.catofes.":    {LastSyncUnix: 1},
 	}}, nil)
-	issued, err := store.ApplyLocalIntent(context.Background(), Revisions{}, PutDelegationIntent{Parent: "catofes.", Authority: childAuthority}, now)
+	issued, err := store.ApplyLocalIntent(context.Background(), PutDelegationIntent{Parent: "catofes.", Authority: childAuthority}, now)
 	if err != nil {
 		t.Fatalf("PutDelegation: %v", err)
 	}
 	if issued.Delegation == nil || issued.Changes.SecurityPriority {
 		t.Fatalf("issued result = %+v", issued)
 	}
-	revoked, err := store.ApplyLocalIntent(context.Background(), issued.Changes.Revisions, RevokeDelegationIntent{
+	revoked, err := store.ApplyLocalIntent(context.Background(), RevokeDelegationIntent{
 		Parent: "catofes.", Child: "new.catofes.", Reason: "compromised",
 	}, now.Add(time.Second))
 	if err != nil {
@@ -120,8 +120,8 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerCheckpoint(t *testing.
 	if _, ok := view.Gossip.Peers["other.catofes."]; !ok {
 		t.Fatal("unrelated peer metadata removed")
 	}
-	if view.Revisions != (Revisions{Verified: 2, Checkpoint: 1}) {
-		t.Fatalf("revisions = %+v, want verified=2 metadata=1", view.Revisions)
+	if view.Revision != 2 {
+		t.Fatalf("verified revision = %d, want 2", view.Revision)
 	}
 }
 
@@ -129,14 +129,14 @@ func TestStoreApplyLocalIntentRepositoryFailureDoesNotPublish(t *testing.T) {
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	wantErr := errors.New("local commit failed")
 	store := NewStore(&VerifiedState{Network: network, IdentityPrivateKey: identityPrivate}, &memoryVerifiedRepository{err: wantErr})
-	_, err := store.ApplyLocalIntent(context.Background(), Revisions{}, PutRecordIntent{
+	_, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("value"),
 	}, time.Unix(1000, 0))
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ApplyLocalIntent error = %v, want %v", err, wantErr)
 	}
 	view := store.ReadView()
-	if view.Revisions != (Revisions{}) || view.State.Network.Zones["node-a.catofes."].Records["config"] != nil {
+	if view.Revision != 0 || view.State.Network.Zones["node-a.catofes."].Records["config"] != nil {
 		t.Fatalf("repository failure published local intent: %+v", view)
 	}
 }

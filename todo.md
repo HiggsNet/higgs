@@ -374,8 +374,8 @@ package dependency: app -> host -> gossip -> state -> zone
   密钥 capability、系统加密封装或不可导出密钥适配层。
 - [ ] `ApplyRemoteBatch` 具体拥有 target-zone COW、逐 snapshot savepoint、部分成功、rejected digest、
   root pin/chain/record/revocation 验证、auto-join 和 managed-zone authority refresh；不提供 generic
-  platform finalizer。中间失败保留此前成功并继续后续项，最终至多发布一个 verified revision；CAS
-  stale 时整批从新 root 纯重算，日志、send 和 controller callback 不得在重试体内执行。
+  platform finalizer。中间失败保留此前成功并继续后续项，最终至多发布一个 verified revision；所有
+  mutation 在唯一 event loop 中基于当前 root 串行重算，日志、send 和 controller callback 不得进入事务体。
 - [ ] auto-join/authority refresh 从 `app/photon/identity_bootstrap.go` 迁入公共 transaction：父 snapshot
   可以更新本地 managed-zone 的 authority envelope，但不能覆盖本地 authority-owned records、child
   delegations、revocations/history；identity key 不匹配、旧 epoch、同 epoch 冲突和无效 parent proof
@@ -384,8 +384,8 @@ package dependency: app -> host -> gossip -> state -> zone
   discovered/observed endpoint grace、rejected object digest 和 relay suppression 等重启提示；session phase、timer、
   cursor、chunk assembly、worker/inflight pull 只在 Engine/HostRuntime 内存；hint/responder/last-error 与 datagram/
   object-pull 计数进入有界 observability/metrics，不持久化。迁移后删除 Linux 大杂烩类型。
-- [ ] `CommitResult` 返回 `VerifiedRevision`、`CheckpointRevision`、changed zones/record families、
-  `NetworkChanged`/`GossipCheckpointChanged` 和安全优先级；纯 checkpoint commit 不推进 verified revision、
+- [ ] `CommitResult` 返回唯一的 `VerifiedRevision`、changed zones/record families、
+  `NetworkChanged`/`GossipCheckpointChanged` 和安全优先级；checkpoint 不拥有 revision，纯 checkpoint commit 不推进 verified revision、
   不唤醒数据面。ChangeSet 只描述已成功提交的事实，不携带平台函数或可变 state 指针。
 
 **五条管理调用链必须按以下顺序实现：**
@@ -555,31 +555,31 @@ package dependency: app -> host -> gossip -> state -> zone
       只保留 transport diagnostics。显式 memory Linux/Windows capability adapter 已逐项断言相同 ordering、
       apply failure short-circuit 和 persistence intent；公共 host/Linux daemon race、全量 `make check`（含
       Windows amd64 build）通过。
-- [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
+- [ ] C：实现内存 VerifiedStore、单一 verified revision、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
-  - [x] C1：新增公共 `state.Store`/`VerifiedState`、detached `ReadView`/`ZoneDigests`、verified/checkpoint 双
-    revision CAS、`ChangeSet` 和 commit-before-publish `Repository` contract；`ApplyRemoteBatch` 以逐对象
+  - [x] C1：新增公共 `state.Store`/`VerifiedState`、detached `ReadView`/`ZoneDigests`、唯一
+    `VerifiedRevision`、`ChangeSet` 和 commit-before-publish `Repository` contract；`ApplyRemoteBatch` 以逐对象
     savepoint 保留 success-reject-success，统一 expected-root/验证拒绝元数据并单批发布。memory repository
-    已覆盖持久化失败不发布、输入/读视图不 retain、stale writer、并发 reader 与单 writer race。
-  - [ ] C2：补齐 typed `ApplyLocalIntent`、通用 `UpdatePeerCheckpoint`、auto-join/managed authority refresh COW
-    和 CAS 纯重算，再将 Linux snapshot apply adapter 切到公共 transaction。
+    已覆盖持久化失败不发布、输入/读视图不 retain、并发 reader 与单 writer race。
+  - [ ] C2：补齐 typed `ApplyLocalIntent`、通用 `UpdatePeerCheckpoint`、auto-join/managed authority refresh COW，
+    再将 Linux snapshot apply adapter 切到公共 transaction。
     - [x] C2a：公共 Store 新增 typed peer checkpoint patch；parent snapshot apply 后在同一 savepoint 调用公共
       `ReconcileManagedAuthority`，匹配
       identity 才 adoption，refresh 保留本地 records/delegations/revocations/history，旧 epoch、同 epoch conflict、
       refresh identity mismatch 和无效 chain 均 fail closed；远端 managed-zone snapshot 不再覆盖本地内容。
-    - [ ] C2b：实现 typed `ApplyLocalIntent` 与 raw-key/CAS 纯重算，并将 Linux snapshot apply、auto-join 和
+    - [ ] C2b：实现 typed `ApplyLocalIntent` 与 raw-key 串行重算，并将 Linux snapshot apply、auto-join 和
       peer metadata adapter 切到公共 Store；完成迁移后删除 app 内重复 mutation。
       - [x] C2b1：公共 Store 新增 sealed local intent：`PutRecordIntent`、`PutDelegationIntent`、
         `RevokeDelegationIntent`；Store 直接持有并持久化 root/identity raw Ed25519 private key，按当前 authority
         选择授权 key 后调用公共 crypto sign/verify。revocation 在同一
-        commit 清理目标及后代 peer checkpoint，推进 verified/checkpoint revision 并返回 security-priority
+        commit 清理目标及后代 peer checkpoint，仅推进 verified revision 并返回 security-priority
         ChangeSet。repository failure、missing/unauthorized key、record history、delegate/revoke ordering 与
         retained pointer 已覆盖。
       - [ ] C2b2：将 DaemonStateStore 的 verified root 嵌入公共 Store 后切换在线
         record/delegation/revocation、snapshot apply 和 peer checkpoint；
         迁移完成删除 app 内重复 mutation，不能在双 Store 并存期间切一半 writer。
         - [x] C2b2a：按字段语义纠正 Store 分根：`VerifiedState` 不再包含 peer；新增独立
-          `GossipCheckpoint`/checkpoint revision，Repository 在同一 candidate 中原子组合 verified + checkpoint。
+          无独立 revision 的 `GossipCheckpoint`，Repository 在同一 candidate 中原子组合 verified + checkpoint。
           checkpoint 只允许丢失后增加重试/重新发现的行为提示，纯诊断计数继续留在 observability。
         - [x] C2b2b：新增旧 Linux `SyncPeers` 到公共 `GossipCheckpoint` 的只读白名单投影与迁移报告；
           session/active-pull/hint/responder/last-error/datagram/object-pull 诊断不进入 checkpoint，无效 peer、
@@ -591,6 +591,11 @@ package dependency: app -> host -> gossip -> state -> zone
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema
   migration；覆盖事务失败、close failure、no-op、metadata-only、crash fixture/reload、外部锁冲突及
   Linux/Windows path adapter。
+  - [x] D1：`pkg/core/state` 新增平台事务内公共 bbolt codec，固定 common/meta/verified/gossip bucket 与
+    schema version；`LoadBoltState` 区分新根不存在、可信根损坏和可丢弃 checkpoint，`CommitBoltState` 在
+    调用方 `*bolt.Tx` 内检查 verified payload/revision 一致性、校验 state root、稳定编码并返回 byte-level no-op。
+    已覆盖 round-trip/detach、revision invariant、无变化 rollback、平台 bucket 同事务失败回滚、未来 schema
+    fail closed 及 malformed checkpoint discard。codec 不持有 DB handle，不创建第二个 writer。
 - [ ] E：Linux 在保留单 DaemonStateStore/单 event-loop writer 的前提下先切换 verified sub-root，再把
   platform-neutral host loop 替换为公共 Runtime；删除 `stateFile.Network/SyncPeers` 双份在线所有权，跑
   全量 `make check`、
