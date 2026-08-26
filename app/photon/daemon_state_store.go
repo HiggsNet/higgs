@@ -1,9 +1,7 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"errors"
-	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -185,33 +183,6 @@ func (s *DaemonStateStore) ZoneDigests() []corestate.ZoneDigest {
 		return nil
 	}
 	return corestate.ZoneDigests(s.committed.Network)
-}
-
-// GossipCheckpointProjection returns the loss-tolerant subset of the legacy
-// Linux SyncPeers aggregate as a detached common checkpoint. It is read-only:
-// C2b2 uses it to initialize the common Store before all online writers switch
-// together, never as a second writable truth source.
-func (s *DaemonStateStore) GossipCheckpointProjection() (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
-	if s == nil {
-		return &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}, legacyGossipCheckpointReport{}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}, legacyGossipCheckpointReport{}
-	}
-	return projectLegacyGossipCheckpoint(s.committed.SyncPeers)
-}
-
-// CommonStateProjection is the detached startup/migration input for the common
-// Store. It never exposes Linux controller/runtime fields.
-func (s *DaemonStateStore) CommonStateProjection(trustedRoot ed25519.PublicKey) (*corestate.CommitCandidate, legacyGossipCheckpointReport, error) {
-	if s == nil {
-		return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: daemon state store is nil", errLegacyCommonStateInvalid)
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return projectLegacyCommonState(s.committed, trustedRoot)
 }
 
 func (s *DaemonStateStore) Meta() daemonStateStoreMeta {

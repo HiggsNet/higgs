@@ -575,15 +575,15 @@ package dependency: app -> host -> gossip -> state -> zone
         commit 清理目标及后代 peer checkpoint，仅推进 verified revision 并返回 security-priority
         ChangeSet。persistence failure、missing/unauthorized key、record history、delegate/revoke ordering 与
         retained pointer 已覆盖。
-    - [x] C2c：完成 Linux 整体切换所需的状态分区和只读启动投影；这里只准备输入，不在双 Store 并存期间
-      切换任何在线 writer。DaemonStateStore 嵌入公共 Store、在线 mutation 切换和旧逻辑删除统一归入 E。
+    - [x] C2c：完成 Linux 整体切换所需的状态分区与一次性数据库迁移投影；投影只在旧 schema → 新 bucket
+      的迁移事务内部使用，不暴露 DaemonStateStore 兼容 API，也不提供新状态 → 旧 `stateFile` 的反向映射。
+      DaemonStateStore 嵌入公共 Store、在线 mutation 切换和旧逻辑删除统一归入 E。
       - [x] C2c1：按字段语义纠正 Store 分根：`VerifiedState` 不再包含 peer；新增独立
         无独立 revision 的 `GossipCheckpoint`，同一 CommitFunc 在 candidate 中原子组合 verified + checkpoint。
         checkpoint 只允许丢失后增加重试/重新发现的行为提示，纯诊断计数继续留在 observability。
-      - [x] C2c2：新增旧 Linux `SyncPeers` 到公共 `GossipCheckpoint` 的只读白名单投影与迁移报告；
+      - [x] C2c2：新增旧 Linux `SyncPeers` 到公共 `GossipCheckpoint` 的单向白名单迁移与报告；
         session/active-pull/hint/responder/last-error/datagram/object-pull 诊断不进入 checkpoint，无效 peer、
-        非 Zone rejected object 和 malformed hash 作为可丢失条目丢弃。DaemonStateStore 暴露 detached
-        projection 作为后续整体切换 writer 的启动输入，不引入第二个在线 writer。
+        非 Zone rejected object 和 malformed hash 作为可丢失条目丢弃；不保留 daemon projection 方法。
       - [x] C2c3：新增旧 `stateFile -> CommitCandidate{Verified,Gossip}` detached 启动投影；公共
         `ValidateStateRoot` 统一校验 managed zone、Network、Ed25519 私钥长度和完整
         `trusted_root_public_key` pin。纠正原 `TrustedRootHash` 命名，Linux/Windows 不再各自解释 root pin。
@@ -618,9 +618,10 @@ package dependency: app -> host -> gossip -> state -> zone
   - [x] E0：公共 `RestoreStore` 可从 BoltStore 加载的 detached candidate 和既有 `VerifiedRevision` 恢复
     内存 Store，校验状态根并再次 detach 输入；后续 Network commit 从磁盘 revision 继续递增，而不是重置为 0。
     BoltStore 同时提供窄 `LoadCommon` 启动读取方法。
-  - [ ] E1：从 BoltStore 加载的 candidate/revision 恢复公共 Store；DaemonStateStore 嵌入该公共 Store，并将
-    在线 record/delegation/revocation、snapshot apply、auto-join 和 peer checkpoint 一次性切到公共事务，随后
-    删除 `stateFile.Network/SyncPeers` 与 app 内重复 mutation，禁止新旧 writer 并存。
+  - [ ] E1：DaemonStateStore 嵌入恢复后的公共 Store，并将在线 record/delegation/revocation、snapshot apply、
+    auto-join 和 peer checkpoint 一次性切到公共事务；同时把 record/IPAM/service/route publisher、discovery、
+    revocation cleanup 和 metadata checkpoint 纳入同一切换闭环。随后删除 `stateFile.Network/SyncPeers` 与 app 内
+    重复 mutation，禁止新旧 writer 并存。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

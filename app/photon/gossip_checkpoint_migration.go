@@ -23,9 +23,9 @@ type legacyGossipCheckpointReport struct {
 	RejectedDropped  int
 }
 
-// projectLegacyCommonState splits the old Linux aggregate into the two common
-// sub-roots. Platform controller fields are intentionally unreachable from the
-// returned candidate.
+// projectLegacyCommonState is used only inside the one-way old-database
+// migration. Platform controller fields are intentionally unreachable from
+// the returned candidate; no online compatibility adapter exposes this API.
 func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (*corestate.CommitCandidate, legacyGossipCheckpointReport, error) {
 	if state == nil {
 		return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, corestate.ValidateStateRoot(nil))
@@ -49,9 +49,9 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 	return candidate, report, nil
 }
 
-// projectLegacyGossipCheckpoint is a read-only compatibility projection for
-// the C2b2 schema migration. Only fields that affect retry/discovery efficiency
-// survive. Session state and pure diagnostics are intentionally omitted.
+// projectLegacyGossipCheckpoint is used only by the one-way schema migration.
+// Only fields that affect retry/discovery efficiency survive. Session state
+// and pure diagnostics are intentionally omitted.
 func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
 	checkpoint := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}
 	var report legacyGossipCheckpointReport

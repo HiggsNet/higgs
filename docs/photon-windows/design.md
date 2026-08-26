@@ -121,7 +121,8 @@ root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snap
 
 Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 `state.BoltStore` 提供的事务：同一事务写完公共
 state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
-迁移函数在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
+迁移是单向的旧数据库升级，不提供新 bucket 到旧 `stateFile/SyncPeers` 的反向 view、双写或字段别名。迁移函数
+在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
 
 公共 `state.BoltStore` 是唯一持久化 owner，统一持有 bbolt handle、事务顺序和关闭生命周期。Linux 只提供
 自己的 bucket codec 与事务组合函数，不再定义平台专属的持久化 Store。首次加载在同一事务内
