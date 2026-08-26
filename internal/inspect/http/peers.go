@@ -17,7 +17,7 @@ type PeerJSON struct {
 	PeerRuntimeJSON
 }
 
-func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointView, state photonstate.PeerRuntimeState) PeerJSON {
+func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointView, state photonstate.PeerRuntimeState, datagramStats *photonstate.PeerDatagramStats, objectPullStats *photonstate.PeerObjectPullStats) PeerJSON {
 	source := "discovered"
 	if configuredAddr != "" {
 		source = "bootstrap"
@@ -28,7 +28,7 @@ func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointV
 		PeerID:          id,
 		Source:          source,
 		ConfiguredAddr:  configuredAddr,
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(state),
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(state, datagramStats, objectPullStats),
 		Endpoints:       endpoints,
 	}
 }
@@ -70,7 +70,7 @@ type PeerRuntimeJSON struct {
 	RejectedDigests       map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 
-func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState) PeerRuntimeJSON {
+func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState, datagramStats *photonstate.PeerDatagramStats, objectPullStats *photonstate.PeerObjectPullStats) PeerRuntimeJSON {
 	return PeerRuntimeJSON{
 		LastSyncUnix:          state.LastSyncUnix,
 		LastAttemptUnix:       state.LastAttemptUnix,
@@ -103,8 +103,8 @@ func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState) PeerRuntimeJSO
 		LastResponderUnix:     state.LastResponderUnix,
 		LastResponderKind:     state.LastResponderKind,
 		LastResponderZone:     state.LastResponderZone,
-		DatagramStats:         state.DatagramStats,
-		ObjectPullStats:       state.ObjectPullStats,
+		DatagramStats:         datagramStats,
+		ObjectPullStats:       objectPullStats,
 		RejectedDigests:       state.RejectedDigests,
 	}
 }

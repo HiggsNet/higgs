@@ -405,7 +405,7 @@ func stateMetaFromState(state *stateFile) stateMeta {
 		IdentityKeyPath:   state.IdentityKeyPath,
 		RootPrivateKey:    state.RootPrivateKey,
 		ZonePrivateKey:    state.ZonePrivateKey,
-		SyncPeers:         persistentSyncPeers(state.SyncPeers),
+		SyncPeers:         state.SyncPeers,
 		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
 		IPsecPortRecord:   state.IPsecPortRecord,
@@ -431,19 +431,6 @@ func closeStateStoreWithFileInfo(path string, store *zone.BoltStore, closed *boo
 		return nil, nil
 	}
 	return afterClose, nil
-}
-
-func persistentSyncPeers(peers map[string]syncPeerState) map[string]syncPeerState {
-	if peers == nil {
-		return nil
-	}
-	out := make(map[string]syncPeerState, len(peers))
-	for peerID, peer := range peers {
-		peer.DatagramStats = nil
-		peer.ObjectPullStats = nil
-		out[peerID] = peer
-	}
-	return out
 }
 
 func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {

@@ -24,10 +24,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			LastRelaySuppressedAt: 910,
 			ObservedAddr:          "198.51.100.9:33434",
 			ObservedSource:        "verified_packet",
-			DatagramStats: &photonstate.PeerDatagramStats{
-				ChunkFallbacks: 2,
-			},
-		}),
+		}, &photonstate.PeerDatagramStats{ChunkFallbacks: 2}, nil),
 		Endpoints: []inspect.PeerEndpointView{{
 			Addr:     "192.0.2.10:33434",
 			Source:   "bootstrap",
@@ -55,7 +52,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
 	got := PeersResponse{Peers: []PeerJSON{{
 		PeerID:          "node-b.catofes.",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}),
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}, nil, nil),
 	}}}
 	data, err := json.Marshal(got)
 	if err != nil {

@@ -193,16 +193,20 @@ type PeerDebugInput struct {
 	ConfiguredAddr string
 	ResolvedAddr   string
 	photonstate.PeerRuntimeState
-	Now time.Time
+	DatagramStats   *photonstate.PeerDatagramStats
+	ObjectPullStats *photonstate.PeerObjectPullStats
+	Now             time.Time
 }
 
 type PeerRuntimeDebugInput struct {
-	PeerID         string
-	Source         string
-	ConfiguredAddr string
-	ResolvedAddr   string
-	State          photonstate.PeerRuntimeState
-	Now            time.Time
+	PeerID          string
+	Source          string
+	ConfiguredAddr  string
+	ResolvedAddr    string
+	State           photonstate.PeerRuntimeState
+	DatagramStats   *photonstate.PeerDatagramStats
+	ObjectPullStats *photonstate.PeerObjectPullStats
+	Now             time.Time
 }
 
 type PeerSyncFlowView struct {
@@ -264,6 +268,8 @@ func BuildPeerDebugFromRuntime(input PeerRuntimeDebugInput) PeerDebugView {
 		ConfiguredAddr:   input.ConfiguredAddr,
 		ResolvedAddr:     input.ResolvedAddr,
 		PeerRuntimeState: input.State,
+		DatagramStats:    input.DatagramStats,
+		ObjectPullStats:  input.ObjectPullStats,
 		Now:              input.Now,
 	})
 }
@@ -287,8 +293,8 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
 		RelaySuppression: formatPeerDebugRelaySuppression(input.LastRelaySuppression, input.LastRelaySuppressedAt),
 		SyncFlow:         BuildPeerSyncFlowFromRuntime(input.PeerRuntimeState),
-		DatagramStats:    BuildPeerDatagramStatsFromRuntime(input.PeerRuntimeState),
-		ObjectPullStats:  BuildPeerObjectPullStatsFromRuntime(input.PeerRuntimeState),
+		DatagramStats:    BuildPeerDatagramStats(input.DatagramStats),
+		ObjectPullStats:  BuildPeerObjectPullStats(input.ObjectPullStats),
 	}
 }
 
@@ -309,18 +315,18 @@ func BuildPeerSyncFlowFromRuntime(state photonstate.PeerRuntimeState) PeerSyncFl
 	}
 }
 
-func BuildPeerDatagramStatsFromRuntime(state photonstate.PeerRuntimeState) PeerDatagramStatsView {
-	if state.DatagramStats == nil {
+func BuildPeerDatagramStats(stats *photonstate.PeerDatagramStats) PeerDatagramStatsView {
+	if stats == nil {
 		return PeerDatagramStatsView{}
 	}
-	return buildPeerDatagramStatsView(*state.DatagramStats)
+	return buildPeerDatagramStatsView(*stats)
 }
 
-func BuildPeerObjectPullStatsFromRuntime(state photonstate.PeerRuntimeState) PeerObjectPullStatsView {
-	if state.ObjectPullStats == nil {
+func BuildPeerObjectPullStats(stats *photonstate.PeerObjectPullStats) PeerObjectPullStatsView {
+	if stats == nil {
 		return PeerObjectPullStatsView{}
 	}
-	return buildPeerObjectPullStatsView(*state.ObjectPullStats)
+	return buildPeerObjectPullStatsView(*stats)
 }
 
 func buildPeerDatagramStatsView(input photonstate.PeerDatagramStats) PeerDatagramStatsView {

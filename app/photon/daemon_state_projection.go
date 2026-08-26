@@ -307,16 +307,19 @@ func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time
 		out.known[id] = true
 		out.order = append(out.order, id)
 		ps := cloneSyncPeerState(state.SyncPeers[id])
+		var datagramStats *datagramStats
+		var objectPullStats *objectPullStats
 		if observed, ok := observations[id]; ok {
-			ps.DatagramStats = observed.DatagramStats
-			ps.ObjectPullStats = observed.ObjectPullStats
-			ps = cloneSyncPeerState(ps)
+			datagramStats = observed.DatagramStats
+			objectPullStats = observed.ObjectPullStats
 		}
 		out.peers[id] = inspecthttp.PeerFromInputs(
 			id,
 			bootstrapAddrForPeer(config, id),
 			inspectPeerEndpoints(id, ps, config, state.Network, now),
 			ps,
+			datagramStats,
+			objectPullStats,
 		)
 	}
 	return out

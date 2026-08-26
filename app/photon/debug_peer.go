@@ -70,17 +70,19 @@ func buildGossipPeerView(state *stateFile, config *syncConfigFile, peerID string
 	if selected := selectedPeerEndpointAddr(endpoints); selected != "" {
 		resolved = selected
 	}
-	return buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, now)
+	return buildPeerDebugView(peerID, source, configuredAddr, resolved, peerState, nil, nil, now)
 }
 
-func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, now time.Time) inspect.PeerDebugView {
+func buildPeerDebugView(peerID, source, configuredAddr, resolved string, peerState syncPeerState, datagramStats *datagramStats, objectPullStats *objectPullStats, now time.Time) inspect.PeerDebugView {
 	return inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
-		PeerID:         peerID,
-		Source:         source,
-		ConfiguredAddr: configuredAddr,
-		ResolvedAddr:   resolved,
-		State:          peerState,
-		Now:            now,
+		PeerID:          peerID,
+		Source:          source,
+		ConfiguredAddr:  configuredAddr,
+		ResolvedAddr:    resolved,
+		State:           peerState,
+		DatagramStats:   datagramStats,
+		ObjectPullStats: objectPullStats,
+		Now:             now,
 	})
 }
 

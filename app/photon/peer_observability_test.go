@@ -3,31 +3,11 @@ package main
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
-func TestPersistentSyncPeersDropsDiagnosticsWithoutMutatingInput(t *testing.T) {
-	peers := map[string]syncPeerState{
-		"peer-a.catofes.": {
-			LastSyncUnix:    42,
-			DatagramStats:   &datagramStats{ChunkFallbacks: 2},
-			ObjectPullStats: &objectPullStats{Attempts: 3},
-		},
-	}
-
-	persistent := persistentSyncPeers(peers)
-	if persistent["peer-a.catofes."].DatagramStats != nil || persistent["peer-a.catofes."].ObjectPullStats != nil {
-		t.Fatalf("persistent peer retained diagnostics: %#v", persistent["peer-a.catofes."])
-	}
-	if persistent["peer-a.catofes."].LastSyncUnix != 42 {
-		t.Fatalf("persistent peer lost control state: %#v", persistent["peer-a.catofes."])
-	}
-	if peers["peer-a.catofes."].DatagramStats == nil || peers["peer-a.catofes."].ObjectPullStats == nil {
-		t.Fatalf("persistent projection mutated input: %#v", peers["peer-a.catofes."])
-	}
-}
-
-func TestLegacyPeerDiagnosticsRemainReadable(t *testing.T) {
+func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
 	var meta stateMeta
 	err := json.Unmarshal([]byte(`{
 		"sync_peers": {
@@ -41,22 +21,15 @@ func TestLegacyPeerDiagnosticsRemainReadable(t *testing.T) {
 		t.Fatalf("Unmarshal legacy state: %v", err)
 	}
 	peer := meta.SyncPeers["peer-a.catofes."]
-	if peer.DatagramStats == nil || peer.DatagramStats.ChunkFallbacks != 2 {
-		t.Fatalf("legacy datagram stats = %#v", peer.DatagramStats)
-	}
-	if peer.ObjectPullStats == nil || peer.ObjectPullStats.Attempts != 3 {
-		t.Fatalf("legacy object pull stats = %#v", peer.ObjectPullStats)
+	if !reflect.DeepEqual(peer, syncPeerState{}) {
+		t.Fatalf("legacy diagnostics leaked into runtime state: %#v", peer)
 	}
 }
 
-func TestSaveStateDoesNotRewriteLegacyPeerDiagnostics(t *testing.T) {
+func TestSaveStateCannotPersistPeerDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	normalizeSyncPeers(state)
-	state.SyncPeers["peer-a.catofes."] = syncPeerState{
-		LastSyncUnix:    42,
-		DatagramStats:   &datagramStats{ChunkFallbacks: 2},
-		ObjectPullStats: &objectPullStats{Attempts: 3},
-	}
+	state.SyncPeers["peer-a.catofes."] = syncPeerState{LastSyncUnix: 42}
 	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db")}
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
@@ -69,7 +42,23 @@ func TestSaveStateDoesNotRewriteLegacyPeerDiagnostics(t *testing.T) {
 	if peer.LastSyncUnix != 42 {
 		t.Fatalf("control state was not persisted: %#v", peer)
 	}
-	if peer.DatagramStats != nil || peer.ObjectPullStats != nil {
-		t.Fatalf("diagnostics were rewritten to state DB: %#v", peer)
+	data, err := json.Marshal(stateMetaFromState(state))
+	if err != nil {
+		t.Fatalf("Marshal state metadata: %v", err)
+	}
+	if string(data) == "" || json.Valid(data) == false {
+		t.Fatalf("invalid state metadata: %q", data)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal state metadata: %v", err)
+	}
+	peers := decoded["sync_peers"].(map[string]any)
+	encodedPeer := peers["peer-a.catofes."].(map[string]any)
+	if _, ok := encodedPeer["datagram_stats"]; ok {
+		t.Fatalf("datagram diagnostics were persisted: %#v", encodedPeer)
+	}
+	if _, ok := encodedPeer["object_pull_stats"]; ok {
+		t.Fatalf("object-pull diagnostics were persisted: %#v", encodedPeer)
 	}
 }

@@ -25,7 +25,6 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 				Reason: "invalid_snapshot", RejectedAtUnix: 18, UntilUnix: 28,
 			}},
 			LastError: "diagnostic", LastUpdateSource: "peer-b", HintAccepted: 9, ReadOnlyResponder: 4,
-			DatagramStats: &datagramStats{TooLargeDropped: 3}, ObjectPullStats: &objectPullStats{Attempts: 5},
 		},
 	})
 	if report.PeersMigrated != 1 || report.RejectedMigrated != 1 || report.PeersDropped != 0 || report.RejectedDropped != 0 {
@@ -46,7 +45,7 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 
 func TestProjectLegacyGossipCheckpointDropsDiagnosticsAndMalformedHints(t *testing.T) {
 	checkpoint, report := projectLegacyGossipCheckpoint(map[string]syncPeerState{
-		"diagnostic.catofes.": {LastError: "only diagnostic", HintSuppressed: 2, DatagramStats: &datagramStats{ChunkFallbacks: 1}},
+		"diagnostic.catofes.": {LastError: "only diagnostic", HintSuppressed: 2},
 		"invalid":             {BackoffUntilUnix: 10},
 		"peer.catofes.": {RejectedDigests: map[string]rejectedDigestState{
 			"bad-root": {Zone: "bad.catofes.", Object: "zone", RootHashHex: "not-hex"},

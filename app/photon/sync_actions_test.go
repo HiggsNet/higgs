@@ -56,9 +56,6 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	if peerState.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
 		t.Fatalf("active pull = state %q event %q, want committed catalog diffing summary", peerState.ActivePullState, peerState.ActivePullLastEvent)
 	}
-	if peerState.DatagramStats != nil {
-		t.Fatalf("datagram stats leaked into committed state: %+v", peerState.DatagramStats)
-	}
 }
 
 func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {

@@ -38,8 +38,6 @@ type PeerRuntimeState struct {
 	LastResponderUnix       int64                         `json:"last_responder_unix,omitempty"`
 	LastResponderKind       string                        `json:"last_responder_kind,omitempty"`
 	LastResponderZone       string                        `json:"last_responder_zone,omitempty"`
-	DatagramStats           *PeerDatagramStats            `json:"datagram_stats,omitempty"`
-	ObjectPullStats         *PeerObjectPullStats          `json:"object_pull_stats,omitempty"`
 	RejectedDigests         map[string]PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 

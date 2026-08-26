@@ -587,7 +587,7 @@ package dependency: app -> host -> gossip -> state -> zone
       - [x] C2c3：新增旧 `stateFile -> CommitCandidate{Verified,Gossip}` detached 启动投影；公共
         `ValidateStateRoot` 统一校验 managed zone、Network、Ed25519 私钥长度和完整
         `trusted_root_public_key` pin。纠正原 `TrustedRootHash` 命名，Linux/Windows 不再各自解释 root pin。
-- [ ] D：实现公共 verified codec/transaction 与唯一 `state.BoltStore` 的 bbolt composition、旧 schema
+- [x] D：实现公共 verified codec/transaction 与唯一 `state.BoltStore` 的 bbolt composition、旧 schema
   migration；覆盖事务失败、close failure、no-op、metadata-only、crash fixture/reload、外部锁冲突及
   Linux/Windows path adapter。
   - [x] D1：`pkg/core/state` 新增平台事务内公共 bbolt codec，固定 common/meta/verified/gossip bucket 与
@@ -622,6 +622,14 @@ package dependency: app -> host -> gossip -> state -> zone
     auto-join 和 peer checkpoint 一次性切到公共事务；同时把 record/IPAM/service/route publisher、discovery、
     revocation cleanup 和 metadata checkpoint 纳入同一切换闭环。随后删除 `stateFile.Network/SyncPeers` 与 app 内
     重复 mutation，禁止新旧 writer 并存。
+    - [x] E1a：完成新状态存储的启动恢复流程。启动时只打开一次数据库；遇到旧数据库就先升级，然后分别
+      读出公共状态和 Linux 运行状态。公共状态恢复后可以继续写回同一个数据库，重启后 revision 和 gossip
+      checkpoint 都能正确接续，且更新 checkpoint 不会误改 Linux 运行状态。这个入口暂不接入在线 daemon，
+      等 E1b 把所有旧保存路径一起替换后再启用，避免新旧写入方式混用。
+    - [ ] E1b：整体切换所有在线 writer 并删除旧状态所有权与保存路径。
+      - [x] E1b1：从旧 `PeerRuntimeState/SyncPeers` 类型中删除 `DatagramStats/ObjectPullStats`；在线统计只由
+        有界 `PeerObservabilityStore` 持有，inspect/HTTP 构建器显式接收独立 diagnostics，不再把统计临时塞回
+        legacy peer 对象。旧数据库 JSON 中这两个可丢失字段直接忽略且永不回写。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
@@ -865,7 +873,9 @@ package dependency: app -> host -> gossip -> state -> zone
     - 第一窄切口只迁移已经确认纯诊断的 `DatagramStats` 和 `ObjectPullStats`，包括其中的 catalog/page/reject、too-large、repair/fallback 计数与最近一次详情。随后逐字段审计并考虑迁移 hint accepted/suppressed、read-only responder、active-pull 展示状态、relay suppression reason 和其他最近一次 action/error detail；不能因为字段显示在 debug 页面就认定它是纯诊断。
     - `BackoffUntilUnix`、`FailureCount`、`LastRelayUnix`、`DiscoveredAddr`、observed path/TTL/grace、`LastSyncUnix`、`RejectedDigests` 等仍影响同步、限流或实际路径，先留在 control state。`LastError` 当前也参与 observed/discovered path 判断，迁移前应先拆成稳定的控制错误码/状态和仅展示的错误文本。
     - 引入有界的 `PeerObservabilityStore`，优先放在窄职责的 `internal/observability`，由 `app/photon` 负责 wiring，由 `internal/inspect` 继续负责纯 view 构建；不要把 mutable store 放进 `internal/inspect`。store 自带独立锁或分片、按 peer snapshot 和删除/过期能力，不持有 `stateFile` 或 committed 子结构指针。
-    - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段可兼容读取但不再回写。live observer/debug 合并新 store，offline DB 诊断允许显示 unavailable/reset。若以后确有历史需求，再低频批量写独立 spool/metrics store，不能重新推动主 revision。
+    - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段由 JSON 解码直接
+      忽略，不再保留临时字段兼容。live observer/debug 合并新 store，offline DB 诊断显示 unavailable/reset。
+      若以后确有历史需求，再低频批量写独立 spool/metrics store，不能重新推动主 revision。
     - 将 `recordDatagram*`、`recordCatalog*`、`recordObjectPull*` 等调用改写为 observability store 更新后，不得调用 `StateStore.Update`、install、publish 或 `SaveState`。补充并发 snapshot、peer 清理、restart reset、旧 state 兼容以及 CLI/HTTP schema 测试，再跑相同负载 perf 判断剩余 `recordSyncPeerState` 热点。
 
   - [x] **7.11.1 合并同一事件内的重复 peer mutation**

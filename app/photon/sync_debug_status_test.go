@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -26,7 +27,7 @@ func TestBuildDebugPeerViewRejectsUnknownZone(t *testing.T) {
 	}
 }
 
-func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
+func TestSyncStatusAdapterDoesNotProjectEphemeralDiagnosticsFromState(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	state := &stateFile{
 		Network: &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}},
@@ -57,11 +58,8 @@ func TestSyncStatusAdapterProjectsPeerDiagnostics(t *testing.T) {
 	if peer.SyncFlow.ActivePullState != string(gossip.SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
 		t.Fatalf("sync flow = %+v", peer.SyncFlow)
 	}
-	if peer.DatagramStats.TooLargeDropped != 2 || peer.DatagramStats.DigestOnlyAnnounces != 1 {
-		t.Fatalf("datagram stats = %+v", peer.DatagramStats)
-	}
-	if peer.ObjectPullStats.Attempts != 3 || peer.ObjectPullStats.LargeObjectUnreachable != 1 {
-		t.Fatalf("object pull stats = %+v", peer.ObjectPullStats)
+	if peer.DatagramStats != (inspect.PeerDatagramStatsView{}) || peer.ObjectPullStats != (inspect.PeerObjectPullStatsView{}) {
+		t.Fatalf("offline status retained ephemeral diagnostics: datagram=%+v object-pull=%+v", peer.DatagramStats, peer.ObjectPullStats)
 	}
 }
 
@@ -105,6 +103,8 @@ func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
 		"127.0.0.1:9999",
 		"127.0.0.1:2000",
 		diagnosticSyncPeerState(now),
+		diagnosticDatagramStats(now),
+		diagnosticObjectPullStats(now),
 		now,
 	)
 
@@ -149,30 +149,36 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		LastResponderUnix:     now.Unix(),
 		LastResponderKind:     "chunk_fallback",
 		LastResponderZone:     "node-b.catofes.",
-		DatagramStats: &datagramStats{
-			TooLargeDropped:       2,
-			DigestOnlyAnnounces:   1,
-			LastTooLargeUnix:      now.Unix(),
-			LastTooLargeDirection: "send",
-			LastTooLargeObject:    "record",
-			LastTooLargeZone:      "node-b.catofes.",
-			LastTooLargeKey:       "bigdata",
-			LastTooLargeBytes:     1800,
-			LastTooLargeLimit:     gossip.DefaultDatagramBudget,
-		},
-		ObjectPullStats: &objectPullStats{
-			Attempts:               3,
-			Successes:              2,
-			Failures:               1,
-			LargeObjectUnreachable: 1,
-			LastUnix:               now.Unix(),
-			LastError:              "no TCP address",
-			LastObject:             "record",
-			LastZone:               "node-b.catofes.",
-			LastKey:                "bigdata",
-			LastBytes:              4096,
-			LastSourcePeer:         "node-b.catofes.",
-			LastUnreachable:        true,
-		},
+	}
+}
+
+func diagnosticDatagramStats(now time.Time) *datagramStats {
+	return &datagramStats{
+		TooLargeDropped:       2,
+		DigestOnlyAnnounces:   1,
+		LastTooLargeUnix:      now.Unix(),
+		LastTooLargeDirection: "send",
+		LastTooLargeObject:    "record",
+		LastTooLargeZone:      "node-b.catofes.",
+		LastTooLargeKey:       "bigdata",
+		LastTooLargeBytes:     1800,
+		LastTooLargeLimit:     gossip.DefaultDatagramBudget,
+	}
+}
+
+func diagnosticObjectPullStats(now time.Time) *objectPullStats {
+	return &objectPullStats{
+		Attempts:               3,
+		Successes:              2,
+		Failures:               1,
+		LargeObjectUnreachable: 1,
+		LastUnix:               now.Unix(),
+		LastError:              "no TCP address",
+		LastObject:             "record",
+		LastZone:               "node-b.catofes.",
+		LastKey:                "bigdata",
+		LastBytes:              4096,
+		LastSourcePeer:         "node-b.catofes.",
+		LastUnreachable:        true,
 	}
 }

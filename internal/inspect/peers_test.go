@@ -234,14 +234,10 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 			LastRelaySuppression:  "relay_throttled",
 			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
 			ActivePullState:       "object_pulling",
-			DatagramStats: &photonstate.PeerDatagramStats{
-				TooLargeDropped: 2,
-			},
-			ObjectPullStats: &photonstate.PeerObjectPullStats{
-				Attempts: 3,
-			},
 		},
-		Now: now,
+		DatagramStats:   &photonstate.PeerDatagramStats{TooLargeDropped: 2},
+		ObjectPullStats: &photonstate.PeerObjectPullStats{Attempts: 3},
+		Now:             now,
 	})
 
 	if got.PeerID != "node-b.catofes." || got.Source != "bootstrap" || got.ResolvedAddr != "127.0.0.1:2000" {
@@ -273,20 +269,16 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("sync flow timestamps = %+v", flow)
 	}
 
-	datagram := BuildPeerDatagramStatsFromRuntime(photonstate.PeerRuntimeState{
-		DatagramStats: &photonstate.PeerDatagramStats{
-			LastCatalogUnix:  now.Unix(),
-			LastTooLargeUnix: now.Add(-time.Minute).Unix(),
-		},
+	datagram := BuildPeerDatagramStats(&photonstate.PeerDatagramStats{
+		LastCatalogUnix:  now.Unix(),
+		LastTooLargeUnix: now.Add(-time.Minute).Unix(),
 	})
 	if datagram.LastCatalog != "2023-11-14T22:13:20Z" || datagram.LastTooLarge == "never" {
 		t.Fatalf("datagram timestamps = %+v", datagram)
 	}
 
-	objectPull := BuildPeerObjectPullStatsFromRuntime(photonstate.PeerRuntimeState{
-		ObjectPullStats: &photonstate.PeerObjectPullStats{
-			LastUnix: now.Unix(),
-		},
+	objectPull := BuildPeerObjectPullStats(&photonstate.PeerObjectPullStats{
+		LastUnix: now.Unix(),
 	})
 	if objectPull.Last != "2023-11-14T22:13:20Z" {
 		t.Fatalf("object pull timestamp = %+v", objectPull)

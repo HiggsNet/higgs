@@ -49,6 +49,57 @@ func TestBoltStateStoreLinuxMigratesAndReloadsAggregate(t *testing.T) {
 	}
 }
 
+func TestBoltStateStoreLinuxRestoresCommonStoreOnOwnedHandle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
+	seedLegacyRuntimeState(t, path, legacy)
+
+	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatalf("corestate.OpenBoltStore: %v", err)
+	}
+	startup, found, err := loadAndRestoreLinuxState(store, trustedRoot)
+	if err != nil {
+		t.Fatalf("loadAndRestoreLinuxState: %v", err)
+	}
+	if !found || !startup.Migrated || startup.Common == nil || startup.Runtime == nil {
+		t.Fatalf("startup = found=%v %+v", found, startup)
+	}
+	before := startup.Common.ReadView()
+	result, err := startup.Common.UpdatePeerCheckpoint(context.Background(), "restored.catofes.", corestate.PeerCheckpointPatch{
+		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: 42},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePeerCheckpoint: %v", err)
+	}
+	if !result.Committed || result.Changes.VerifiedRevision != before.Revision {
+		t.Fatalf("checkpoint result = %+v, revision before = %d", result, before.Revision)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := corestate.OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatalf("reopen BoltStore: %v", err)
+	}
+	defer reopened.Close()
+	restored, found, err := loadAndRestoreLinuxState(reopened, trustedRoot)
+	if err != nil {
+		t.Fatalf("restore after checkpoint commit: %v", err)
+	}
+	if !found || restored.Migrated {
+		t.Fatalf("restored = found=%v migrated=%v", found, restored.Migrated)
+	}
+	after := restored.Common.ReadView()
+	if after.Revision != before.Revision || after.Gossip.Peers["restored.catofes."].BackoffUntilUnix != 42 {
+		t.Fatalf("restored common view = %+v", after)
+	}
+	if !reflect.DeepEqual(restored.Runtime, startup.Runtime) {
+		t.Fatalf("runtime changed across common commit: before=%+v after=%+v", startup.Runtime, restored.Runtime)
+	}
+}
+
 func TestBoltStateStoreLinuxAggregateRollbackAndNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)

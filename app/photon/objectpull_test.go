@@ -233,9 +233,6 @@ func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	if err == nil {
 		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
 	}
-	if stats := state.SyncPeers["node-b.catofes."].ObjectPullStats; stats != nil {
-		t.Fatalf("offline object pull persisted diagnostics: %#v", stats)
-	}
 }
 
 func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *testing.T) {
@@ -343,9 +340,6 @@ func TestOfflineObjectPullExpiredDeadlineDoesNotPersistDiagnostics(t *testing.T)
 	_, err := tryObjectPullTCPUntil(state, config, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)
-	}
-	if stats := state.SyncPeers["node-b.catofes."].ObjectPullStats; stats != nil {
-		t.Fatalf("expired offline pull persisted diagnostics: %#v", stats)
 	}
 }
 

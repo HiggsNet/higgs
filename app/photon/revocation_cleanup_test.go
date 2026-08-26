@@ -201,7 +201,6 @@ func TestCleanupRevokedPeerCache(t *testing.T) {
 			BackoffUntilUnix: now.Add(30 * time.Second).Unix(),
 			FailureCount:     3,
 			LastError:        "timeout",
-			DatagramStats:    &datagramStats{TooLargeDropped: 5, LastTooLargeDirection: "send"},
 		},
 		"node-a.catofes.": {
 			DiscoveredAddr: "192.0.2.10:33434",
@@ -236,9 +235,6 @@ func TestCleanupRevokedPeerCache(t *testing.T) {
 	}
 	if peerB.LastUpdateSource != "revoked" {
 		t.Fatalf("last update source = %q, want 'revoked'", peerB.LastUpdateSource)
-	}
-	if peerB.DatagramStats != nil || peerB.ObjectPullStats != nil {
-		t.Fatalf("legacy peer diagnostics should be cleared, got datagram=%#v object_pull=%#v", peerB.DatagramStats, peerB.ObjectPullStats)
 	}
 
 	// node-a should be untouched.

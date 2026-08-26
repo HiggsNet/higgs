@@ -81,14 +81,6 @@ func cloneSyncPeerState(in syncPeerState) syncPeerState {
 	if in.RejectedDigests != nil {
 		out.RejectedDigests = maps.Clone(in.RejectedDigests)
 	}
-	if in.DatagramStats != nil {
-		stats := *in.DatagramStats
-		out.DatagramStats = &stats
-	}
-	if in.ObjectPullStats != nil {
-		stats := *in.ObjectPullStats
-		out.ObjectPullStats = &stats
-	}
 	return out
 }
 

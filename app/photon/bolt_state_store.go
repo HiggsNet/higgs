@@ -23,6 +23,18 @@ type linuxStateSnapshot struct {
 	Migrated        bool
 }
 
+// linuxStartupState is the final ownership split used by the Linux process:
+// Common owns verified facts and gossip restart hints, while Runtime contains
+// only Linux controller/configuration state. Both persist through the same
+// process-wide BoltStore handle.
+type linuxStartupState struct {
+	Common          *corestate.Store
+	Runtime         *linuxRuntimeState
+	CommonReport    corestate.BoltLoadReport
+	MigrationReport legacyStateMigrationReport
+	Migrated        bool
+}
+
 // loadAndMigrateLinuxState composes the common and Linux bucket codecs through
 // the process-wide BoltStore. It does not own or expose another DB handle.
 func loadAndMigrateLinuxState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (linuxStateSnapshot, bool, error) {
@@ -62,6 +74,34 @@ func loadAndMigrateLinuxState(store *corestate.BoltStore, trustedRoot ed25519.Pu
 		return migrated, nil
 	})
 	return snapshot, found, err
+}
+
+// loadAndRestoreLinuxState performs the complete persistent startup boundary:
+// it upgrades a legacy database when necessary, loads both logical partitions
+// through one BoltStore transaction, and restores the common in-memory Store
+// with the persisted verified revision. The returned Store commits directly
+// through the same BoltStore owner.
+//
+// The online daemon is switched to this entry only together with all verified
+// and checkpoint writers; callers must not pair it with legacy saveState paths.
+func loadAndRestoreLinuxState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (linuxStartupState, bool, error) {
+	var startup linuxStartupState
+	snapshot, found, err := loadAndMigrateLinuxState(store, trustedRoot)
+	if err != nil || !found {
+		return startup, found, err
+	}
+	common, err := corestate.RestoreStore(snapshot.Candidate, snapshot.Revision, store.CommitCommon)
+	if err != nil {
+		return startup, false, err
+	}
+	startup = linuxStartupState{
+		Common:          common,
+		Runtime:         snapshot.Runtime,
+		CommonReport:    snapshot.CommonReport,
+		MigrationReport: snapshot.MigrationReport,
+		Migrated:        snapshot.Migrated,
+	}
+	return startup, true, nil
 }
 
 // commitLinuxState atomically commits the common logical partitions and Linux

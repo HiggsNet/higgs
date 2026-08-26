@@ -178,8 +178,6 @@ func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bo
 		ps.ObservedGraceAddrs = nil
 		// Drop diagnostics left by older state files. Current daemon diagnostics
 		// live in PeerObservability and are removed by the daemon cleanup path.
-		ps.DatagramStats = nil
-		ps.ObjectPullStats = nil
 		// Clear backoff so it doesn't interfere with future diagnostics.
 		ps.BackoffUntilUnix = 0
 		ps.FailureCount = 0
@@ -205,8 +203,6 @@ func peerNeedsRevocationCleanup(peer syncPeerState) bool {
 		peer.ObservedSource != "" ||
 		peer.ObservedFailureCount != 0 ||
 		peer.ObservedGraceAddrs != nil ||
-		peer.DatagramStats != nil ||
-		peer.ObjectPullStats != nil ||
 		peer.BackoffUntilUnix != 0 ||
 		peer.FailureCount != 0 ||
 		peer.LastError != "zone revoked" ||

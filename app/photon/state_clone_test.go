@@ -62,8 +62,6 @@ func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 	cloned.Network.Zones["node-a.catofes."].RecordHistory["endpoint"][0].Value[0] = 'Y'
 	cloned.SyncPeers["peer-a"].ObservedGraceAddrs[0].Addr = "203.0.113.2:4500"
 	cloned.SyncPeers["peer-a"].RejectedDigests["digest-a"] = rejectedDigestState{Reason: "changed"}
-	cloned.SyncPeers["peer-a"].DatagramStats.ChunkFallbacks = 2
-	cloned.SyncPeers["peer-a"].ObjectPullStats.Attempts = 2
 	cleanup := cloned.PeerCleanups["peer-a"]
 	cleanup.Reason = "changed"
 	cloned.PeerCleanups["peer-a"] = cleanup
@@ -103,10 +101,6 @@ func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 	}
 	if original.SyncPeers["peer-a"].RejectedDigests["digest-a"].Reason != "old" {
 		t.Fatalf("rejected digests shared: %#v", original.SyncPeers["peer-a"].RejectedDigests)
-	}
-	if original.SyncPeers["peer-a"].DatagramStats.ChunkFallbacks != 1 ||
-		original.SyncPeers["peer-a"].ObjectPullStats.Attempts != 1 {
-		t.Fatalf("peer diagnostic pointers shared: %#v", original.SyncPeers["peer-a"])
 	}
 	if original.PeerCleanups["peer-a"].Reason != peerCleanupReasonOffline {
 		t.Fatalf("peer cleanup map shared: %#v", original.PeerCleanups)
@@ -201,7 +195,7 @@ func TestCloneStateFileSchemaGuard(t *testing.T) {
 	assertStateCloneFields(t, firewallInstanceReconcileStateEntry{}, "Backend", "Generation", "LastRunUnix", "LastError", "PolicyHash", "OwnedObjects")
 	assertStateCloneFields(t, BirdInstanceState{}, "NetNSName", "Overlays", "ConfigPath", "ControlSocket", "PIDFile", "RouterID", "Owner", "LastConfigHash", "LastError", "LastExit", "FailureCount", "BackoffUntilUnix", "State")
 	assertStateCloneFields(t, admissionState{}, "Pending", "PendingSinceUnix", "AdoptedAtUnix", "LastAdoptionError", "LastBootstrapSyncUnix", "JoinRequestB64", "PendingReason", "PendingReasonDetail")
-	assertStateCloneFields(t, syncPeerState{}, "LastSyncUnix", "LastAttemptUnix", "BackoffUntilUnix", "LastRelayUnix", "LastRelayCatalogRootHex", "FailureCount", "LastError", "LastUpdateSource", "LastRelaySuppression", "LastRelaySuppressedAt", "DiscoveredAddr", "DiscoveredAtUnix", "ObservedAddr", "ObservedFirstSeenUnix", "ObservedLastSeenUnix", "ObservedLastSyncUnix", "ObservedUntilUnix", "ObservedSource", "ObservedFailureCount", "ObservedGraceAddrs", "ActivePullState", "ActivePullLastEvent", "ActivePullUpdatedUnix", "HintAccepted", "HintSuppressed", "LastHintUnix", "LastHintReason", "LastHintSuppression", "ReadOnlyResponder", "LastResponderUnix", "LastResponderKind", "LastResponderZone", "DatagramStats", "ObjectPullStats", "RejectedDigests")
+	assertStateCloneFields(t, syncPeerState{}, "LastSyncUnix", "LastAttemptUnix", "BackoffUntilUnix", "LastRelayUnix", "LastRelayCatalogRootHex", "FailureCount", "LastError", "LastUpdateSource", "LastRelaySuppression", "LastRelaySuppressedAt", "DiscoveredAddr", "DiscoveredAtUnix", "ObservedAddr", "ObservedFirstSeenUnix", "ObservedLastSeenUnix", "ObservedLastSyncUnix", "ObservedUntilUnix", "ObservedSource", "ObservedFailureCount", "ObservedGraceAddrs", "ActivePullState", "ActivePullLastEvent", "ActivePullUpdatedUnix", "HintAccepted", "HintSuppressed", "LastHintUnix", "LastHintReason", "LastHintSuppression", "ReadOnlyResponder", "LastResponderUnix", "LastResponderKind", "LastResponderZone", "RejectedDigests")
 	assertStateCloneFields(t, observedGraceAddrState{}, "Addr", "UntilUnix")
 	assertStateCloneFields(t, rejectedDigestState{}, "Zone", "Object", "Key", "RootHashHex", "ObjectHashHex", "Reason", "RejectedAtUnix", "UntilUnix")
 	assertStateCloneFields(t, datagramStats{}, "TooLargeDropped", "DigestOnlyAnnounces", "ChunkFallbacks", "ChunkRepairNACKs", "ChunkRepairChunks", "ChunkRepairIgnored", "LastCatalogUnix", "LastCatalogRootHex", "LastCatalogZoneCount", "LastCatalogCursor", "LastCatalogPageEntries", "LastCatalogRejectedReason", "LastTooLargeUnix", "LastTooLargeDirection", "LastTooLargeObject", "LastTooLargeZone", "LastTooLargeKey", "LastTooLargeBytes", "LastTooLargeLimit")
@@ -291,8 +285,6 @@ func cloneTestSyncPeers() map[string]syncPeerState {
 	return map[string]syncPeerState{
 		"peer-a": {
 			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "203.0.113.1:4500"}},
-			DatagramStats:      &datagramStats{ChunkFallbacks: 1},
-			ObjectPullStats:    &objectPullStats{Attempts: 1},
 			RejectedDigests: map[string]rejectedDigestState{
 				"digest-a": {Zone: "node-a.catofes.", Reason: "old"},
 			},
