@@ -59,6 +59,20 @@ func (store *BoltStore) View(read func(*bolt.Tx) error) error {
 	return store.db.View(read)
 }
 
+// LoadCommon reads the common logical partitions through the owned handle.
+func (store *BoltStore) LoadCommon() (*CommitCandidate, VerifiedRevision, BoltLoadReport, bool, error) {
+	var candidate *CommitCandidate
+	var revision VerifiedRevision
+	var report BoltLoadReport
+	found := false
+	err := store.View(func(tx *bolt.Tx) error {
+		var err error
+		candidate, revision, report, found, err = LoadBoltState(tx)
+		return err
+	})
+	return candidate, revision, report, found, err
+}
+
 // Update composes logical bucket codecs in one transaction. update reports
 // whether it changed bytes; false rolls the transaction back as a successful
 // no-op so bbolt does not commit a new transaction.

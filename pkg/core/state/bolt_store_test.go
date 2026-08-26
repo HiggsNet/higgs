@@ -25,6 +25,19 @@ func TestBoltStoreNoopAndExternalLock(t *testing.T) {
 	}
 }
 
+func TestBoltStoreLoadCommonAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	store, err := OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+	candidate, revision, report, found, err := store.LoadCommon()
+	if err != nil || found || candidate != nil || revision != 0 || report.GossipCheckpointDiscarded {
+		t.Fatalf("LoadCommon absent = candidate=%+v revision=%d report=%+v found=%v err=%v", candidate, revision, report, found, err)
+	}
+}
+
 func TestBoltStoreCloseFailureIsReportedOnce(t *testing.T) {
 	want := errors.New("injected close failure")
 	fake := &closeFailureDB{err: want}

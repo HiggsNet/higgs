@@ -135,6 +135,10 @@ Metadata-only 写入不产生新的版本域：Gossip checkpoint 仍通过同一
 `VerifiedRevision` 与当前公共状态对照。二者不一致表示 completion 已过期，整笔事务回滚并重新规划。该检查
 只消费唯一 verified revision，不允许 controller 更新 verified payload，也不引入 runtime/checkpoint revision。
 
+启动时 `BoltStore.LoadCommon` 返回 detached candidate 和磁盘中的唯一 `VerifiedRevision`，公共
+`RestoreStore` 校验状态根并再次 detach 后恢复内存状态。后续可信 Network 提交从该 revision 继续递增，不能
+因进程重启回到 0；Gossip checkpoint 仍随 candidate 恢复但不拥有自己的 revision。
+
 ## 4. 代码边界
 
 ```text

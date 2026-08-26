@@ -149,6 +149,24 @@ func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint
 	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), commit: commit}
 }
 
+// RestoreStore constructs the in-memory common state from a candidate already
+// validated and loaded from persistent storage. It preserves the persisted
+// VerifiedRevision so the next Network commit advances from the disk value.
+func RestoreStore(candidate *CommitCandidate, revision VerifiedRevision, commit CommitFunc) (*Store, error) {
+	if candidate == nil || candidate.Verified == nil {
+		return nil, fmt.Errorf("%w: persisted candidate is missing", ErrInvalidStateRoot)
+	}
+	if err := ValidateStateRoot(candidate.Verified); err != nil {
+		return nil, err
+	}
+	return &Store{
+		state:    cloneVerifiedState(candidate.Verified),
+		gossip:   cloneGossipCheckpoint(candidate.Gossip),
+		revision: revision,
+		commit:   commit,
+	}, nil
+}
+
 func (store *Store) ReadView() View {
 	if store == nil {
 		return View{}

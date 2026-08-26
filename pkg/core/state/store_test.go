@@ -183,6 +183,53 @@ func TestStoreReadViewIsDetached(t *testing.T) {
 	}
 }
 
+func TestRestoreStorePreservesRevisionAndDetachesCandidate(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
+	candidate := &CommitCandidate{
+		Verified: &VerifiedState{
+			ManagedZone:        "node-a.catofes.",
+			Network:            network,
+			IdentityPrivateKey: identityPrivate,
+		},
+		Gossip: &GossipCheckpoint{Peers: map[string]PeerCheckpoint{
+			"peer.catofes.": {BackoffUntilUnix: 10},
+		}},
+	}
+	commitSink := &memoryCommitSink{}
+	store, err := RestoreStore(candidate, 7, commitSink.Commit)
+	if err != nil {
+		t.Fatalf("RestoreStore: %v", err)
+	}
+	candidate.Verified.ManagedZone = "mutated.catofes."
+	metadata := candidate.Gossip.Peers["peer.catofes."]
+	metadata.BackoffUntilUnix = 99
+	candidate.Gossip.Peers["peer.catofes."] = metadata
+	view := store.ReadView()
+	if view.Revision != 7 || view.State.ManagedZone != "node-a.catofes." || view.Gossip.Peers["peer.catofes."].BackoffUntilUnix != 10 {
+		t.Fatalf("restored view = %+v", view)
+	}
+
+	result, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
+		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("restored"),
+	}, now)
+	if err != nil {
+		t.Fatalf("ApplyLocalIntent: %v", err)
+	}
+	if !result.Committed || result.Changes.VerifiedRevision != 8 || store.ReadView().Revision != 8 || commitSink.changes.VerifiedRevision != 8 {
+		t.Fatalf("restored commit result/view/sink = %+v/%+v/%+v", result, store.ReadView(), commitSink.changes)
+	}
+}
+
+func TestRestoreStoreRejectsInvalidCandidate(t *testing.T) {
+	if _, err := RestoreStore(nil, 3, nil); !errors.Is(err, ErrInvalidStateRoot) {
+		t.Fatalf("nil RestoreStore error = %v", err)
+	}
+	if _, err := RestoreStore(&CommitCandidate{Verified: &VerifiedState{}}, 3, nil); !errors.Is(err, ErrInvalidStateRoot) {
+		t.Fatalf("invalid RestoreStore error = %v", err)
+	}
+}
+
 func TestStoreDoesNotRetainInitialState(t *testing.T) {
 	initial, _ := testNetwork(t)
 	rootKey := ed25519.PublicKey("root")
