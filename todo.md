@@ -649,8 +649,11 @@ package dependency: app -> host -> gossip -> state -> zone
         同 epoch 冲突，且持久化成功后才发布。显式 recovery import 也已有公共事务入口，允许恢复 managed zone、
         保持 trusted root 不变、按字节 no-op 且持久化成功后才发布。revoked purge 的公共层也已收口：只负责
         verified zone 与 gossip checkpoint，保留父区 tombstone 和本机 identity chain；Linux IPsec/link 清理由
-        平台层按公共 zone plan 执行。继续覆盖 IPAM/route/service typed record intent 后，再一次性替换 daemon
-        旧 Network writer。
+        平台层按公共 zone plan 执行。IPAM pool/assignment create/revoke、route announce/withdraw 和 SOCKS5
+        publish/withdraw 已分别提供公共 typed intent，并在当前 Network 上复用 pool ownership/overlap、assignment、
+        route 与 service endpoint 授权；通用 `PutRecordIntent` 在公共层拒绝对应保留 namespace/type。公共 preview
+        复用完全相同的 normalization/validation/signing 路径但不落盘、不发布。下一步一次性替换 daemon 旧 Network
+        writer，并删除 app 内重复 mutation。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

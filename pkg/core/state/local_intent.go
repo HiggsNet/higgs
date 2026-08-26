@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
 var (
@@ -29,6 +30,63 @@ type PutRecordIntent struct {
 }
 
 func (PutRecordIntent) isLocalIntent() {}
+
+type PutIPAMPoolIntent struct {
+	Zone        zone.ZonePath
+	Prefix      string
+	DelegatedTo zone.ZonePath
+}
+
+func (PutIPAMPoolIntent) isLocalIntent() {}
+
+type RevokeIPAMPoolIntent struct {
+	Zone   zone.ZonePath
+	Prefix string
+}
+
+func (RevokeIPAMPoolIntent) isLocalIntent() {}
+
+type PutIPAMAssignmentIntent struct {
+	Zone       zone.ZonePath
+	Prefix     string
+	AssignedTo zone.ZonePath
+	Shared     bool
+	Tag        string
+}
+
+func (PutIPAMAssignmentIntent) isLocalIntent() {}
+
+type RevokeIPAMAssignmentIntent struct {
+	Zone       zone.ZonePath
+	Prefix     string
+	AssignedTo zone.ZonePath
+}
+
+func (RevokeIPAMAssignmentIntent) isLocalIntent() {}
+
+type AnnounceRouteIntent struct {
+	Zone   zone.ZonePath
+	Prefix string
+}
+
+func (AnnounceRouteIntent) isLocalIntent() {}
+
+type WithdrawRouteIntent struct {
+	Zone   zone.ZonePath
+	Prefix string
+}
+
+func (WithdrawRouteIntent) isLocalIntent() {}
+
+type PublishSOCKS5Intent struct {
+	Endpoints []photonservice.SOCKS5Endpoint
+}
+
+func (PublishSOCKS5Intent) isLocalIntent() {}
+
+type WithdrawSOCKS5Intent struct{}
+
+func (WithdrawSOCKS5Intent) isLocalIntent() {}
 
 type PutDelegationIntent struct {
 	Parent    zone.ZonePath
@@ -58,6 +116,38 @@ type LocalIntentResult struct {
 	Delegation *zone.Delegation
 	Revocation *zone.DelegationRevocation
 	Authority  *zone.ZoneAuthority
+}
+
+// PreviewLocalIntent runs the same validation, normalization and signing path
+// as ApplyLocalIntent against a detached snapshot, without persisting or
+// publishing the candidate. VerifiedRevision remains the currently committed
+// revision because a preview is not a commit.
+func (store *Store) PreviewLocalIntent(intent LocalIntent, now time.Time) (LocalIntentResult, error) {
+	var out LocalIntentResult
+	if store == nil {
+		return out, ErrVerifiedStoreClosed
+	}
+	if intent == nil {
+		return out, errors.New("local intent is nil")
+	}
+	store.mu.RLock()
+	if store.closed {
+		store.mu.RUnlock()
+		return out, ErrVerifiedStoreClosed
+	}
+	baseRevision := store.revision
+	candidate := cloneVerifiedState(store.state)
+	checkpoint := cloneGossipCheckpoint(store.gossip)
+	store.mu.RUnlock()
+
+	preview := NewStoreWithCheckpoint(candidate, checkpoint, nil)
+	out, err := preview.ApplyLocalIntent(context.Background(), intent, now)
+	if err != nil {
+		return LocalIntentResult{}, err
+	}
+	out.Committed = false
+	out.Changes.VerifiedRevision = baseRevision
+	return cloneLocalIntentResult(out), nil
 }
 
 // ApplyLocalIntent validates, signs and commits one authority-owned mutation.
@@ -93,7 +183,25 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 	var err error
 	switch typed := intent.(type) {
 	case PutRecordIntent:
-		out.Record, changed, err = applyPutRecordIntent(candidate, typed, now)
+		if err = validateGenericRecordIntent(typed); err == nil {
+			out.Record, changed, err = applyPutRecordIntent(candidate, typed, now)
+		}
+	case PutIPAMPoolIntent:
+		out.Record, changed, err = applyPutIPAMPoolIntent(candidate, typed, now)
+	case RevokeIPAMPoolIntent:
+		out.Record, changed, err = applyRevokeIPAMPoolIntent(candidate, typed, now)
+	case PutIPAMAssignmentIntent:
+		out.Record, changed, err = applyPutIPAMAssignmentIntent(candidate, typed, now)
+	case RevokeIPAMAssignmentIntent:
+		out.Record, changed, err = applyRevokeIPAMAssignmentIntent(candidate, typed, now)
+	case AnnounceRouteIntent:
+		out.Record, changed, err = applyAnnounceRouteIntent(candidate, typed, now)
+	case WithdrawRouteIntent:
+		out.Record, changed, err = applyWithdrawRouteIntent(candidate, typed, now)
+	case PublishSOCKS5Intent:
+		out.Record, changed, err = applyPublishSOCKS5Intent(candidate, typed, now)
+	case WithdrawSOCKS5Intent:
+		out.Record, changed, err = applyWithdrawSOCKS5Intent(candidate, now)
 	case PutDelegationIntent:
 		out.Delegation, changed, err = applyPutDelegationIntent(candidate, typed, now)
 		if changed != "" {
