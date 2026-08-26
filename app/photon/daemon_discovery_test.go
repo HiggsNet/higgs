@@ -100,6 +100,28 @@ func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.
 	}
 }
 
+func TestPlanDaemonDiscoveredPeersRepairsConfiguredBootstrapWithoutZone(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(time.Now().Unix(), 0)
+	peerID := "bootstrap.example."
+	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
+	view := syncPeerMutationView{
+		ManagedZone: state.ManagedZone,
+		Network:     state.Network,
+		SyncPeers:   map[string]syncPeerState{},
+	}
+
+	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	if len(updates) != 0 {
+		t.Fatalf("configured bootstrap produced state updates: %+v", updates)
+	}
+	transport := &gossip.Transport{}
+	applyDaemonDiscoveryPlan(transport, plan)
+	if addr := transport.PeerAddr(peerID); addr == nil || addr.String() != "127.0.0.1:33434" {
+		t.Fatalf("configured bootstrap address after repair = %v", addr)
+	}
+}
+
 func TestPlanDaemonDiscoveredPeersKeepsLifecycleCleanedCacheAbsent(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(time.Now().Unix(), 0)
