@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -211,16 +212,18 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		state.Network = zone.NewNetworkState()
 		state.Network.Zones["node-b.catofes."] = zs
 		state.SyncPeers["node-b.catofes."] = syncPeerState{
-			LastSyncUnix:         900,
-			LastRelayUnix:        920,
-			LastUpdateSource:     "announce",
-			LastRelaySuppression: "relay_fanout_limited",
-			DiscoveredAddr:       "203.0.113.20:33434",
-			ObservedAddr:         "198.51.100.9:33434",
-			ObservedSource:       "verified_packet",
-			ObservedGraceAddrs:   []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
-			RejectedDigests:      map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
+			LastSyncUnix:       900,
+			LastRelayUnix:      920,
+			DiscoveredAddr:     "203.0.113.20:33434",
+			ObservedAddr:       "198.51.100.9:33434",
+			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
+			RejectedDigests:    map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
 		}
+	})
+	srv.daemon.PeerObservability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+		diagnostics.LastUpdateSource = "announce"
+		diagnostics.LastRelaySuppression = "relay_fanout_limited"
+		diagnostics.ObservedSource = "verified_packet"
 	})
 	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
 	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)

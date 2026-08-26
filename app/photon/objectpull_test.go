@@ -121,7 +121,6 @@ func TestResolvePeerTCPAddrPrefersObservedOverBootstrap(t *testing.T) {
 			ObservedFirstSeenUnix: now.Unix(),
 			ObservedLastSeenUnix:  now.Unix(),
 			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-			ObservedSource:        string(gossip.MessageFetchZone),
 		},
 	}
 	config := &syncConfigFile{
@@ -171,7 +170,6 @@ func TestResolvePeerTCPAddrUsesVerifiedObservedPath(t *testing.T) {
 		ObservedFirstSeenUnix: now.Unix(),
 		ObservedLastSeenUnix:  now.Unix(),
 		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-		ObservedSource:        string(gossip.MessagePing),
 	}
 
 	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "127.0.0.1:33434" {
@@ -183,7 +181,6 @@ func TestResolvePeerTCPAddrUsesVerifiedObservedPath(t *testing.T) {
 		ObservedFirstSeenUnix: now.Unix(),
 		ObservedLastSeenUnix:  now.Unix(),
 		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-		ObservedSource:        string(gossip.MessagePing),
 	}
 	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "unknown.catofes."); got != "" {
 		t.Fatalf("resolvePeerTCPAddr unverified observed = %q, want empty", got)
@@ -216,7 +213,6 @@ func TestResolvePeerTCPAddrPrefersObservedOverPrivateSignedEndpoint(t *testing.T
 			ObservedFirstSeenUnix: now.Unix(),
 			ObservedLastSeenUnix:  now.Unix(),
 			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-			ObservedSource:        string(gossip.MessagePing),
 		},
 	}
 

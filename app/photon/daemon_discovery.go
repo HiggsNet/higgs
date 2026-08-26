@@ -132,7 +132,6 @@ func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile
 			next.ObservedLastSeenUnix = 0
 			next.ObservedLastSyncUnix = 0
 			next.ObservedUntilUnix = 0
-			next.ObservedSource = ""
 			next.ObservedFailureCount = 0
 			peerChanged = true
 		} else {

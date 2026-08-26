@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"net"
 	"testing"
@@ -11,8 +12,11 @@ import (
 func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
+	store := observability.NewPeerObservabilityStore(8, time.Hour)
 
-	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, gossip.MessagePing, now)
+	if recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, now) {
+		recordObservedSource(store, "node-b.catofes.", gossip.MessagePing, now)
+	}
 
 	peerState := state.SyncPeers["node-b.catofes."]
 	if peerState.ObservedAddr != "127.0.0.1:2000" {
@@ -24,11 +28,12 @@ func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
 	if peerState.ObservedUntilUnix != now.Add(observedPathTTL).Unix() {
 		t.Fatalf("ObservedUntilUnix = %d, want %d", peerState.ObservedUntilUnix, now.Add(observedPathTTL).Unix())
 	}
-	if peerState.ObservedSource != string(gossip.MessagePing) {
-		t.Fatalf("ObservedSource = %q, want %q", peerState.ObservedSource, gossip.MessagePing)
+	diagnostics, ok := store.Snapshot("node-b.catofes.", now)
+	if !ok || diagnostics.ObservedSource != string(gossip.MessagePing) {
+		t.Fatalf("ObservedSource = %q, want %q", diagnostics.ObservedSource, gossip.MessagePing)
 	}
 
-	recordVerifiedObservedPath(state, "unknown.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, gossip.MessagePing, now)
+	recordVerifiedObservedPath(state, "unknown.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, now)
 	if got := state.SyncPeers["unknown.catofes."].ObservedAddr; got != "" {
 		t.Fatalf("unverified peer observed addr = %q, want empty", got)
 	}
@@ -37,9 +42,11 @@ func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
 func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Now()
+	store := observability.NewPeerObservabilityStore(8, time.Hour)
 
-	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, gossip.MessagePing, now)
-	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, gossip.MessagePong, now.Add(time.Second))
+	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, now)
+	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, now.Add(time.Second))
+	recordObservedSource(store, "node-b.catofes.", gossip.MessagePong, now.Add(time.Second))
 
 	peerState := state.SyncPeers["node-b.catofes."]
 	if peerState.ObservedAddr != "127.0.0.1:3000" {
@@ -48,8 +55,9 @@ func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
 	if peerState.ObservedFirstSeenUnix != now.Add(time.Second).Unix() {
 		t.Fatalf("ObservedFirstSeenUnix = %d, want migrated timestamp %d", peerState.ObservedFirstSeenUnix, now.Add(time.Second).Unix())
 	}
-	if peerState.ObservedSource != string(gossip.MessagePong) {
-		t.Fatalf("ObservedSource = %q, want %q", peerState.ObservedSource, gossip.MessagePong)
+	diagnostics, ok := store.Snapshot("node-b.catofes.", now.Add(time.Second))
+	if !ok || diagnostics.ObservedSource != string(gossip.MessagePong) {
+		t.Fatalf("ObservedSource = %q, want %q", diagnostics.ObservedSource, gossip.MessagePong)
 	}
 	if len(peerState.ObservedGraceAddrs) != 1 {
 		t.Fatalf("ObservedGraceAddrs = %#v, want previous address retained", peerState.ObservedGraceAddrs)

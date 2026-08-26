@@ -89,13 +89,14 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 		msg := packet.Message
 		now := d.Sync.now()
 		d.rememberSyncIngressRoute(msg.PeerID, packet.Addr, now)
-		mutations := []func(*stateFile){
-			func(state *stateFile) {
-				recordVerifiedObservedPath(state, msg.PeerID, packet.Addr, msg.Type, now)
-			},
-		}
+		observed := false
+		mutations := []func(*stateFile){func(state *stateFile) {
+			observed = recordVerifiedObservedPath(state, msg.PeerID, packet.Addr, now)
+		}}
 		label := "observed_path"
-		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
+		if d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...) && observed {
+			recordObservedSource(d.PeerObservability, msg.PeerID, msg.Type, now)
+		}
 		d.seedObservedPeerPath(msg.PeerID)
 	}
 	controller := &daemonGossipActionController{
@@ -356,13 +357,13 @@ func filterRemoteCatalogPage(state *stateFile, peerID string, page *corestate.Ca
 	return &filtered
 }
 
-func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) {
-	d.recordSyncPeerStateBatch(peerID, label, fn)
+func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) bool {
+	return d.recordSyncPeerStateBatch(peerID, label, fn)
 }
 
-func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*stateFile)) {
+func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*stateFile)) bool {
 	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
-		return
+		return false
 	}
 	if _, err := d.StateStore.UpdateSyncPeer(peerID, func(peer *syncPeerState) error {
 		state := &stateFile{SyncPeers: map[string]syncPeerState{peerID: *peer}}
@@ -379,14 +380,15 @@ func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...fu
 			"label":   label,
 			"error":   err,
 		})
-		return
+		return false
 	}
 	d.markMetadataCheckpointDirty()
+	return true
 }
 
-func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...func(*stateFile)) {
+func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...func(*stateFile)) bool {
 	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
-		return
+		return false
 	}
 	if _, err := d.StateStore.updateSyncPeerWithView(peerID, func(view syncPeerMutationView, peer *syncPeerState) error {
 		state := &stateFile{
@@ -407,9 +409,10 @@ func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...
 			"label":   label,
 			"error":   err,
 		})
-		return
+		return false
 	}
 	d.markMetadataCheckpointDirtyWithin(verifiedPacketMetadataCheckpointMaxDelay)
+	return true
 }
 
 type syncPeerStateMutation struct {
@@ -1075,16 +1078,12 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			continue
 		}
 		if relayed >= maxRelayFanoutPerUpdate {
-			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
-				recordRelaySuppression(state, peerID, "relay_fanout_limited", now)
-			})
+			recordRelaySuppression(d.PeerObservability, peerID, "relay_fanout_limited", now)
 			continue
 		}
 		allowed, reason := shouldRelayToPeer(peerStates[peerID], peerID, sourcePeerID, catalogRoot, now)
 		if !allowed {
-			d.recordSyncPeerState(peerID, "relay_suppression", func(state *stateFile) {
-				recordRelaySuppression(state, peerID, reason, now)
-			})
+			recordRelaySuppression(d.PeerObservability, peerID, reason, now)
 			continue
 		}
 		relayed++
@@ -1100,9 +1099,11 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			d.hostRuntime.Gossip.RemoveSession(peerID)
 			continue
 		}
-		d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {
-			recordRelaySuccess(state, peerID, sourcePeerID, catalogRoot, now)
-		})
+		if d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {
+			recordRelaySuccess(state, peerID, catalogRoot, now)
+		}) {
+			recordRelaySuccessDiagnostics(d.PeerObservability, peerID, sourcePeerID, now)
+		}
 	}
 }
 

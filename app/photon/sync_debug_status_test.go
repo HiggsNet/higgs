@@ -135,13 +135,13 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		ObservedLastSeenUnix:  now.Unix(),
 		ObservedLastSyncUnix:  now.Unix(),
 		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
-		ObservedSource:        string(gossip.MessagePing),
-		LastUpdateSource:      "node-c.catofes.",
 	}
 }
 
 func diagnosticPeerObservability(now time.Time) observability.PeerDiagnostics {
 	return observability.PeerDiagnostics{
+		ObservedSource:        string(gossip.MessagePing),
+		LastUpdateSource:      "node-c.catofes.",
 		ActivePullState:       string(gossip.SyncSessionObjectPulling),
 		ActivePullLastEvent:   "catalog_page",
 		ActivePullUpdatedUnix: now.Unix(),

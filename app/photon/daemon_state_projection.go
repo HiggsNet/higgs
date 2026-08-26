@@ -311,7 +311,7 @@ func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time
 		out.peers[id] = inspecthttp.PeerFromInputs(
 			id,
 			bootstrapAddrForPeer(config, id),
-			inspectPeerEndpoints(id, ps, config, state.Network, now),
+			inspectPeerEndpoints(id, ps, observed, config, state.Network, now),
 			ps,
 			observed,
 		)

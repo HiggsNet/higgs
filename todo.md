@@ -582,7 +582,7 @@ package dependency: app -> host -> gossip -> state -> zone
         无独立 revision 的 `GossipCheckpoint`，同一 CommitFunc 在 candidate 中原子组合 verified + checkpoint。
         checkpoint 只允许丢失后增加重试/重新发现的行为提示，纯诊断计数继续留在 observability。
       - [x] C2c2：新增旧 Linux `SyncPeers` 到公共 `GossipCheckpoint` 的单向白名单迁移与报告；
-        session/active-pull/hint/responder/last-error/datagram/object-pull 诊断不进入 checkpoint，无效 peer、
+        session/active-pull/hint/responder/datagram/object-pull 诊断不进入 checkpoint，无效 peer、
         非 Zone rejected object 和 malformed hash 作为可丢失条目丢弃；不保留 daemon projection 方法。
       - [x] C2c3：新增旧 `stateFile -> CommitCandidate{Verified,Gossip}` detached 启动投影；公共
         `ValidateStateRoot` 统一校验 managed zone、Network、Ed25519 私钥长度和完整
@@ -637,6 +637,10 @@ package dependency: app -> host -> gossip -> state -> zone
       - [x] E1b3：最近一次 peer 错误归入可丢失但可持久化的 gossip checkpoint，使用实现 `error` 的具体
         `PeerFailure{Code, Message, AtUnix}`，不在数据库保存 Go `error` 接口，也禁止用 Message 文字控制行为。
         旧 Linux `LastError` 仅在一次性数据库迁移时转换为 `legacy` code；调度继续使用 FailureCount/backoff。
+      - [x] E1b4：将 `LastUpdateSource`、`LastRelaySuppression/At` 和 `ObservedSource` 从旧 `SyncPeers` 与公共
+        checkpoint 删除并迁入 `PeerDiagnostics`。这些字段只解释最近一次更新/抑制/观察的来源，不参与 relay
+        节流或 observed path 有效性判断；在线 inspect/HTTP 继续展示，重启后丢失。relay 抑制诊断不再提交
+        metadata，观察来源只在 endpoint 事务提交成功后记录。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

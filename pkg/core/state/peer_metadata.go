@@ -23,7 +23,6 @@ type PeerCheckpointPatch struct {
 	FailureCount       PatchField[int]
 	LastRelayUnix      PatchField[int64]
 	LastRelayRootHex   PatchField[string]
-	RelaySuppressedAt  PatchField[int64]
 	DiscoveredEndpoint PatchField[string]
 	DiscoveredAtUnix   PatchField[int64]
 	ObservedEndpoint   PatchField[string]
@@ -94,7 +93,6 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 	applyPatchField(&metadata.FailureCount, patch.FailureCount)
 	applyPatchField(&metadata.LastRelayUnix, patch.LastRelayUnix)
 	applyPatchField(&metadata.LastRelayCatalogRootHex, patch.LastRelayRootHex)
-	applyPatchField(&metadata.LastRelaySuppressedAt, patch.RelaySuppressedAt)
 	applyPatchField(&metadata.DiscoveredEndpoint, patch.DiscoveredEndpoint)
 	applyPatchField(&metadata.DiscoveredAtUnix, patch.DiscoveredAtUnix)
 	applyPatchField(&metadata.ObservedEndpoint, patch.ObservedEndpoint)

@@ -194,7 +194,6 @@ func TestCleanupRevokedPeerCache(t *testing.T) {
 			ObservedAddr:         "192.0.2.1:33434",
 			ObservedLastSeenUnix: now.Unix(),
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
-			ObservedSource:       "announce",
 			ObservedGraceAddrs: []observedGraceAddrState{
 				{Addr: "192.0.2.2:33434", UntilUnix: now.Add(10 * time.Minute).Unix()},
 			},
@@ -232,9 +231,6 @@ func TestCleanupRevokedPeerCache(t *testing.T) {
 	}
 	if peerB.LastError != "zone revoked" {
 		t.Fatalf("last error = %q, want 'zone revoked'", peerB.LastError)
-	}
-	if peerB.LastUpdateSource != "revoked" {
-		t.Fatalf("last update source = %q, want 'revoked'", peerB.LastUpdateSource)
 	}
 
 	// node-a should be untouched.
@@ -350,7 +346,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
 	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {LastError: "zone revoked", LastUpdateSource: "revoked"},
+		"node-b.catofes.": {LastError: "zone revoked"},
 	}
 	parent := state.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
@@ -380,7 +376,7 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 	state, config := buildTestNetworkState(b)
 	now := time.Unix(4140, 0)
 	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {LastError: "zone revoked", LastUpdateSource: "revoked"},
+		"node-b.catofes.": {LastError: "zone revoked"},
 	}
 	parent := state.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]

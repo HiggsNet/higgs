@@ -527,7 +527,7 @@ func TestDaemonStateStoreSyncPeerRetryRebuildsImmutableView(t *testing.T) {
 				return err
 			}
 		}
-		peer.LastUpdateSource = string(view.ManagedZone)
+		peer.DiscoveredAddr = string(view.ManagedZone)
 		return nil
 	})
 	if err != nil {
@@ -537,8 +537,8 @@ func TestDaemonStateStoreSyncPeerRetryRebuildsImmutableView(t *testing.T) {
 		t.Fatalf("attempts = %d, want one stale retry", attempts)
 	}
 	snapshot, _ := store.Snapshot()
-	if got := snapshot.SyncPeers["peer-a"].LastUpdateSource; got != "node-b.catofes." {
-		t.Fatalf("LastUpdateSource = %q, want latest retry view", got)
+	if got := snapshot.SyncPeers["peer-a"].DiscoveredAddr; got != "node-b.catofes." {
+		t.Fatalf("DiscoveredAddr = %q, want latest retry view", got)
 	}
 }
 

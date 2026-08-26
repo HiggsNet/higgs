@@ -173,7 +173,6 @@ func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bo
 		ps.ObservedLastSeenUnix = 0
 		ps.ObservedLastSyncUnix = 0
 		ps.ObservedUntilUnix = 0
-		ps.ObservedSource = ""
 		ps.ObservedFailureCount = 0
 		ps.ObservedGraceAddrs = nil
 		// Drop diagnostics left by older state files. Current daemon diagnostics
@@ -182,8 +181,6 @@ func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bo
 		ps.BackoffUntilUnix = 0
 		ps.FailureCount = 0
 		ps.LastError = "zone revoked"
-		// Mark last update source so debug can show the reason.
-		ps.LastUpdateSource = "revoked"
 		state.SyncPeers[peerID] = ps
 	}
 }
@@ -200,13 +197,11 @@ func peerNeedsRevocationCleanup(peer syncPeerState) bool {
 		peer.ObservedLastSeenUnix != 0 ||
 		peer.ObservedLastSyncUnix != 0 ||
 		peer.ObservedUntilUnix != 0 ||
-		peer.ObservedSource != "" ||
 		peer.ObservedFailureCount != 0 ||
 		peer.ObservedGraceAddrs != nil ||
 		peer.BackoffUntilUnix != 0 ||
 		peer.FailureCount != 0 ||
-		peer.LastError != "zone revoked" ||
-		peer.LastUpdateSource != "revoked"
+		peer.LastError != "zone revoked"
 }
 
 // CollectAllRevokedZones returns all zones that are currently revoked,

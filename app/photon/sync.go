@@ -643,7 +643,7 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID, catalogRoo
 
 // recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
 // lock on state.
-func recordRelaySuccess(state *stateFile, peerID, sourcePeerID, catalogRoot string, now time.Time) {
+func recordRelaySuccess(state *stateFile, peerID, catalogRoot string, now time.Time) {
 	if state == nil || peerID == "" {
 		return
 	}
@@ -651,30 +651,35 @@ func recordRelaySuccess(state *stateFile, peerID, sourcePeerID, catalogRoot stri
 	peerState := state.SyncPeers[peerID]
 	peerState.LastRelayUnix = now.Unix()
 	peerState.LastRelayCatalogRootHex = catalogRoot
-	peerState.LastUpdateSource = sourcePeerID
-	peerState.LastRelaySuppression = ""
-	peerState.LastRelaySuppressedAt = 0
 	state.SyncPeers[peerID] = peerState
 }
 
-// recordRelaySuppression mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordRelaySuppression(state *stateFile, peerID, reason string, now time.Time) {
-	if state == nil || peerID == "" || reason == "" {
+func recordRelaySuccessDiagnostics(store *observability.PeerObservabilityStore, peerID, sourcePeerID string, now time.Time) {
+	if store == nil || peerID == "" {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	peerState.LastRelaySuppression = reason
-	peerState.LastRelaySuppressedAt = now.Unix()
-	state.SyncPeers[peerID] = peerState
+	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
+		diagnostics.LastUpdateSource = sourcePeerID
+		diagnostics.LastRelaySuppression = ""
+		diagnostics.LastRelaySuppressedAt = 0
+	})
+}
+
+func recordRelaySuppression(store *observability.PeerObservabilityStore, peerID, reason string, now time.Time) {
+	if store == nil || peerID == "" || reason == "" {
+		return
+	}
+	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
+		diagnostics.LastRelaySuppression = reason
+		diagnostics.LastRelaySuppressedAt = now.Unix()
+	})
 }
 
 // recordVerifiedObservedPath mutates state.SyncPeers. The caller must hold the
 // write lock on state.
-func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAddr, source gossip.MessageType, now time.Time) {
+func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAddr, now time.Time) bool {
 	if state == nil || addr == nil || !peerChainVerified(state, peerID, now) {
-		return
+		return false
 	}
 	normalizeSyncPeers(state)
 	peerState := state.SyncPeers[peerID]
@@ -689,9 +694,18 @@ func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAd
 	peerState.ObservedAddr = addrString
 	peerState.ObservedLastSeenUnix = now.Unix()
 	peerState.ObservedUntilUnix = now.Add(observedPathTTL).Unix()
-	peerState.ObservedSource = string(source)
 	peerState.ObservedGraceAddrs = pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, addrString, now)
 	state.SyncPeers[peerID] = peerState
+	return true
+}
+
+func recordObservedSource(store *observability.PeerObservabilityStore, peerID string, source gossip.MessageType, now time.Time) {
+	if store == nil || peerID == "" {
+		return
+	}
+	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
+		diagnostics.ObservedSource = string(source)
+	})
 }
 
 func observedPathActive(peerState syncPeerState, now time.Time) bool {

@@ -19,7 +19,6 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 			ObservedFirstSeenUnix: now.Add(-2 * time.Minute).Unix(),
 			ObservedLastSeenUnix:  now.Add(-2 * time.Minute).Unix(),
 			ObservedUntilUnix:     now.Add(-time.Minute).Unix(),
-			ObservedSource:        string(gossip.MessagePing),
 		},
 	}
 	view := syncPeerMutationView{

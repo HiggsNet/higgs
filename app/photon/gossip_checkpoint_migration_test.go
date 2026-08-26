@@ -15,7 +15,7 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	checkpoint, report := projectLegacyGossipCheckpoint(map[string]syncPeerState{
 		"peer-a.catofes.": {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
-			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog", LastRelaySuppressedAt: 13,
+			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
 			DiscoveredAddr: "192.0.2.1:4242", DiscoveredAtUnix: 14,
 			ObservedAddr: "198.51.100.1:4242", ObservedFirstSeenUnix: 15, ObservedLastSeenUnix: 16,
 			ObservedLastSyncUnix: 17, ObservedUntilUnix: 30, ObservedFailureCount: 1,
@@ -24,7 +24,7 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 				Zone: "bad.catofes.", Object: "zone", RootHashHex: hex.EncodeToString(root),
 				Reason: "invalid_snapshot", RejectedAtUnix: 18, UntilUnix: 28,
 			}},
-			LastError: "diagnostic", LastUpdateSource: "peer-b",
+			LastError: "diagnostic",
 		},
 	})
 	if report.PeersMigrated != 1 || report.RejectedMigrated != 1 || report.PeersDropped != 0 || report.RejectedDropped != 0 {

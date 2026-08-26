@@ -13,9 +13,6 @@ type PeerRuntimeState struct {
 	LastRelayCatalogRootHex string                        `json:"last_relay_catalog_root_hex,omitempty"`
 	FailureCount            int                           `json:"failure_count,omitempty"`
 	LastError               string                        `json:"last_error,omitempty"`
-	LastUpdateSource        string                        `json:"last_update_source,omitempty"`
-	LastRelaySuppression    string                        `json:"last_relay_suppression,omitempty"`
-	LastRelaySuppressedAt   int64                         `json:"last_relay_suppressed_at,omitempty"`
 	DiscoveredAddr          string                        `json:"discovered_addr,omitempty"`
 	DiscoveredAtUnix        int64                         `json:"discovered_at_unix,omitempty"`
 	ObservedAddr            string                        `json:"observed_addr,omitempty"`
@@ -23,7 +20,6 @@ type PeerRuntimeState struct {
 	ObservedLastSeenUnix    int64                         `json:"observed_last_seen_unix,omitempty"`
 	ObservedLastSyncUnix    int64                         `json:"observed_last_sync_unix,omitempty"`
 	ObservedUntilUnix       int64                         `json:"observed_until_unix,omitempty"`
-	ObservedSource          string                        `json:"observed_source,omitempty"`
 	ObservedFailureCount    int                           `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs      []PeerObservedGraceAddrState  `json:"observed_grace_addrs,omitempty"`
 	RejectedDigests         map[string]PeerRejectedDigest `json:"rejected_digests,omitempty"`

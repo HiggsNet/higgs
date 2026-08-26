@@ -287,9 +287,9 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		DiscoveredAddr:   input.DiscoveredAddr,
 		ObservedAddr:     input.ObservedAddr,
 		ObservedStatus:   formatPeerDebugObservedPath(input, input.Now),
-		LastUpdateSource: input.LastUpdateSource,
+		LastUpdateSource: input.Diagnostics.LastUpdateSource,
 		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
-		RelaySuppression: formatPeerDebugRelaySuppression(input.LastRelaySuppression, input.LastRelaySuppressedAt),
+		RelaySuppression: formatPeerDebugRelaySuppression(input.Diagnostics.LastRelaySuppression, input.Diagnostics.LastRelaySuppressedAt),
 		SyncFlow:         BuildPeerSyncFlowFromObservability(input.Diagnostics),
 		DatagramStats:    BuildPeerDatagramStats(input.Diagnostics.DatagramStats),
 		ObjectPullStats:  BuildPeerObjectPullStats(input.Diagnostics.ObjectPullStats),
@@ -465,7 +465,7 @@ func formatPeerDebugObservedPath(input PeerDebugInput, now time.Time) string {
 		formatPeerDebugUnixTime(input.ObservedLastSeenUnix),
 		formatPeerDebugUnixTime(input.ObservedLastSyncUnix),
 		input.ObservedFailureCount,
-		debugDash(input.ObservedSource),
+		debugDash(input.Diagnostics.ObservedSource),
 	)
 }
 

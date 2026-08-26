@@ -40,8 +40,9 @@ type GossipCheckpoint struct {
 	Peers map[string]PeerCheckpoint `json:"peers,omitempty"`
 }
 
-// PeerCheckpoint contains only restart hints that affect retry/discovery
-// efficiency. Pure diagnostics and counters belong in observability stores.
+// PeerCheckpoint contains restart hints that affect retry/discovery efficiency
+// plus the most recent loss-tolerant failure context. Pure protocol counters
+// and explanatory source fields belong in observability stores.
 type PeerCheckpoint struct {
 	LastSyncUnix            int64                            `json:"last_sync_unix,omitempty"`
 	LastAttemptUnix         int64                            `json:"last_attempt_unix,omitempty"`
@@ -49,7 +50,6 @@ type PeerCheckpoint struct {
 	FailureCount            int                              `json:"failure_count,omitempty"`
 	LastRelayUnix           int64                            `json:"last_relay_unix,omitempty"`
 	LastRelayCatalogRootHex string                           `json:"last_relay_catalog_root_hex,omitempty"`
-	LastRelaySuppressedAt   int64                            `json:"last_relay_suppressed_at,omitempty"`
 	DiscoveredEndpoint      string                           `json:"discovered_endpoint,omitempty"`
 	DiscoveredAtUnix        int64                            `json:"discovered_at_unix,omitempty"`
 	ObservedEndpoint        string                           `json:"observed_endpoint,omitempty"`

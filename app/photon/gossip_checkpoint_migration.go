@@ -74,7 +74,6 @@ func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.G
 			FailureCount:            legacy.FailureCount,
 			LastRelayUnix:           legacy.LastRelayUnix,
 			LastRelayCatalogRootHex: legacy.LastRelayCatalogRootHex,
-			LastRelaySuppressedAt:   legacy.LastRelaySuppressedAt,
 			DiscoveredEndpoint:      legacy.DiscoveredAddr,
 			DiscoveredAtUnix:        legacy.DiscoveredAtUnix,
 			ObservedEndpoint:        legacy.ObservedAddr,
@@ -143,7 +142,7 @@ func projectLegacyRejectedObjects(rejected map[string]rejectedDigestState, repor
 func peerCheckpointEmpty(peer corestate.PeerCheckpoint) bool {
 	return peer.LastSyncUnix == 0 && peer.LastAttemptUnix == 0 && peer.BackoffUntilUnix == 0 &&
 		peer.FailureCount == 0 && peer.LastRelayUnix == 0 && peer.LastRelayCatalogRootHex == "" &&
-		peer.LastRelaySuppressedAt == 0 && peer.DiscoveredEndpoint == "" && peer.DiscoveredAtUnix == 0 &&
+		peer.DiscoveredEndpoint == "" && peer.DiscoveredAtUnix == 0 &&
 		peer.ObservedEndpoint == "" && peer.ObservedFirstSeenUnix == 0 && peer.ObservedLastSeenUnix == 0 &&
 		peer.ObservedLastSyncUnix == 0 && peer.ObservedUntilUnix == 0 && peer.ObservedFailureCount == 0 &&
 		len(peer.ObservedGraceEndpoints) == 0 && peer.LastFailure == nil && len(peer.RejectedObjects) == 0

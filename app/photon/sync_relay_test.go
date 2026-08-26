@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
@@ -75,42 +76,42 @@ func TestShouldRelayToPeer(t *testing.T) {
 }
 
 func TestRecordRelaySuppression(t *testing.T) {
-	state := &stateFile{}
+	store := observability.NewPeerObservabilityStore(8, time.Hour)
 	now := time.Unix(100, 0)
 
-	recordRelaySuppression(state, "node-b", "relay_throttled", now)
+	recordRelaySuppression(store, "node-b", "relay_throttled", now)
 
-	peerState := state.SyncPeers["node-b"]
-	if peerState.LastRelaySuppression != "relay_throttled" {
-		t.Fatalf("LastRelaySuppression = %q, want relay_throttled", peerState.LastRelaySuppression)
+	diagnostics, ok := store.Snapshot("node-b", now)
+	if !ok || diagnostics.LastRelaySuppression != "relay_throttled" {
+		t.Fatalf("LastRelaySuppression = %q, want relay_throttled", diagnostics.LastRelaySuppression)
 	}
-	if peerState.LastRelaySuppressedAt != now.Unix() {
-		t.Fatalf("LastRelaySuppressedAt = %d, want %d", peerState.LastRelaySuppressedAt, now.Unix())
+	if diagnostics.LastRelaySuppressedAt != now.Unix() {
+		t.Fatalf("LastRelaySuppressedAt = %d, want %d", diagnostics.LastRelaySuppressedAt, now.Unix())
 	}
 }
 
 func TestRecordRelaySuccess(t *testing.T) {
-	state := &stateFile{
-		SyncPeers: map[string]syncPeerState{
-			"node-b": {LastRelaySuppression: "relay_throttled", LastRelaySuppressedAt: 99},
-		},
-	}
+	state := &stateFile{}
+	store := observability.NewPeerObservabilityStore(8, time.Hour)
 	now := time.Unix(100, 0)
+	recordRelaySuppression(store, "node-b", "relay_throttled", now.Add(-time.Second))
 
-	recordRelaySuccess(state, "node-b", "node-a", "catalog-root-a", now)
+	recordRelaySuccess(state, "node-b", "catalog-root-a", now)
+	recordRelaySuccessDiagnostics(store, "node-b", "node-a", now)
 
 	peerState := state.SyncPeers["node-b"]
 	if peerState.LastRelayUnix != now.Unix() {
 		t.Fatalf("LastRelayUnix = %d, want %d", peerState.LastRelayUnix, now.Unix())
 	}
-	if peerState.LastUpdateSource != "node-a" {
-		t.Fatalf("LastUpdateSource = %q, want node-a", peerState.LastUpdateSource)
-	}
 	if peerState.LastRelayCatalogRootHex != "catalog-root-a" {
 		t.Fatalf("LastRelayCatalogRootHex = %q, want catalog-root-a", peerState.LastRelayCatalogRootHex)
 	}
-	if peerState.LastRelaySuppression != "" || peerState.LastRelaySuppressedAt != 0 {
-		t.Fatalf("relay suppression was not cleared: %#v", peerState)
+	diagnostics, ok := store.Snapshot("node-b", now)
+	if !ok || diagnostics.LastUpdateSource != "node-a" {
+		t.Fatalf("LastUpdateSource = %q, want node-a", diagnostics.LastUpdateSource)
+	}
+	if diagnostics.LastRelaySuppression != "" || diagnostics.LastRelaySuppressedAt != 0 {
+		t.Fatalf("relay suppression was not cleared: %#v", diagnostics)
 	}
 }
 

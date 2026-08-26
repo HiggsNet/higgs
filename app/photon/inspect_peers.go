@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -30,12 +31,12 @@ func inspectPeerSetInput(state *stateFile, config *syncConfigFile, now time.Time
 	return input
 }
 
-func inspectPeerEndpointInput(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) inspect.PeerEndpointInput {
+func inspectPeerEndpointInput(peerID string, ps syncPeerState, diagnostics observability.PeerDiagnostics, config *syncConfigFile, ns *zone.NetworkState, now time.Time) inspect.PeerEndpointInput {
 	input := inspect.PeerEndpointInput{
 		BootstrapAddr:  bootstrapAddrForPeer(config, peerID),
 		SelectedAddr:   ps.DiscoveredAddr,
 		ObservedAddr:   ps.ObservedAddr,
-		ObservedSource: ps.ObservedSource,
+		ObservedSource: diagnostics.ObservedSource,
 		Grace:          make([]inspect.PeerGraceEndpoint, 0, len(ps.ObservedGraceAddrs)),
 	}
 	discovered := gossip.ExtractPeerEndpointsAt(ns, now)
@@ -56,8 +57,8 @@ func inspectPeerEndpointInput(peerID string, ps syncPeerState, config *syncConfi
 	return input
 }
 
-func inspectPeerEndpoints(peerID string, ps syncPeerState, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []inspect.PeerEndpointView {
-	return inspect.BuildPeerEndpoints(inspectPeerEndpointInput(peerID, ps, config, ns, now))
+func inspectPeerEndpoints(peerID string, ps syncPeerState, diagnostics observability.PeerDiagnostics, config *syncConfigFile, ns *zone.NetworkState, now time.Time) []inspect.PeerEndpointView {
+	return inspect.BuildPeerEndpoints(inspectPeerEndpointInput(peerID, ps, diagnostics, config, ns, now))
 }
 
 func bootstrapAddrForPeer(config *syncConfigFile, peerID string) string {

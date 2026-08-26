@@ -63,7 +63,7 @@ func buildGossipPeerView(state *stateFile, config *syncConfigFile, peerID string
 	known := configuredKnownPeers(config)
 	peerState := state.SyncPeers[peerID]
 	source, configuredAddr := gossipPeerSource(config, peerID, peerState)
-	endpoints := inspectPeerEndpoints(peerID, peerState, config, state.Network, now)
+	endpoints := inspectPeerEndpoints(peerID, peerState, observability.PeerDiagnostics{}, config, state.Network, now)
 	resolved := "-"
 	if addr := known[peerID]; addr != nil {
 		resolved = addr.String()

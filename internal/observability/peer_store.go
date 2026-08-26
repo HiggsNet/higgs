@@ -10,6 +10,10 @@ import (
 // PeerDiagnostics contains observations that are safe to lose on daemon restart.
 // Values returned by PeerObservabilityStore are detached from the mutable store.
 type PeerDiagnostics struct {
+	LastUpdateSource      string
+	LastRelaySuppression  string
+	LastRelaySuppressedAt int64
+	ObservedSource        string
 	ActivePullState       string
 	ActivePullLastEvent   string
 	ActivePullUpdatedUnix int64
