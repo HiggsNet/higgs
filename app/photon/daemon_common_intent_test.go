@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
@@ -50,35 +47,5 @@ func TestCommonControlIntentAdaptersAreTypedAndDetached(t *testing.T) {
 	request.Endpoints[0].Address = "mutated"
 	if typed.Endpoints[0].Address != "10.0.1.1" {
 		t.Fatal("service intent retained control request endpoints")
-	}
-}
-
-func TestApplyCommonLocalIntentPreviewAndCommit(t *testing.T) {
-	rt, managed := buildIPAMTestRuntime(t)
-	legacy, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	candidate, _, err := projectLegacyCommonState(legacy, rt.Config.TrustedRootPublicKey)
-	if err != nil {
-		t.Fatalf("projectLegacyCommonState: %v", err)
-	}
-	store := corestate.NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, nil)
-	intent := corestate.PutRecordIntent{
-		Zone: managed, Key: "apps/adapter", Type: "application.test", Value: []byte("value"),
-	}
-	preview, err := applyCommonLocalIntent(context.Background(), store, intent, true, time.Unix(1000, 0))
-	if err != nil {
-		t.Fatalf("applyCommonLocalIntent(preview): %v", err)
-	}
-	if !preview.DryRun || preview.Version != 1 || store.ReadView().Revision != 0 {
-		t.Fatalf("preview/revision = %+v/%d", preview, store.ReadView().Revision)
-	}
-	committed, err := applyCommonLocalIntent(context.Background(), store, intent, false, time.Unix(1000, 0))
-	if err != nil {
-		t.Fatalf("applyCommonLocalIntent(commit): %v", err)
-	}
-	if committed.DryRun || committed.Version != 1 || store.ReadView().Revision != 1 || committed.Zone != zone.ZonePath(managed) {
-		t.Fatalf("commit/revision = %+v/%d", committed, store.ReadView().Revision)
 	}
 }

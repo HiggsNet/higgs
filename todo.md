@@ -653,8 +653,9 @@ package dependency: app -> host -> gossip -> state -> zone
         publish/withdraw 已分别提供公共 typed intent，并在当前 Network 上复用 pool ownership/overlap、assignment、
         route 与 service endpoint 授权；通用 `PutRecordIntent` 在公共层拒绝对应保留 namespace/type。公共 preview
         复用完全相同的 normalization/validation/signing 路径但不落盘、不发布。daemon control request 到公共 intent
-        的 adapter 已保持纯转换，不读取本地 state、不重复 semantic validation，并统一通过公共 preview/commit 返回
-        record version。公共 Store + Linux runtime 的组合读取纯函数边界已经落地：公共 `Store.ReadView()` 与
+        的 adapter 只保留纯 DTO 转换，不读取本地 state、不重复 semantic validation；未接在线的独立 apply wrapper
+        已删除，最终 control handler 在整体切换时直接调用组合 Store。公共 Store + Linux runtime 的组合读取纯函数
+        边界已经落地：公共 `Store.ReadView()` 与
         Linux runtime snapshot 只生成 detached 的临时 `stateFile` 供现有 projection/controller planner 迁移使用，
         不提供保存或反向写回入口；checkpoint 到旧 peer 形状的映射也仅限读侧。`DaemonStateStore` 已新增尚未接入
         生产启动的组合模式：只把该 detached 结果作为现有 reader 的缓存，公共 local intent 必须先经 `state.Store`
@@ -665,8 +666,9 @@ package dependency: app -> host -> gossip -> state -> zone
         typed runtime commit，持久化失败、stale 和 no-op 都不发布，真实 BoltStore 关闭重开已证明 runtime 更新不会
         改动公共 revision。daemon 的 routing/IPsec/firewall reconcile、IPsec cleanup 与 Endpoint ACL 调用点已统一
         进入 runtime typed commit；组合模式不再触发旧 `saveCommittedMeta/saveCommittedState`，旧生产模式在最终启动
-        切换前仍由同一入口维持原持久化行为。下一步补齐 identity/recovery/purge、peer cleanup/admission 与公共
-        checkpoint 调用点，再与生产启动同批启用并删除 app 内重复 mutation。
+        切换前仍由同一入口维持原持久化行为。硬切试验已确认 record writer 不能早于 endpoint publisher、admin、
+        remote/checkpoint 和测试持久化单独启用，否则必然形成半在线状态；后续不再提交单功能兼容 wrapper，而是在
+        一个未拆分的 cutover 批次内同时接入生产启动、迁完剩余调用点，并删除旧在线 writer/save 路径后再提交。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

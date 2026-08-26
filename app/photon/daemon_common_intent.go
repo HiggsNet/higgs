@@ -1,10 +1,7 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
@@ -50,31 +47,4 @@ func commonServiceIntent(request serviceMutationRequest) (corestate.LocalIntent,
 	default:
 		return nil, fmt.Errorf("unsupported service operation %q", request.Operation)
 	}
-}
-
-func applyCommonLocalIntent(ctx context.Context, store *corestate.Store, intent corestate.LocalIntent, dryRun bool, now time.Time) (*recordMutationResult, error) {
-	if store == nil {
-		return nil, errors.New("common state store is nil")
-	}
-	if intent == nil {
-		return nil, errors.New("common local intent is nil")
-	}
-	var (
-		result corestate.LocalIntentResult
-		err    error
-	)
-	if dryRun {
-		result, err = store.PreviewLocalIntent(intent, now)
-	} else {
-		result, err = store.ApplyLocalIntent(ctx, intent, now)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if result.Record == nil {
-		return nil, errors.New("common local intent returned no record")
-	}
-	return &recordMutationResult{
-		Zone: result.Record.Zone, Key: result.Record.Key, Version: result.Record.Version, DryRun: dryRun,
-	}, nil
 }
