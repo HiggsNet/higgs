@@ -284,10 +284,19 @@ gossip:
 EOF
 	if [ "$(id -u)" -eq 0 ]; then
 		install -d -m 0700 /etc/photon "$admin_config_dir"
-		[ -e "$admin_config" ] || install -m 0600 "$admin_config_tmp" "$admin_config"
+		if [ ! -e "$admin_config" ] && [ ! -L "$admin_config" ]; then
+			install -m 0600 "$admin_config_tmp" "$admin_config"
+		fi
 	elif command -v sudo >/dev/null 2>&1; then
 		sudo install -d -m 0700 /etc/photon "$admin_config_dir"
-		[ -e "$admin_config" ] || sudo install -m 0600 "$admin_config_tmp" "$admin_config"
+		# The admin directory is root-owned 0700. The invoking non-root user
+		# cannot stat files below it, so an unprivileged [ -e ] reports false
+		# even when config.yaml exists and would overwrite operator settings on
+		# every update. Perform the existence check in the same privilege domain
+		# as the eventual install. Preserve symlinks as existing entries too.
+		if ! sudo test -e "$admin_config" && ! sudo test -L "$admin_config"; then
+			sudo install -m 0600 "$admin_config_tmp" "$admin_config"
+		fi
 	else
 		echo "error: cannot prepare ${admin_config_dir}; rerun as root" >&2
 		exit 1
