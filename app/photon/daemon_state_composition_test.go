@@ -104,3 +104,67 @@ func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) 
 		t.Fatalf("failed persistence changed composed view: revision=%d", store.Meta().Revision)
 	}
 }
+
+func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision(t *testing.T) {
+	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	result, err := store.UpdateCommonPeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
+		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: 42},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCommonPeerCheckpoint: %v", err)
+	}
+	if !result.Committed || result.Changes.VerifiedRevision != 0 || store.Meta().Revision != 0 {
+		t.Fatalf("checkpoint result/meta = %+v/%+v", result, store.Meta())
+	}
+	view, _ := store.Snapshot()
+	if got := view.SyncPeers["peer.catofes."].BackoffUntilUnix; got != 42 {
+		t.Fatalf("composed checkpoint backoff = %d", got)
+	}
+}
+
+func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T) {
+	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	commits := 0
+	store.commitRuntime = func(revision corestate.VerifiedRevision, candidate *linuxRuntimeState) error {
+		commits++
+		if revision != 0 || candidate.RoutingReconcile == nil || candidate.RoutingReconcile.LastError != "planned" {
+			t.Fatalf("runtime commit candidate = revision %d, state %+v", revision, candidate.RoutingReconcile)
+		}
+		current, _ := store.Snapshot()
+		if current.RoutingReconcile != nil {
+			t.Fatal("runtime view published before persistence callback")
+		}
+		return nil
+	}
+	reconcile := &routingReconcileState{LastError: "planned"}
+	if revision, committed, err := store.commitComposedRoutingIfRevision(0, nil, reconcile); err != nil || !committed || revision != 0 {
+		t.Fatalf("routing runtime commit = revision %d committed %v err %v", revision, committed, err)
+	}
+	after, _ := store.Snapshot()
+	if after.RoutingReconcile == nil || after.RoutingReconcile.LastError != "planned" || store.Meta().Revision != 0 {
+		t.Fatalf("published runtime/meta = %+v/%+v", after.RoutingReconcile, store.Meta())
+	}
+	if _, committed, err := store.commitComposedRoutingIfRevision(0, nil, reconcile); err != nil || committed {
+		t.Fatalf("runtime no-op = committed %v err %v", committed, err)
+	}
+	if _, committed, err := store.commitComposedRoutingIfRevision(1, nil, &routingReconcileState{LastError: "stale"}); err != nil || committed {
+		t.Fatalf("stale runtime commit = committed %v err %v", committed, err)
+	}
+	if commits != 1 {
+		t.Fatalf("runtime persistence calls = %d, want 1", commits)
+	}
+}
+
+func TestComposedDaemonStateStoreRuntimePersistenceFailureDoesNotPublish(t *testing.T) {
+	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	wantErr := errors.New("runtime persist failed")
+	store.commitRuntime = func(corestate.VerifiedRevision, *linuxRuntimeState) error { return wantErr }
+	_, committed, err := store.commitComposedFirewallIfRevision(0, map[string]endpointACL{"blocked": {Name: "blocked"}}, nil)
+	if !errors.Is(err, wantErr) || committed {
+		t.Fatalf("runtime failure = committed %v err %v", committed, err)
+	}
+	after, _ := store.Snapshot()
+	if _, ok := after.EndpointACLs["blocked"]; ok {
+		t.Fatal("failed runtime persistence published candidate")
+	}
+}

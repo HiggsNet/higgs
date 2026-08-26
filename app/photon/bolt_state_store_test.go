@@ -100,6 +100,48 @@ func TestBoltStateStoreLinuxRestoresCommonStoreOnOwnedHandle(t *testing.T) {
 	}
 }
 
+func TestPersistedComposedDaemonStateStoreCommitsRuntimeThroughOwnedHandle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
+	seedLegacyRuntimeState(t, path, legacy)
+
+	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatalf("corestate.OpenBoltStore: %v", err)
+	}
+	startup, found, err := loadAndRestoreLinuxState(store, trustedRoot)
+	if err != nil || !found {
+		t.Fatalf("loadAndRestoreLinuxState = found %v err %v", found, err)
+	}
+	composed, err := newPersistedComposedDaemonStateStore(startup.Common, startup.Runtime, store)
+	if err != nil {
+		t.Fatalf("newPersistedComposedDaemonStateStore: %v", err)
+	}
+	before := startup.Common.ReadView()
+	if _, committed, err := composed.commitComposedRoutingIfRevision(uint64(before.Revision), nil, &routingReconcileState{LastError: "persisted"}); err != nil || !committed {
+		t.Fatalf("commitComposedRoutingIfRevision = committed %v err %v", committed, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := corestate.OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatalf("reopen BoltStore: %v", err)
+	}
+	defer reopened.Close()
+	restored, found, err := loadAndRestoreLinuxState(reopened, trustedRoot)
+	if err != nil || !found {
+		t.Fatalf("restore = found %v err %v", found, err)
+	}
+	if restored.Common.ReadView().Revision != before.Revision {
+		t.Fatalf("runtime commit advanced verified revision: before=%d after=%d", before.Revision, restored.Common.ReadView().Revision)
+	}
+	if restored.Runtime.RoutingReconcile == nil || restored.Runtime.RoutingReconcile.LastError != "persisted" {
+		t.Fatalf("restored routing runtime = %+v", restored.Runtime.RoutingReconcile)
+	}
+}
+
 func TestBoltStateStoreLinuxAggregateRollbackAndNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)

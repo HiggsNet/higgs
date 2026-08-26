@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"reflect"
 	"sync"
 	"time"
 
@@ -35,10 +36,12 @@ type daemonStateStoreMeta struct {
 }
 
 type DaemonStateStore struct {
+	writeMu           sync.Mutex
 	mu                sync.RWMutex
 	committed         *stateFile
 	common            *corestate.Store
 	runtime           *linuxRuntimeState
+	commitRuntime     func(corestate.VerifiedRevision, *linuxRuntimeState) error
 	revision          uint64
 	snapshotTime      time.Time
 	dirty             daemonDirtyFlags
@@ -71,13 +74,27 @@ func NewDaemonStateStore(initial *stateFile) *DaemonStateStore {
 // its owners. Legacy stateFile writers are rejected in this mode so the view
 // cannot silently become a second source of truth.
 func NewComposedDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState) (*DaemonStateStore, error) {
+	return newComposedDaemonStateStore(common, runtime, nil)
+}
+
+func newPersistedComposedDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, boltStore *corestate.BoltStore) (*DaemonStateStore, error) {
+	if boltStore == nil {
+		return nil, errors.New("bbolt state store is nil")
+	}
+	return newComposedDaemonStateStore(common, runtime, func(revision corestate.VerifiedRevision, candidate *linuxRuntimeState) error {
+		return commitLinuxRuntime(boltStore, revision, candidate)
+	})
+}
+
+func newComposedDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, commitRuntime func(corestate.VerifiedRevision, *linuxRuntimeState) error) (*DaemonStateStore, error) {
 	if common == nil {
 		return nil, errors.New("common state store is nil")
 	}
 	store := &DaemonStateStore{
-		common:  common,
-		runtime: cloneLinuxRuntimeState(runtime),
-		now:     time.Now,
+		common:        common,
+		runtime:       cloneLinuxRuntimeState(runtime),
+		commitRuntime: commitRuntime,
+		now:           time.Now,
 	}
 	store.refreshComposedView()
 	if store.committed == nil {
@@ -96,6 +113,8 @@ func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent co
 	if dryRun {
 		return s.common.PreviewLocalIntent(intent, now)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	result, err := s.common.ApplyLocalIntent(ctx, intent, now)
 	if err != nil {
 		return corestate.LocalIntentResult{}, err
@@ -104,6 +123,103 @@ func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent co
 		s.refreshComposedView()
 	}
 	return result, nil
+}
+
+func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
+	if s == nil || s.common == nil {
+		return corestate.RemoteBatchResult{}, errors.New("daemon common state store is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	result, err := s.common.ApplyRemoteBatch(ctx, peerID, batch, now)
+	if err != nil {
+		return corestate.RemoteBatchResult{}, err
+	}
+	if result.Committed {
+		s.refreshComposedView()
+	}
+	return result, nil
+}
+
+func (s *DaemonStateStore) UpdateCommonPeerCheckpoint(ctx context.Context, peerID string, patch corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+	if s == nil || s.common == nil {
+		return corestate.CommitResult{}, errors.New("daemon common state store is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	result, err := s.common.UpdatePeerCheckpoint(ctx, peerID, patch)
+	if err != nil {
+		return corestate.CommitResult{}, err
+	}
+	if result.Committed {
+		s.refreshComposedView()
+	}
+	return result, nil
+}
+
+func (s *DaemonStateStore) commitComposedRuntime(sourceRevision uint64, mutate func(*linuxRuntimeState)) (uint64, bool, error) {
+	if s == nil || s.common == nil {
+		return 0, false, errors.New("daemon composed state is not initialized")
+	}
+	if mutate == nil {
+		return sourceRevision, false, errors.New("Linux runtime mutation is nil")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.RLock()
+	currentRevision := s.revision
+	baseRuntime := cloneLinuxRuntimeState(s.runtime)
+	s.mu.RUnlock()
+	if currentRevision != sourceRevision {
+		return currentRevision, false, nil
+	}
+	candidate := cloneLinuxRuntimeState(baseRuntime)
+	mutate(candidate)
+	if reflect.DeepEqual(baseRuntime, candidate) {
+		return sourceRevision, false, nil
+	}
+	if s.commitRuntime != nil {
+		if err := s.commitRuntime(corestate.VerifiedRevision(sourceRevision), cloneLinuxRuntimeState(candidate)); err != nil {
+			return sourceRevision, false, err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != sourceRevision {
+		return s.revision, false, errDaemonStateRevisionStale
+	}
+	s.runtime = candidate
+	commonView := s.common.ReadView()
+	s.committed = composeLinuxStateView(commonView, s.runtime)
+	if s.now != nil {
+		s.snapshotTime = s.now()
+	} else {
+		s.snapshotTime = time.Now()
+	}
+	return s.revision, true, nil
+}
+
+func (s *DaemonStateStore) commitComposedRoutingIfRevision(revision uint64, birdInstances map[string]*BirdInstanceState, reconcile *routingReconcileState) (uint64, bool, error) {
+	return s.commitComposedRuntime(revision, func(runtime *linuxRuntimeState) {
+		runtime.BirdInstances = cloneBirdInstances(birdInstances)
+		runtime.RoutingReconcile = cloneRoutingReconcileState(reconcile)
+	})
+}
+
+func (s *DaemonStateStore) commitComposedIPsecIfRevision(revision uint64, transportKey *ipsecTransportKeyState, portRecord *ipsecPortRecordState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool, error) {
+	return s.commitComposedRuntime(revision, func(runtime *linuxRuntimeState) {
+		runtime.IPsecTransportKey = cloneIPsecTransportKeyState(transportKey)
+		runtime.IPsecPortRecord = cloneIPsecPortRecordState(portRecord)
+		runtime.LinkInstances = cloneLinkInstances(linkInstances)
+		runtime.IPsecReconcile = cloneIPsecReconcileState(reconcile)
+	})
+}
+
+func (s *DaemonStateStore) commitComposedFirewallIfRevision(revision uint64, endpointACLs map[string]endpointACL, reconcile *firewallReconcileState) (uint64, bool, error) {
+	return s.commitComposedRuntime(revision, func(runtime *linuxRuntimeState) {
+		runtime.EndpointACLs = cloneEndpointACLs(endpointACLs)
+		runtime.FirewallReconcile = cloneFirewallReconcileState(reconcile)
+	})
 }
 
 func (s *DaemonStateStore) refreshComposedView() {

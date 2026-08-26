@@ -660,8 +660,11 @@ package dependency: app -> host -> gossip -> state -> zone
         生产启动的组合模式：只把该 detached 结果作为现有 reader 的缓存，公共 local intent 必须先经 `state.Store`
         成功持久化/发布后才刷新缓存；preview、持久化失败和 no-op 均不发布。组合模式显式拒绝旧通用
         `Update`、peer、Network/snapshot 和 controller commit writer，防止迁移漏项静默写回临时 `stateFile`。
-        下一步补齐公共 remote/checkpoint 与 Linux runtime typed commit 委托，再与生产启动同批启用并删除 app 内
-        重复 mutation。
+        公共 remote batch 与 peer checkpoint 已使用相同的 commit-before-refresh 委托；checkpoint-only commit
+        不推进 verified revision。Linux routing/IPsec/firewall completion 也已有按唯一 verified revision 检查的
+        typed runtime commit，持久化失败、stale 和 no-op 都不发布，真实 BoltStore 关闭重开已证明 runtime 更新不会
+        改动公共 revision。下一步切换对应 daemon 调用点，并补齐 identity/recovery/purge 与其余 Linux runtime 字段，
+        再与生产启动同批启用并删除 app 内重复 mutation。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
