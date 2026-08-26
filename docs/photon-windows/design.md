@@ -76,8 +76,8 @@ experimental，不能作为 production security boundary 发布。
 ### 3.1 本机私钥模型
 
 Photon Windows 沿用 Photon Linux 的管理员责任模型。root、Zone identity 和 transport 的
-Ed25519/private key material 可以作为普通原始字节直接保存在同一个 bbolt
-RuntimeStateStore 中，不强制 DPAPI、CNG、NCrypt 或 non-exportable key。
+Ed25519/private key material 可以作为普通原始字节直接保存在同一个
+`state.BoltStore` 中，不强制 DPAPI、CNG、NCrypt 或 non-exportable key。
 
 本项目不宣称抵御已经取得本机 Administrators/SYSTEM 权限的攻击者；数据库文件、备份、磁盘和
 主机访问控制由管理员负责。安装器可以设置合理 ACL，但 ACL/磁盘加密不是 Photon 协议正确性的
@@ -102,12 +102,12 @@ hint/responder、datagram/object-pull 等纯统计进入有界 observability/met
 
 公共状态只保留一个 `VerifiedRevision`，仅在已验证 Network 内容发生变化时推进。
 `GossipCheckpoint` 没有独立 revision；checkpoint-only 保存不会让下游 controller 误以为可信事实变化。
-平台 runtime checkpoint 也不反向修改 verified，只记录它所基于的 `SourceVerifiedRevision`。平台
-RuntimeStateStore 可在一次 bbolt transaction 中原子保存这些逻辑分区，但不会创建第二个 DB handle、
+平台 runtime checkpoint 也不反向修改 verified，只记录它所基于的 `SourceVerifiedRevision`。同一个
+`state.BoltStore` 可在一次 bbolt transaction 中原子保存这些逻辑分区，但不会创建第二个 DB handle、
 writer goroutine 或 event loop。
 
 公共 bbolt schema 由 `pkg/core/state` 固定为 `photon:common-state` 根 bucket，其下分别保存 schema/revision、
-verified payload 与 gossip checkpoint。codec 只接收平台 RuntimeStateStore 已打开的 `*bolt.Tx`，不打开、
+verified payload 与 gossip checkpoint。codec 只接收唯一 `state.BoltStore` 已打开的 `*bolt.Tx`，不打开、
 提交或关闭数据库；Linux/Windows 因而可以在同一个 `Update` 中组合自己的 runtime bucket。写入只检查
 verified payload 变化是否恰好推进一次 `VerifiedRevision`，checkpoint 变化不参与版本竞争；最终
 commit/rollback 仍由平台唯一 writer 决定。
@@ -119,15 +119,21 @@ root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snap
 它只能在 authority 完全相同时更新由该 authority 验证的 root Zone 内容。未来若增加 root rotation，必须
 先定义由旧 trust anchor 授权的新 pin 迁移协议，不能复用普通 snapshot apply。
 
-Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 RuntimeStateStore 提供的事务：同一事务写完公共
+Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 `state.BoltStore` 提供的事务：同一事务写完公共
 state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
 迁移函数在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
 
-Linux 已增加未接入在线路径的 RuntimeStateStore owner，用来验证最终 handle 生命周期和事务组合：它持有唯一
-bbolt handle，首次加载在同一事务内迁移并读取完整 aggregate，公共 Repository 写入和 Linux runtime 聚合写入
-均复用该 handle。字节完全相同的提交回滚为空操作；公共状态校验或提交失败会连同同事务的平台 payload 一起
+公共 `state.BoltStore` 是唯一持久化 owner，统一持有 bbolt handle、事务顺序和关闭生命周期。Linux 只提供
+自己的 bucket codec 与事务组合函数，不再定义平台专属的持久化 Store。首次加载在同一事务内
+迁移并读取完整 aggregate，公共状态与 Linux runtime 写入均复用该 handle。字节完全相同的提交回滚为空操作；
+公共状态校验或提交失败会连同同事务的平台 payload 一起
 回滚。第二个进程/handle 必须在有界超时后因文件锁冲突失败，Close 错误必须返回给生命周期 owner。E 阶段会
 整体替换现有 Linux loader/writer，替换完成前两套路径不会同时在线。
+
+Metadata-only 写入不产生新的版本域：Gossip checkpoint 仍通过同一 BoltStore 保存，但保持当前
+`VerifiedRevision`；Linux controller completion 只更新平台 runtime bucket，提交时将其开始计算时读取的
+`VerifiedRevision` 与当前公共状态对照。二者不一致表示 completion 已过期，整笔事务回滚并重新规划。该检查
+只消费唯一 verified revision，不允许 controller 更新 verified payload，也不引入 runtime/checkpoint revision。
 
 ## 4. 代码边界
 

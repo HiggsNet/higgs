@@ -14,8 +14,8 @@ import (
 func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
-	repository := &memoryVerifiedRepository{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, repository)
+	commitSink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit)
 	value := []byte("v1")
 	first, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: value,
@@ -43,11 +43,11 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	if string(managed.Records["config"].Value) != "v2" || len(managed.RecordHistory["config"]) != 1 || string(managed.RecordHistory["config"][0].Value) != "v1" {
 		t.Fatalf("record/history = %#v/%#v", managed.Records["config"], managed.RecordHistory["config"])
 	}
-	if repository.commits != 2 || view.Revision != 2 {
-		t.Fatalf("commits/revision = %d/%d", repository.commits, view.Revision)
+	if commitSink.commits != 2 || view.Revision != 2 {
+		t.Fatalf("commits/revision = %d/%d", commitSink.commits, view.Revision)
 	}
-	if !bytes.Equal(repository.state.Verified.IdentityPrivateKey, identityPrivate) || !bytes.Equal(view.State.IdentityPrivateKey, identityPrivate) {
-		t.Fatal("raw identity private key was not retained in repository/read state")
+	if !bytes.Equal(commitSink.state.Verified.IdentityPrivateKey, identityPrivate) || !bytes.Equal(view.State.IdentityPrivateKey, identityPrivate) {
+		t.Fatal("raw identity private key was not retained in commitSink/read state")
 	}
 	view.State.IdentityPrivateKey[0] ^= 0xff
 	if !bytes.Equal(store.ReadView().State.IdentityPrivateKey, identityPrivate) {
@@ -125,10 +125,11 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerCheckpoint(t *testing.
 	}
 }
 
-func TestStoreApplyLocalIntentRepositoryFailureDoesNotPublish(t *testing.T) {
+func TestStoreApplyLocalIntentPersistenceFailureDoesNotPublish(t *testing.T) {
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	wantErr := errors.New("local commit failed")
-	store := NewStore(&VerifiedState{Network: network, IdentityPrivateKey: identityPrivate}, &memoryVerifiedRepository{err: wantErr})
+	commitSink := &memoryCommitSink{err: wantErr}
+	store := NewStore(&VerifiedState{Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit)
 	_, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("value"),
 	}, time.Unix(1000, 0))
@@ -137,6 +138,6 @@ func TestStoreApplyLocalIntentRepositoryFailureDoesNotPublish(t *testing.T) {
 	}
 	view := store.ReadView()
 	if view.Revision != 0 || view.State.Network.Zones["node-a.catofes."].Records["config"] != nil {
-		t.Fatalf("repository failure published local intent: %+v", view)
+		t.Fatalf("commitSink failure published local intent: %+v", view)
 	}
 }

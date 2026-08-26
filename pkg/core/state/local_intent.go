@@ -112,8 +112,8 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 		GossipCheckpointChanged: metadataChanged,
 		SecurityPriority:        securityPriority,
 	}
-	if store.repository != nil {
-		if err := store.repository.Commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return LocalIntentResult{}, err
 		}
 	}

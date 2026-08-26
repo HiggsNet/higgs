@@ -38,7 +38,7 @@ type PeerCheckpointPatch struct {
 }
 
 // UpdatePeerCheckpoint commits a loss-tolerant checkpoint transaction. The verified
-// revision and Network pointer are unaffected; Repository still observes the
+// revision and Network pointer are unaffected; persistence callback still observes the
 // same commit-before-publish ordering as verified transactions.
 func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
 	var out CommitResult
@@ -72,8 +72,8 @@ func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, pat
 	}
 	candidate.Peers[peerID] = after
 	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
-	if store.repository != nil {
-		if err := store.repository.Commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
 			return CommitResult{}, err
 		}
 	}

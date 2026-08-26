@@ -74,7 +74,7 @@ type RejectedObject struct {
 	UntilUnix   int64  `json:"until_unix,omitempty"`
 }
 
-// CommitCandidate is the atomic common-state repository candidate. Verified facts and the
+// CommitCandidate is the atomic common-state persistence candidate. Verified facts and the
 // loss-tolerant gossip checkpoint remain distinct logical partitions.
 type CommitCandidate struct {
 	Verified *VerifiedState
@@ -123,33 +123,30 @@ type RemoteBatchResult struct {
 	Outcomes []RemoteApplyOutcome
 }
 
-// Repository persists one complete detached candidate. Store calls Commit
-// before publishing the candidate in memory. Implementations must not retain
-// mutable pointers.
-type Repository interface {
-	Commit(context.Context, *CommitCandidate, ChangeSet) error
-}
+// CommitFunc persists one complete detached candidate before Store publishes
+// it in memory. Implementations must not retain mutable pointers.
+type CommitFunc func(context.Context, *CommitCandidate, ChangeSet) error
 
 // Store is an in-memory single-owner common-state aggregate. Verified facts
 // and loss-tolerant gossip checkpoints are separate logical partitions. Its mutex protects
-// readers and the publication boundary; verification and repository I/O
+// readers and the publication boundary; verification and persistence I/O
 // run without holding the read lock.
 type Store struct {
-	writeMu    sync.Mutex
-	mu         sync.RWMutex
-	state      *VerifiedState
-	gossip     *GossipCheckpoint
-	revision   VerifiedRevision
-	repository Repository
-	closed     bool
+	writeMu  sync.Mutex
+	mu       sync.RWMutex
+	state    *VerifiedState
+	gossip   *GossipCheckpoint
+	revision VerifiedRevision
+	commit   CommitFunc
+	closed   bool
 }
 
-func NewStore(initial *VerifiedState, repository Repository) *Store {
-	return NewStoreWithCheckpoint(initial, nil, repository)
+func NewStore(initial *VerifiedState, commit CommitFunc) *Store {
+	return NewStoreWithCheckpoint(initial, nil, commit)
 }
 
-func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint, repository Repository) *Store {
-	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), repository: repository}
+func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint, commit CommitFunc) *Store {
+	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), commit: commit}
 }
 
 func (store *Store) ReadView() View {
@@ -267,8 +264,8 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 		GossipCheckpointChanged: metadataChanged,
 	}
 
-	if store.repository != nil {
-		if err := store.repository.Commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return RemoteBatchResult{}, err
 		}
 	}

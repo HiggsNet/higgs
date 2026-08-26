@@ -13,7 +13,7 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-type memoryVerifiedRepository struct {
+type memoryCommitSink struct {
 	mu      sync.Mutex
 	commits int
 	state   *CommitCandidate
@@ -21,15 +21,15 @@ type memoryVerifiedRepository struct {
 	err     error
 }
 
-func (repository *memoryVerifiedRepository) Commit(_ context.Context, state *CommitCandidate, changes ChangeSet) error {
-	repository.mu.Lock()
-	defer repository.mu.Unlock()
-	if repository.err != nil {
-		return repository.err
+func (commitSink *memoryCommitSink) Commit(_ context.Context, state *CommitCandidate, changes ChangeSet) error {
+	commitSink.mu.Lock()
+	defer commitSink.mu.Unlock()
+	if commitSink.err != nil {
+		return commitSink.err
 	}
-	repository.commits++
-	repository.state = cloneCommitCandidate(state.Verified, state.Gossip)
-	repository.changes = changes
+	commitSink.commits++
+	commitSink.state = cloneCommitCandidate(state.Verified, state.Gossip)
+	commitSink.changes = changes
 	return nil
 }
 
@@ -58,8 +58,8 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	}
 	bad := &ZoneSnapshot{Zone: "evil.catofes.", Authority: snapshotV1.Authority}
 
-	repository := &memoryVerifiedRepository{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial}, repository)
+	commitSink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial}, commitSink.Commit)
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{
 		{Snapshot: snapshotV1, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV1))},
 		{Snapshot: bad, ExpectedRoot: []byte("advertised-root")},
@@ -85,8 +85,8 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	if view.Revision != 1 {
 		t.Fatalf("verified revision = %d, want 1", view.Revision)
 	}
-	if repository.commits != 1 {
-		t.Fatalf("repository commits = %d, want 1", repository.commits)
+	if commitSink.commits != 1 {
+		t.Fatalf("commitSink commits = %d, want 1", commitSink.commits)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestStoreApplyRemoteBatchRejectsRootAuthorityReplacement(t *testing.T) {
 	}
 }
 
-func TestStoreRepositoryFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
+func TestStorePersistenceFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 	now := time.Unix(1000, 0)
 	initial, privateKey := testNetwork(t)
 	source := cloneNetworkState(initial)
@@ -142,7 +142,8 @@ func TestStoreRepositoryFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	wantErr := errors.New("disk unavailable")
-	store := NewStore(&VerifiedState{Network: initial}, &memoryVerifiedRepository{err: wantErr})
+	commitSink := &memoryCommitSink{err: wantErr}
+	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit)
 	_, err = store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ApplyRemoteBatch error = %v, want %v", err, wantErr)
@@ -152,7 +153,7 @@ func TestStoreRepositoryFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 		t.Fatalf("verified revision = %d, want zero", view.Revision)
 	}
 	if view.State.Network.Zones["catofes."].Records["identity"] != nil {
-		t.Fatal("repository failure published candidate")
+		t.Fatal("commitSink failure published candidate")
 	}
 }
 
@@ -239,8 +240,8 @@ func TestStoreConcurrentReadersSeeWholeRevision(t *testing.T) {
 
 func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T) {
 	initial, _ := testNetwork(t)
-	repository := &memoryVerifiedRepository{}
-	store := NewStore(&VerifiedState{Network: initial}, repository)
+	commitSink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit)
 	root := []byte("rejected-root")
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
@@ -272,8 +273,8 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	if string(peer.RejectedObjects["bad.catofes."].RootHash) != "rejected-root" {
 		t.Fatal("metadata patch retained rejected root input")
 	}
-	if repository.commits != 1 || repository.changes.NetworkChanged {
-		t.Fatalf("repository commit = %d/%+v", repository.commits, repository.changes)
+	if commitSink.commits != 1 || commitSink.changes.NetworkChanged {
+		t.Fatalf("commitSink commit = %d/%+v", commitSink.commits, commitSink.changes)
 	}
 
 	clearResult, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
@@ -287,16 +288,16 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	}
 }
 
-func TestStoreUpdatePeerCheckpointNoopAndRepositoryFailure(t *testing.T) {
-	repository := &memoryVerifiedRepository{}
-	store := NewStore(nil, repository)
+func TestStoreUpdatePeerCheckpointNoopAndPersistenceFailure(t *testing.T) {
+	commitSink := &memoryCommitSink{}
+	store := NewStore(nil, commitSink.Commit)
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{})
-	if err != nil || result.Committed || repository.commits != 0 {
-		t.Fatalf("empty patch result/error/commits = %+v/%v/%d", result, err, repository.commits)
+	if err != nil || result.Committed || commitSink.commits != 0 {
+		t.Fatalf("empty patch result/error/commits = %+v/%v/%d", result, err, commitSink.commits)
 	}
 
 	wantErr := errors.New("metadata persistence failed")
-	repository.err = wantErr
+	commitSink.err = wantErr
 	_, err = store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		LastAttemptUnix: PatchField[int64]{Set: true, Value: 100},
 	})
@@ -305,6 +306,6 @@ func TestStoreUpdatePeerCheckpointNoopAndRepositoryFailure(t *testing.T) {
 	}
 	view := store.ReadView()
 	if view.Revision != 0 || len(view.Gossip.Peers) != 0 {
-		t.Fatalf("repository failure published metadata: %+v", view)
+		t.Fatalf("commitSink failure published metadata: %+v", view)
 	}
 }

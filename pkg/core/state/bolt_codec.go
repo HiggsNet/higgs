@@ -98,7 +98,7 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 // CommitBoltState writes the complete common candidate into an existing
 // platform-owned write transaction. It checks that verified payload changes
 // advance the sole VerifiedRevision exactly once, but never commits or rolls
-// back tx; the RuntimeStateStore controls the single atomic transaction.
+// back tx; the process-wide BoltStore controls the single atomic transaction.
 //
 // changed is false when the encoded common root is already byte-identical.
 func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet) (changed bool, err error) {
