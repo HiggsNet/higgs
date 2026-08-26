@@ -35,11 +35,13 @@ func CatalogSummaryForDigests(entries []ZoneDigest, budget int) (*CatalogSummary
 	}, nil
 }
 
-func CatalogPageFor(ns *zone.NetworkState, cursor string, budget int) (*CatalogPage, error) {
-	return CatalogPageForDigests(ZoneDigests(ns), cursor, budget)
+func CatalogPageFor(ns *zone.NetworkState, cursor string, budget int, senderPeerID string) (*CatalogPage, error) {
+	return CatalogPageForDigests(ZoneDigests(ns), cursor, budget, senderPeerID)
 }
 
-func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int) (*CatalogPage, error) {
+// CatalogPageForDigests builds a page that remains within budget after
+// Transport.Send installs senderPeerID and full-width nonce/timestamp fields.
+func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int, senderPeerID string) (*CatalogPage, error) {
 	if budget <= 0 {
 		budget = DefaultDatagramBudget
 	}
@@ -57,7 +59,7 @@ func CatalogPageForDigests(entries []ZoneDigest, cursor string, budget int) (*Ca
 		if i+1 < len(entries) {
 			next.NextCursor = strconv.Itoa(i + 1)
 		}
-		size, err := WireEncodeSize(&Message{Type: MessageCatalogPage, CatalogPage: next})
+		size, err := WireEncodeSizeForPeer(&Message{Type: MessageCatalogPage, CatalogPage: next}, senderPeerID)
 		if err != nil {
 			return nil, err
 		}

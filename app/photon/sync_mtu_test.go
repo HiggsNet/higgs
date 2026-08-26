@@ -272,11 +272,15 @@ func TestCatalogSyncAvoidsOversizedFullDigestPing(t *testing.T) {
 	}
 	cursor := ""
 	for {
-		page, err := gossip.CatalogPageForDigests(digests, cursor, gossip.DefaultDatagramBudget)
+		page, err := gossip.CatalogPageForDigests(digests, cursor, gossip.DefaultDatagramBudget, "photon-unicom-pek.kxxoling.")
 		if err != nil {
 			t.Fatalf("CatalogPageForDigests(%q): %v", cursor, err)
 		}
-		if size := messageWireSize(&gossip.Message{Type: gossip.MessageCatalogPage, CatalogPage: page}); size > gossip.DefaultDatagramBudget {
+		size, err := gossip.WireEncodeSizeForPeer(&gossip.Message{Type: gossip.MessageCatalogPage, CatalogPage: page}, "photon-unicom-pek.kxxoling.")
+		if err != nil {
+			t.Fatalf("WireEncodeSizeForPeer(%q): %v", cursor, err)
+		}
+		if size > gossip.DefaultDatagramBudget {
 			t.Fatalf("catalog page size=%d exceeds %d", size, gossip.DefaultDatagramBudget)
 		}
 		if page.NextCursor == "" {

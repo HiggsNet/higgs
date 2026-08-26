@@ -3,6 +3,7 @@ package gossip
 import (
 	"bytes"
 	"errors"
+	"math"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -79,21 +80,32 @@ func decodeMessage(data []byte) (*Message, error) {
 	return &message, nil
 }
 
-// WireEncodeSize returns the encoded wire size of a Message using the default send codec.
-// It is used for datagram-budget preflight before calling Transport.Send.
+// WireEncodeSize returns a conservative encoded wire size using a synthetic
+// sender identity. Callers that enforce a datagram budget for a real outbound
+// message should use WireEncodeSizeForPeer so the sender envelope is exact.
 func WireEncodeSize(message *Message) (int, error) {
+	return WireEncodeSizeForPeer(message, "size-check")
+}
+
+// WireEncodeSizeForPeer returns the encoded wire size of message with the
+// sender identity that Transport.Send will install. Max-width nonce and
+// timestamp values reserve the largest MessagePack integer representation, so
+// a page accepted by a builder cannot grow beyond its budget at send time.
+func WireEncodeSizeForPeer(message *Message, senderPeerID string) (int, error) {
 	if message == nil {
 		return 0, errors.New("gossip message is nil")
 	}
 	candidate := *message
-	if candidate.PeerID == "" {
+	if senderPeerID != "" {
+		candidate.PeerID = senderPeerID
+	} else if candidate.PeerID == "" {
 		candidate.PeerID = "size-check"
 	}
 	if candidate.Nonce == 0 {
-		candidate.Nonce = 1
+		candidate.Nonce = math.MaxUint64
 	}
 	if candidate.Timestamp == 0 {
-		candidate.Timestamp = 1
+		candidate.Timestamp = math.MaxInt64
 	}
 	data, err := encodeMessage(DefaultSendCodec, &candidate)
 	if err != nil {

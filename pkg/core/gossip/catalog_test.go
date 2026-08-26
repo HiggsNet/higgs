@@ -3,6 +3,7 @@ package gossip
 import (
 	"bytes"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -31,14 +32,14 @@ func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 		})
 	}
 
-	page, err := CatalogPageForDigests(entries, "", 300)
+	page, err := CatalogPageForDigests(entries, "", 300, "node-a.catofes.")
 	if err != nil {
 		t.Fatalf("CatalogPageForDigests: %v", err)
 	}
 	if len(page.Entries) == 0 || page.NextCursor == "" {
 		t.Fatalf("page entries=%d next=%q, want bounded non-final page", len(page.Entries), page.NextCursor)
 	}
-	size, err := WireEncodeSize(&Message{Type: MessageCatalogPage, CatalogPage: page})
+	size, err := WireEncodeSizeForPeer(&Message{Type: MessageCatalogPage, CatalogPage: page}, "node-a.catofes.")
 	if err != nil {
 		t.Fatalf("WireEncodeSize: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 		t.Fatalf("catalog page size=%d, want <= 300", size)
 	}
 
-	again, err := CatalogPageForDigests(entries, "", 300)
+	again, err := CatalogPageForDigests(entries, "", 300, "node-a.catofes.")
 	if err != nil {
 		t.Fatalf("CatalogPageForDigests again: %v", err)
 	}
@@ -55,9 +56,39 @@ func TestCatalogPageForDigestsIsBoundedAndStable(t *testing.T) {
 	}
 }
 
+func TestCatalogPageForDigestsAccountsForSenderEnvelope(t *testing.T) {
+	var entries []ZoneDigest
+	for i := range 80 {
+		entries = append(entries, ZoneDigest{
+			Zone:     zone.ZonePath("node-" + string(rune('a'+i%26)) + "-" + string(rune('a'+i/26)) + ".catofes."),
+			RootHash: bytes.Repeat([]byte{byte(i)}, 32),
+		})
+	}
+
+	const budget = 300
+	const sender = "photon-unicom-pek.kxxoling."
+	page, err := CatalogPageForDigests(entries, "", budget, sender)
+	if err != nil {
+		t.Fatalf("CatalogPageForDigests: %v", err)
+	}
+	data, err := MarshalMessage(&Message{
+		Type:        MessageCatalogPage,
+		PeerID:      sender,
+		Nonce:       math.MaxUint64,
+		Timestamp:   math.MaxInt64,
+		CatalogPage: page,
+	})
+	if err != nil {
+		t.Fatalf("MarshalMessage: %v", err)
+	}
+	if len(data) > budget {
+		t.Fatalf("catalog page actual wire size=%d exceeds budget %d for sender %q", len(data), budget, sender)
+	}
+}
+
 func TestCatalogPageForDigestsEmptyPage(t *testing.T) {
 	entries := []ZoneDigest{{Zone: "catofes.", RootHash: []byte("root")}}
-	page, err := CatalogPageForDigests(entries, "1", DefaultDatagramBudget)
+	page, err := CatalogPageForDigests(entries, "1", DefaultDatagramBudget, "node-a.catofes.")
 	if err != nil {
 		t.Fatalf("CatalogPageForDigests: %v", err)
 	}
@@ -71,7 +102,7 @@ func TestCatalogPageForDigestsFailsClosedForOversizedEntry(t *testing.T) {
 		Zone:     zone.ZonePath("very-long-node-name-that-cannot-fit-small-budget.catofes."),
 		RootHash: bytes.Repeat([]byte{1}, 32),
 	}}
-	_, err := CatalogPageForDigests(entries, "", 80)
+	_, err := CatalogPageForDigests(entries, "", 80, "node-a.catofes.")
 	if !errors.Is(err, ErrCatalogPageTooLarge) {
 		t.Fatalf("CatalogPageForDigests err=%v, want ErrCatalogPageTooLarge", err)
 	}

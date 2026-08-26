@@ -399,7 +399,7 @@ func (s *DaemonStateStore) catalogStateProjection(budget int) (*gossip.CatalogSu
 	return summary, digests, nil
 }
 
-func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*gossip.CatalogPage, error) {
+func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int, senderPeerID string) (*gossip.CatalogPage, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -408,7 +408,7 @@ func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int) (*go
 	if s.committed == nil || s.committed.Network == nil {
 		return nil, nil
 	}
-	return gossip.CatalogPageFor(s.committed.Network, cursor, budget)
+	return gossip.CatalogPageFor(s.committed.Network, cursor, budget, senderPeerID)
 }
 
 type syncStateProjection struct {

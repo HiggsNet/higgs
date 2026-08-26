@@ -394,7 +394,7 @@ func (d *DaemonService) respondFetchCatalogPageTo(peerID, cursor string, replyAd
 		return nil
 	}
 	budget := d.syncDatagramBudget()
-	page, err := d.StateStore.catalogPageProjection(cursor, budget)
+	page, err := d.StateStore.catalogPageProjection(cursor, budget, d.Sync.Config.PeerID)
 	if err != nil {
 		now := d.Sync.now()
 		recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
@@ -411,10 +411,19 @@ func (d *DaemonService) respondFetchCatalogPageTo(peerID, cursor string, replyAd
 		return nil
 	}
 	recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
-	d.sendSyncMessageTo(peerID, replyAddr, &gossip.Message{
+	if err := d.sendSyncMessageTo(peerID, replyAddr, &gossip.Message{
 		Type:        gossip.MessageCatalogPage,
 		CatalogPage: page,
-	})
+	}); err != nil {
+		now := d.Sync.now()
+		recordCatalogReject(d.PeerObservability, peerID, cursor, gossip.RejectReason(err), now)
+		d.logWarn("sync", "catalog_page_send_failed", map[string]any{
+			"peer_id": peerID,
+			"cursor":  cursor,
+			"error":   err,
+			"via":     "responder",
+		})
+	}
 	return nil
 }
 
@@ -1079,7 +1088,7 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 			if !stateProjection.loaded {
 				continue
 			}
-			page, err := gossip.CatalogPageForDigests(stateProjection.digests, a.Cursor, budget)
+			page, err := gossip.CatalogPageForDigests(stateProjection.digests, a.Cursor, budget, d.Sync.Config.PeerID)
 			if err != nil {
 				now := d.Sync.now()
 				recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
@@ -1275,24 +1284,28 @@ func (d *DaemonService) clearSyncIngressRoute(peerID string) {
 	delete(d.syncIngressRoutes, peerID)
 }
 
-func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) {
-	d.sendSyncMessageTo(peerID, nil, msg)
+func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) error {
+	return d.sendSyncMessageTo(peerID, nil, msg)
 }
 
-func (d *DaemonService) sendSyncSessionMessage(peerID string, msg *gossip.Message) {
+func (d *DaemonService) sendSyncSessionMessage(peerID string, msg *gossip.Message) error {
 	var replyAddr *net.UDPAddr
 	if d != nil && d.Sync != nil {
 		replyAddr = d.syncIngressRouteAddr(peerID, d.Sync.now())
 	}
-	d.sendSyncMessageTo(peerID, replyAddr, msg)
+	return d.sendSyncMessageTo(peerID, replyAddr, msg)
 }
 
-func (d *DaemonService) sendSyncMessageTo(peerID string, replyAddr *net.UDPAddr, msg *gossip.Message) {
+func (d *DaemonService) sendSyncMessageTo(peerID string, replyAddr *net.UDPAddr, msg *gossip.Message) error {
 	if d.Sync == nil || d.Sync.Transport == nil {
-		return
+		return nil
 	}
 	budget := d.syncDatagramBudget()
-	if size := messageWireSize(msg); size > budget {
+	size, sizeErr := gossip.WireEncodeSizeForPeer(msg, d.Sync.Transport.PeerID())
+	if sizeErr != nil {
+		return sizeErr
+	}
+	if size > budget {
 		object := string(msg.Type)
 		recordDatagramTooLarge(d.PeerObservability, peerID, "send", object, "", "", size, budget, d.Sync.now())
 		d.logWarn("transport", "datagram_too_large", map[string]any{
@@ -1302,7 +1315,7 @@ func (d *DaemonService) sendSyncMessageTo(peerID string, replyAddr *net.UDPAddr,
 			"limit":   budget,
 			"action":  "drop",
 		})
-		return
+		return gossip.ErrMessageTooLarge
 	}
 	var err error
 	if replyAddr != nil {
@@ -1322,6 +1335,7 @@ func (d *DaemonService) sendSyncMessageTo(peerID string, replyAddr *net.UDPAddr,
 			"error":      err,
 		})
 	}
+	return err
 }
 
 func (d *DaemonService) completeSyncSessionAfterPeerState(session *SyncSession, networkChanged bool) {
