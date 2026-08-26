@@ -16,7 +16,7 @@ func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 100 {
-				store.Update("peer-a", now, func(snapshot *PeerSnapshot) {
+				store.Update("peer-a", now, func(snapshot *PeerDiagnostics) {
 					snapshot.HintAccepted++
 					if snapshot.DatagramStats == nil {
 						snapshot.DatagramStats = &photonstate.PeerDatagramStats{}
@@ -43,7 +43,7 @@ func TestPeerStoreBoundsDeletesAndExpiresEntries(t *testing.T) {
 	store := NewPeerObservabilityStore(2, time.Minute)
 	base := time.Unix(100, 0)
 	update := func(peerID string, now time.Time) {
-		store.Update(peerID, now, func(snapshot *PeerSnapshot) {
+		store.Update(peerID, now, func(snapshot *PeerDiagnostics) {
 			snapshot.ObjectPullStats = &photonstate.PeerObjectPullStats{LastSourcePeer: peerID}
 		})
 	}
@@ -71,7 +71,7 @@ func TestPeerStoreSnapshotsAreDetached(t *testing.T) {
 	now := time.Unix(100, 0)
 	for i := range 2 {
 		peerID := fmt.Sprintf("peer-%d", i)
-		store.Update(peerID, now, func(snapshot *PeerSnapshot) {
+		store.Update(peerID, now, func(snapshot *PeerDiagnostics) {
 			snapshot.DatagramStats = &photonstate.PeerDatagramStats{ChunkRepairChunks: 2}
 		})
 	}

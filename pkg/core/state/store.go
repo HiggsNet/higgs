@@ -59,7 +59,34 @@ type PeerCheckpoint struct {
 	ObservedUntilUnix       int64                            `json:"observed_until_unix,omitempty"`
 	ObservedFailureCount    int                              `json:"observed_failure_count,omitempty"`
 	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"observed_grace_endpoints,omitempty"`
+	LastFailure             *PeerFailure                     `json:"last_failure,omitempty"`
 	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"rejected_objects,omitempty"`
+}
+
+type PeerFailureCode string
+
+const (
+	PeerFailureUnknown   PeerFailureCode = "unknown"
+	PeerFailureTimeout   PeerFailureCode = "timeout"
+	PeerFailureTransport PeerFailureCode = "transport"
+	PeerFailureProtocol  PeerFailureCode = "protocol"
+	PeerFailureLegacy    PeerFailureCode = "legacy"
+)
+
+// PeerFailure is a loss-tolerant, serializable error record. Scheduling must
+// use stable fields such as FailureCount, BackoffUntilUnix or Code and must
+// never compare Message text.
+type PeerFailure struct {
+	Code    PeerFailureCode `json:"code"`
+	Message string          `json:"message,omitempty"`
+	AtUnix  int64           `json:"at_unix,omitempty"`
+}
+
+func (failure PeerFailure) Error() string {
+	if failure.Message != "" {
+		return failure.Message
+	}
+	return string(failure.Code)
 }
 
 type ObservedGraceEndpoint struct {

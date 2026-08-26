@@ -37,13 +37,16 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	if len(peer.ObservedGraceEndpoints) != 1 || peer.ObservedGraceEndpoints[0].Endpoint != "198.51.100.2:4242" {
 		t.Fatalf("observed grace = %+v", peer.ObservedGraceEndpoints)
 	}
+	if peer.LastFailure == nil || peer.LastFailure.Code != corestate.PeerFailureLegacy || peer.LastFailure.Error() != "diagnostic" || peer.LastFailure.AtUnix != 11 {
+		t.Fatalf("typed legacy failure = %+v", peer.LastFailure)
+	}
 	rejected := peer.RejectedObjects["bad.catofes."]
 	if string(rejected.RootHash) != "root" || rejected.UntilUnix != 28 {
 		t.Fatalf("rejected = %+v", rejected)
 	}
 }
 
-func TestProjectLegacyGossipCheckpointDropsDiagnosticsAndMalformedHints(t *testing.T) {
+func TestProjectLegacyGossipCheckpointKeepsFailureAndDropsMalformedHints(t *testing.T) {
 	checkpoint, report := projectLegacyGossipCheckpoint(map[string]syncPeerState{
 		"diagnostic.catofes.": {LastError: "only diagnostic"},
 		"invalid":             {BackoffUntilUnix: 10},
@@ -52,10 +55,10 @@ func TestProjectLegacyGossipCheckpointDropsDiagnosticsAndMalformedHints(t *testi
 			"record":   {Zone: "bad.catofes.", Object: "record", Key: "identity", RootHashHex: "00"},
 		}},
 	})
-	if len(checkpoint.Peers) != 0 {
-		t.Fatalf("checkpoint peers = %+v, want empty", checkpoint.Peers)
+	if len(checkpoint.Peers) != 1 || checkpoint.Peers["diagnostic.catofes."].LastFailure == nil {
+		t.Fatalf("checkpoint peers = %+v, want typed legacy failure", checkpoint.Peers)
 	}
-	if report.PeersDropped != 1 || report.RejectedDropped != 2 || report.PeersMigrated != 0 {
+	if report.PeersDropped != 1 || report.RejectedDropped != 2 || report.PeersMigrated != 1 {
 		t.Fatalf("report = %+v", report)
 	}
 }

@@ -1424,7 +1424,7 @@ func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID,
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1455,7 +1455,7 @@ func recordDatagramChunkFallback(store *observability.PeerObservabilityStore, pe
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1467,7 +1467,7 @@ func recordDatagramRepairNACK(store *observability.PeerObservabilityStore, peerI
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1483,7 +1483,7 @@ func recordDatagramRepairSent(store *observability.PeerObservabilityStore, peerI
 	if store == nil || peerID == "" || chunks <= 0 {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1495,7 +1495,7 @@ func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID st
 	if store == nil || peerID == "" || summary == nil {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1514,7 +1514,7 @@ func recordCatalogPage(store *observability.PeerObservabilityStore, peerID strin
 	if store == nil || peerID == "" || page == nil {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}
@@ -1530,7 +1530,7 @@ func recordCatalogReject(store *observability.PeerObservabilityStore, peerID, cu
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
 			snapshot.DatagramStats = &datagramStats{}
 		}

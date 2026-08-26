@@ -244,7 +244,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	return inspecthttp.PeersResponse{Peers: peers}, nil
 }
 
-func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerSnapshot {
+func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
 	if d == nil || d.PeerObservability == nil {
 		return nil
 	}

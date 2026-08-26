@@ -284,7 +284,7 @@ type peersProjection struct {
 	peers  map[string]inspecthttp.PeerJSON
 }
 
-func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time, observations map[string]observability.PeerSnapshot) peersProjection {
+func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time, observations map[string]observability.PeerDiagnostics) peersProjection {
 	out := peersProjection{known: make(map[string]bool), peers: make(map[string]inspecthttp.PeerJSON)}
 	if s == nil {
 		return out

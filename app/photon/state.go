@@ -540,7 +540,7 @@ func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time)
 }
 
 func recordSyncActivePull(store *observability.PeerObservabilityStore, peerID, event string, session *gossip.SyncSession, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if session != nil {
 			snapshot.ActivePullState = string(session.State)
 		} else {
@@ -552,7 +552,7 @@ func recordSyncActivePull(store *observability.PeerObservabilityStore, peerID, e
 }
 
 func recordSyncHint(store *observability.PeerObservabilityStore, peerID, reason, suppression string, accepted bool, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if accepted {
 			snapshot.HintAccepted++
 			snapshot.LastHintSuppression = ""
@@ -566,7 +566,7 @@ func recordSyncHint(store *observability.PeerObservabilityStore, peerID, reason,
 }
 
 func recordReadOnlyResponder(store *observability.PeerObservabilityStore, peerID, kind string, zoneName zone.ZonePath, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		snapshot.ReadOnlyResponder++
 		snapshot.LastResponderUnix = now.Unix()
 		snapshot.LastResponderKind = kind

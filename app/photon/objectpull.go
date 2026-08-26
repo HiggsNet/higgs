@@ -334,7 +334,7 @@ func recordObjectPullAttempt(store *observability.PeerObservabilityStore, peerID
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.ObjectPullStats == nil {
 			snapshot.ObjectPullStats = &objectPullStats{}
 		}
@@ -352,7 +352,7 @@ func recordObjectPullResult(store *observability.PeerObservabilityStore, peerID,
 	if store == nil || peerID == "" {
 		return
 	}
-	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.ObjectPullStats == nil {
 			snapshot.ObjectPullStats = &objectPullStats{}
 		}

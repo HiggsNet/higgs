@@ -255,7 +255,10 @@ func commonBoltTestCandidate(epoch uint64) *CommitCandidate {
 	return &CommitCandidate{
 		Verified: &VerifiedState{ManagedZone: "node-a.catofes.", Network: network},
 		Gossip: &GossipCheckpoint{Peers: map[string]PeerCheckpoint{
-			"peer-a": {FailureCount: 2, DiscoveredEndpoint: "192.0.2.1:443"},
+			"peer-a": {
+				FailureCount: 2, DiscoveredEndpoint: "192.0.2.1:443",
+				LastFailure: &PeerFailure{Code: "transport", Message: "connection refused", AtUnix: 42},
+			},
 		}},
 	}
 }

@@ -33,6 +33,7 @@ type PeerCheckpointPatch struct {
 	ObservedUntilUnix  PatchField[int64]
 	ObservedFailures   PatchField[int]
 	ObservedGrace      PatchField[[]ObservedGraceEndpoint]
+	LastFailure        PatchField[*PeerFailure]
 	Reject             map[zone.ZonePath]RejectedObject
 	ClearRejected      []zone.ZonePath
 }
@@ -105,6 +106,9 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 	if patch.ObservedGrace.Set {
 		metadata.ObservedGraceEndpoints = append([]ObservedGraceEndpoint(nil), patch.ObservedGrace.Value...)
 	}
+	if patch.LastFailure.Set {
+		metadata.LastFailure = clonePeerFailure(patch.LastFailure.Value)
+	}
 	if len(patch.Reject) > 0 && metadata.RejectedObjects == nil {
 		metadata.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(patch.Reject))
 	}
@@ -128,6 +132,7 @@ func applyPatchField[T any](target *T, field PatchField[T]) {
 
 func clonePeerCheckpoint(metadata PeerCheckpoint) PeerCheckpoint {
 	out := metadata
+	out.LastFailure = clonePeerFailure(metadata.LastFailure)
 	out.ObservedGraceEndpoints = append([]ObservedGraceEndpoint(nil), metadata.ObservedGraceEndpoints...)
 	if metadata.RejectedObjects != nil {
 		out.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(metadata.RejectedObjects))
@@ -137,6 +142,14 @@ func clonePeerCheckpoint(metadata PeerCheckpoint) PeerCheckpoint {
 		}
 	}
 	return out
+}
+
+func clonePeerFailure(failure *PeerFailure) *PeerFailure {
+	if failure == nil {
+		return nil
+	}
+	out := *failure
+	return &out
 }
 
 func peerCheckpointEmpty(metadata PeerCheckpoint) bool {

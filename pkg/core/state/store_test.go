@@ -291,12 +291,14 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit)
 	root := []byte("rejected-root")
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
+	failure := &PeerFailure{Code: "timeout", Message: "round timed out", AtUnix: 99}
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		LastSyncUnix:       PatchField[int64]{Set: true, Value: 100},
 		BackoffUntilUnix:   PatchField[int64]{Set: true, Value: 150},
 		FailureCount:       PatchField[int]{Set: true, Value: 2},
 		DiscoveredEndpoint: PatchField[string]{Set: true, Value: "192.0.2.1:4242"},
 		ObservedGrace:      PatchField[[]ObservedGraceEndpoint]{Set: true, Value: grace},
+		LastFailure:        PatchField[*PeerFailure]{Set: true, Value: failure},
 		Reject: map[zone.ZonePath]RejectedObject{
 			"bad.catofes.": {RootHash: root, Reason: "untrusted_zone", UpdatedUnix: 100},
 		},
@@ -312,10 +314,14 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	}
 	root[0] = 'X'
 	grace[0].Endpoint = "mutated"
+	failure.Message = "mutated"
 	view := store.ReadView()
 	peer := view.Gossip.Peers["peer-a"]
 	if peer.LastSyncUnix != 100 || peer.BackoffUntilUnix != 150 || peer.FailureCount != 2 || peer.ObservedGraceEndpoints[0].Endpoint != "192.0.2.2:4242" {
 		t.Fatalf("peer metadata = %+v", peer)
+	}
+	if peer.LastFailure == nil || peer.LastFailure.Code != "timeout" || peer.LastFailure.Error() != "round timed out" {
+		t.Fatalf("peer failure = %+v", peer.LastFailure)
 	}
 	if string(peer.RejectedObjects["bad.catofes."].RootHash) != "rejected-root" {
 		t.Fatal("metadata patch retained rejected root input")

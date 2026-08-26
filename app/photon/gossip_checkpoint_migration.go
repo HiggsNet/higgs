@@ -50,8 +50,8 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 }
 
 // projectLegacyGossipCheckpoint is used only by the one-way schema migration.
-// Only fields that affect retry/discovery efficiency survive. Session state
-// and pure diagnostics are intentionally omitted.
+// Only restart hints and the most recent typed failure survive. Session state
+// and pure counters are intentionally omitted.
 func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
 	checkpoint := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}
 	var report legacyGossipCheckpointReport
@@ -83,6 +83,11 @@ func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.G
 			ObservedLastSyncUnix:    legacy.ObservedLastSyncUnix,
 			ObservedUntilUnix:       legacy.ObservedUntilUnix,
 			ObservedFailureCount:    legacy.ObservedFailureCount,
+		}
+		if legacy.LastError != "" {
+			peer.LastFailure = &corestate.PeerFailure{
+				Code: corestate.PeerFailureLegacy, Message: legacy.LastError, AtUnix: legacy.LastAttemptUnix,
+			}
 		}
 		for _, grace := range legacy.ObservedGraceAddrs {
 			if grace.Addr == "" {
@@ -141,5 +146,5 @@ func peerCheckpointEmpty(peer corestate.PeerCheckpoint) bool {
 		peer.LastRelaySuppressedAt == 0 && peer.DiscoveredEndpoint == "" && peer.DiscoveredAtUnix == 0 &&
 		peer.ObservedEndpoint == "" && peer.ObservedFirstSeenUnix == 0 && peer.ObservedLastSeenUnix == 0 &&
 		peer.ObservedLastSyncUnix == 0 && peer.ObservedUntilUnix == 0 && peer.ObservedFailureCount == 0 &&
-		len(peer.ObservedGraceEndpoints) == 0 && len(peer.RejectedObjects) == 0
+		len(peer.ObservedGraceEndpoints) == 0 && peer.LastFailure == nil && len(peer.RejectedObjects) == 0
 }

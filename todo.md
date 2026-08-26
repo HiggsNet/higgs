@@ -632,7 +632,11 @@ package dependency: app -> host -> gossip -> state -> zone
         legacy peer 对象。旧数据库 JSON 中这两个可丢失字段直接忽略且永不回写。
       - [x] E1b2：将 active-pull 展示状态、hint 计数/最近原因和 read-only responder 统计从 `SyncPeers` 删除，
         直接写入 `PeerObservabilityStore`；这些更新不再推进 daemon state revision 或触发 metadata checkpoint。
-        在线 inspect/HTTP 继续合并展示，离线数据库诊断按重启后已丢失处理。
+        Store 中的单 peer 值明确命名为 `PeerDiagnostics`，避免与协议状态/checkpoint 混淆；在线 inspect/HTTP
+        只负责合并展示，离线数据库诊断按重启后已丢失处理。
+      - [x] E1b3：最近一次 peer 错误归入可丢失但可持久化的 gossip checkpoint，使用实现 `error` 的具体
+        `PeerFailure{Code, Message, AtUnix}`，不在数据库保存 Go `error` 接口，也禁止用 Message 文字控制行为。
+        旧 Linux `LastError` 仅在一次性数据库迁移时转换为 `legacy` code；调度继续使用 FailureCount/backoff。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

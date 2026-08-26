@@ -194,7 +194,7 @@ type PeerDebugInput struct {
 	ConfiguredAddr string
 	ResolvedAddr   string
 	photonstate.PeerRuntimeState
-	Diagnostics observability.PeerSnapshot
+	Diagnostics observability.PeerDiagnostics
 	Now         time.Time
 }
 
@@ -204,7 +204,7 @@ type PeerRuntimeDebugInput struct {
 	ConfiguredAddr string
 	ResolvedAddr   string
 	State          photonstate.PeerRuntimeState
-	Diagnostics    observability.PeerSnapshot
+	Diagnostics    observability.PeerDiagnostics
 	Now            time.Time
 }
 
@@ -296,7 +296,7 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 	}
 }
 
-func BuildPeerSyncFlowFromObservability(state observability.PeerSnapshot) PeerSyncFlowView {
+func BuildPeerSyncFlowFromObservability(state observability.PeerDiagnostics) PeerSyncFlowView {
 	return PeerSyncFlowView{
 		ActivePullState:     state.ActivePullState,
 		ActivePullLastEvent: state.ActivePullLastEvent,

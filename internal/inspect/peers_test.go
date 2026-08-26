@@ -235,7 +235,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 			LastRelaySuppression:  "relay_throttled",
 			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
 		},
-		Diagnostics: observability.PeerSnapshot{
+		Diagnostics: observability.PeerDiagnostics{
 			ActivePullState: "object_pulling",
 			DatagramStats:   &photonstate.PeerDatagramStats{TooLargeDropped: 2},
 			ObjectPullStats: &photonstate.PeerObjectPullStats{Attempts: 3},
@@ -263,7 +263,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 
-	flow := BuildPeerSyncFlowFromObservability(observability.PeerSnapshot{
+	flow := BuildPeerSyncFlowFromObservability(observability.PeerDiagnostics{
 		ActivePullUpdatedUnix: now.Unix(),
 		LastHintUnix:          now.Add(-time.Minute).Unix(),
 		LastResponderUnix:     now.Add(-2 * time.Minute).Unix(),

@@ -140,8 +140,8 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 	}
 }
 
-func diagnosticPeerObservability(now time.Time) observability.PeerSnapshot {
-	return observability.PeerSnapshot{
+func diagnosticPeerObservability(now time.Time) observability.PeerDiagnostics {
+	return observability.PeerDiagnostics{
 		ActivePullState:       string(gossip.SyncSessionObjectPulling),
 		ActivePullLastEvent:   "catalog_page",
 		ActivePullUpdatedUnix: now.Unix(),

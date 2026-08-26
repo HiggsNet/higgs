@@ -7,9 +7,9 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
-// PeerSnapshot contains diagnostics that are safe to lose on daemon restart.
+// PeerDiagnostics contains observations that are safe to lose on daemon restart.
 // Values returned by PeerObservabilityStore are detached from the mutable store.
-type PeerSnapshot struct {
+type PeerDiagnostics struct {
 	ActivePullState       string
 	ActivePullLastEvent   string
 	ActivePullUpdatedUnix int64
@@ -27,8 +27,8 @@ type PeerSnapshot struct {
 }
 
 type peerEntry struct {
-	snapshot  PeerSnapshot
-	updatedAt time.Time
+	diagnostics PeerDiagnostics
+	updatedAt   time.Time
 }
 
 // PeerObservabilityStore owns bounded, non-persistent per-peer diagnostics.
@@ -52,7 +52,7 @@ func NewPeerObservabilityStore(maxEntries int, ttl time.Duration) *PeerObservabi
 
 // Update applies a mutation while holding the store lock. The callback must
 // not retain snapshot or any pointer stored inside it.
-func (s *PeerObservabilityStore) Update(peerID string, now time.Time, fn func(*PeerSnapshot)) {
+func (s *PeerObservabilityStore) Update(peerID string, now time.Time, fn func(*PeerDiagnostics)) {
 	if s == nil || peerID == "" || fn == nil {
 		return
 	}
@@ -63,20 +63,20 @@ func (s *PeerObservabilityStore) Update(peerID string, now time.Time, fn func(*P
 	if !exists && len(s.entries) >= s.maxEntries {
 		s.evictOldestLocked()
 	}
-	fn(&entry.snapshot)
+	fn(&entry.diagnostics)
 	entry.updatedAt = now
 	s.entries[peerID] = entry
 }
 
-func (s *PeerObservabilityStore) Snapshot(peerID string, now time.Time) (PeerSnapshot, bool) {
+func (s *PeerObservabilityStore) Snapshot(peerID string, now time.Time) (PeerDiagnostics, bool) {
 	if s == nil || peerID == "" {
-		return PeerSnapshot{}, false
+		return PeerDiagnostics{}, false
 	}
 	s.mu.RLock()
 	entry, ok := s.entries[peerID]
 	expired := ok && s.expired(entry, now)
 	if ok && !expired {
-		out := clonePeerSnapshot(entry.snapshot)
+		out := clonePeerDiagnostics(entry.diagnostics)
 		s.mu.RUnlock()
 		return out, true
 	}
@@ -88,19 +88,19 @@ func (s *PeerObservabilityStore) Snapshot(peerID string, now time.Time) (PeerSna
 		}
 		s.mu.Unlock()
 	}
-	return PeerSnapshot{}, false
+	return PeerDiagnostics{}, false
 }
 
-func (s *PeerObservabilityStore) Snapshots(now time.Time) map[string]PeerSnapshot {
+func (s *PeerObservabilityStore) Snapshots(now time.Time) map[string]PeerDiagnostics {
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.purgeExpiredLocked(now)
-	out := make(map[string]PeerSnapshot, len(s.entries))
+	out := make(map[string]PeerDiagnostics, len(s.entries))
 	for peerID, entry := range s.entries {
-		out[peerID] = clonePeerSnapshot(entry.snapshot)
+		out[peerID] = clonePeerDiagnostics(entry.diagnostics)
 	}
 	return out
 }
@@ -165,7 +165,7 @@ func (s *PeerObservabilityStore) evictOldestLocked() {
 	}
 }
 
-func clonePeerSnapshot(in PeerSnapshot) PeerSnapshot {
+func clonePeerDiagnostics(in PeerDiagnostics) PeerDiagnostics {
 	out := in
 	if in.DatagramStats != nil {
 		stats := *in.DatagramStats
