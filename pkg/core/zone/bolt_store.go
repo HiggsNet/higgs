@@ -55,7 +55,7 @@ func (s *BoltStore) SaveNetwork(ns *NetworkState) error {
 	}
 
 	return s.updateIfChanged(func(tx *bolt.Tx) (bool, error) {
-		return saveNetworkTx(tx, ns)
+		return SaveNetworkTx(tx, ns)
 	})
 }
 
@@ -77,12 +77,20 @@ func (s *BoltStore) SaveNetworkAndMetaJSON(key string, value any, ns *NetworkSta
 		if err != nil {
 			return false, err
 		}
-		networkChanged, err := saveNetworkTx(tx, ns)
+		networkChanged, err := SaveNetworkTx(tx, ns)
 		return created || metaChanged || networkChanged, err
 	})
 }
 
-func saveNetworkTx(tx *bolt.Tx, ns *NetworkState) (bool, error) {
+// SaveNetworkTx writes the legacy zone-bucket representation into a caller-
+// owned transaction. It does not commit or roll back tx.
+func SaveNetworkTx(tx *bolt.Tx, ns *NetworkState) (bool, error) {
+	if tx == nil || !tx.Writable() {
+		return false, errors.New("network save requires a writable bbolt transaction")
+	}
+	if ns == nil {
+		return false, errors.New("network state is nil")
+	}
 	meta, changed, err := createBucketIfMissing(tx, bucketMeta)
 	if err != nil {
 		return false, err
@@ -201,50 +209,95 @@ func (s *BoltStore) LoadNetwork() (*NetworkState, error) {
 		return nil, errors.New("bolt store is closed")
 	}
 
-	ns := NewNetworkState()
+	var ns *NetworkState
 	err := s.db.View(func(tx *bolt.Tx) error {
-		if meta := tx.Bucket(bucketMeta); meta != nil {
-			if err := getJSON(meta, metaGlobalRoot, &ns.GlobalRoot); err != nil {
-				return err
-			}
-		}
-
-		return tx.ForEach(func(name []byte, bucket *bolt.Bucket) error {
-			path, ok := parseZoneBucket(name)
-			if !ok {
-				return nil
-			}
-			zs := NewZoneState(path, nil)
-			if err := getJSON(bucket, keyAuthority, &zs.Authority); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyParentProof, &zs.ParentProof); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyDelegations, &zs.Delegations); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyRevocations, &zs.Revocations); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyRecords, &zs.Records); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyRecordHistory, &zs.RecordHistory); err != nil {
-				return err
-			}
-			if err := getJSON(bucket, keyMerkleRoot, &zs.MerkleRoot); err != nil {
-				return err
-			}
-			normalizeZoneState(zs)
-			ns.Zones[path] = zs
-			return nil
-		})
+		var err error
+		ns, err = LoadNetworkTx(tx)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return ns, nil
+}
+
+// LoadNetworkTx reads the legacy zone-bucket representation from a caller-
+// owned transaction. An absent representation returns an empty NetworkState.
+func LoadNetworkTx(tx *bolt.Tx) (*NetworkState, error) {
+	if tx == nil {
+		return nil, errors.New("network load transaction is nil")
+	}
+	ns := NewNetworkState()
+	if meta := tx.Bucket(bucketMeta); meta != nil {
+		if err := getJSON(meta, metaGlobalRoot, &ns.GlobalRoot); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.ForEach(func(name []byte, bucket *bolt.Bucket) error {
+		path, ok := parseZoneBucket(name)
+		if !ok {
+			return nil
+		}
+		zs := NewZoneState(path, nil)
+		if err := getJSON(bucket, keyAuthority, &zs.Authority); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyParentProof, &zs.ParentProof); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyDelegations, &zs.Delegations); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyRevocations, &zs.Revocations); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyRecords, &zs.Records); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyRecordHistory, &zs.RecordHistory); err != nil {
+			return err
+		}
+		if err := getJSON(bucket, keyMerkleRoot, &zs.MerkleRoot); err != nil {
+			return err
+		}
+		normalizeZoneState(zs)
+		ns.Zones[path] = zs
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return ns, nil
+}
+
+// DeleteNetworkTx removes the legacy zone buckets and global-root metadata
+// after an atomic migration has written the replacement representation.
+func DeleteNetworkTx(tx *bolt.Tx) (bool, error) {
+	if tx == nil || !tx.Writable() {
+		return false, errors.New("network delete requires a writable bbolt transaction")
+	}
+	var names [][]byte
+	if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
+		if _, ok := parseZoneBucket(name); ok {
+			names = append(names, append([]byte(nil), name...))
+		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	changed := false
+	for _, name := range names {
+		if err := tx.DeleteBucket(name); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	if meta := tx.Bucket(bucketMeta); meta != nil && meta.Get(metaGlobalRoot) != nil {
+		if err := meta.Delete(metaGlobalRoot); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
 }
 
 func zoneBucket(path ZonePath) []byte {

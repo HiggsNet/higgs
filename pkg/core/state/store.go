@@ -75,7 +75,7 @@ type RejectedObject struct {
 }
 
 // CommitCandidate is the atomic common-state repository candidate. Verified facts and the
-// loss-tolerant gossip checkpoint remain distinct sub-roots.
+// loss-tolerant gossip checkpoint remain distinct logical partitions.
 type CommitCandidate struct {
 	Verified *VerifiedState
 	Gossip   *GossipCheckpoint
@@ -131,7 +131,7 @@ type Repository interface {
 }
 
 // Store is an in-memory single-owner common-state aggregate. Verified facts
-// and loss-tolerant gossip checkpoints are separate sub-roots. Its mutex protects
+// and loss-tolerant gossip checkpoints are separate logical partitions. Its mutex protects
 // readers and the publication boundary; verification and repository I/O
 // run without holding the read lock.
 type Store struct {

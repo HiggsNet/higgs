@@ -46,7 +46,7 @@ type persistedVerifiedState struct {
 	IdentityPrivateKey   []byte             `json:"identity_private_key,omitempty"`
 }
 
-// LoadBoltState decodes the common sub-root from an existing platform-owned
+// LoadBoltState decodes the common state buckets from an existing platform-owned
 // read transaction. found is false only when the common root does not exist;
 // callers may then run their legacy migration in the same platform transaction.
 func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRevision, report BoltLoadReport, found bool, err error) {

@@ -305,7 +305,7 @@ package dependency: app -> host -> gossip -> state -> zone
   lifecycle/logger 与 controller capabilities，不复制 host event/action switch。
 - `pkg/core/state` 提供唯一一套 verified aggregate 与事务语义。公共 HostRuntime 同步调用
   `state.Store`，后者拥有 managed zone、root trust/pin、已验证 Network、本机 raw Ed25519
-  private key material，并以独立 sub-root 原子组合 loss-tolerant `GossipCheckpoint`；它不是第二个后台 runtime，
+  private key material，并在独立逻辑分区中原子组合 loss-tolerant `GossipCheckpoint`；它不是第二个后台 runtime，
   不创建 goroutine/写入线程/独立 DB handle，也不拥有 socket、session、timer、object-pull worker、SA、
   route、firewall rule、BIRD process、Wintun/WFP handle 或任何 observed platform object。
 - `pkg/core/gossip` 只拥有 wire codec、receiver/demux、session FSM、Engine、timer action/event types、
@@ -469,7 +469,7 @@ package dependency: app -> host -> gossip -> state -> zone
 
    ```text
    HostRuntime 打开唯一 RuntimeStateStore/Bolt handle
-       -> load verified sub-root + platform runtime sub-root
+       -> load verified buckets + platform runtime bucket
        -> state.VerifiedStore 校验 root pin/schema/invariants
        -> HostRuntime 发布 initial revision
        -> HostRuntime 创建 gossip Engine 并启动平台 UDP receive
@@ -477,10 +477,10 @@ package dependency: app -> host -> gossip -> state -> zone
    ```
 
    - [ ] 保留每个平台一个 `RuntimeStateStore`、一个进程级 bbolt handle 和一个 event-loop writer；逻辑上把
-     root 拆为公共 verified/sync sub-root 与平台 runtime sub-root，但不引入第二个后台 Store/DB writer。
+     root 拆为公共 verified/sync bucket 与平台 runtime bucket，但不引入第二个后台 Store/DB writer。
      Linux/Windows 的 gossip packet、control intent、timer、object-pull completion 和 controller result
      全部回到各自唯一 HostRuntime 串行提交，保持现有 transaction/CAS/persistence ordering。
-   - [ ] 在 `pkg/core/state` 定义 verified sub-root 的 codec/repository transaction contract，供平台
+   - [ ] 在 `pkg/core/state` 定义 verified bucket 的 codec/repository transaction contract，供平台
      `RuntimeStateStore` 在自己的单笔 bbolt `Update` 中组合；公共代码固定 verified/sync bucket/schema，
      平台代码只扩展 Linux/Windows runtime bucket。Store 只在持久化成功后发布内存 root 和 ChangeSet，
      失败时 revision/state/events 全不变化。不得由 state、IPsec、firewall、routing 各自打开同一路径。
@@ -596,7 +596,13 @@ package dependency: app -> host -> gossip -> state -> zone
     调用方 `*bolt.Tx` 内检查 verified payload/revision 一致性、校验 state root、稳定编码并返回 byte-level no-op。
     已覆盖 round-trip/detach、revision invariant、无变化 rollback、平台 bucket 同事务失败回滚、未来 schema
     fail closed 及 malformed checkpoint discard。codec 不持有 DB handle，不创建第二个 writer。
-- [ ] E：Linux 在保留单 DaemonStateStore/单 event-loop writer 的前提下先切换 verified sub-root，再把
+  - [x] D2：新增尚未接入在线 loader/writer 的 Linux 事务迁移函数：在调用方同一 `*bolt.Tx` 中读取旧
+    `_meta/cli_state` 与 `zone:*`，投影公共 verified/gossip bucket 和只含 Linux controller/configuration 字段的
+    `photon:linux-runtime` bucket，成功后删除旧 Network/metadata 表示。公共 `zone` 包提供 caller-owned
+    `LoadNetworkTx`/`SaveNetworkTx`/`DeleteNetworkTx` primitive，不持有第二个 handle。迁移对新格式幂等，
+    新旧表示并存时 fail closed，malformed metadata/任一步失败整体 rollback；fixture 覆盖字段 ownership、
+    checkpoint 白名单、旧字段删除和重复执行。E 阶段整体切换前不调用该迁移，避免半切 writer。
+- [ ] E：Linux 在保留单 DaemonStateStore/单 event-loop writer 的前提下先切换 verified bucket，再把
   platform-neutral host loop 替换为公共 Runtime；删除 `stateFile.Network/SyncPeers` 双份在线所有权，跑
   全量 `make check`、
   `-race`、chain relay、object-pull、bootstrap join、delegation revoke、firewall deny-first、IPsec/routing smoke。
@@ -1126,7 +1132,7 @@ package dependency: app -> host -> gossip -> state -> zone
 ## 下一步
 
 1. 10.3A A、B1 已完成：state-domain snapshot/digest/catalog DTO 与纯函数已从 gossip 迁出，Engine 已收敛为同步 FSM/session registry，公共 HostRuntime queue + Scheduler 已替换 Linux gossip 的 Engine queue/TimerManager。下一步执行 B2：收敛公共 read/apply/send/pull/persist action executor 与 object-pull completion ordering。
-2. 随后执行 10.3A C/D/E：公共 VerifiedStore、单 RuntimeStateStore bbolt transaction/schema migration；Linux 保留单 daemon writer，先切换 verified sub-root，再用公共 HostRuntime 替换平台无关 event/action loop。全量 race/smoke 通过后才让 Windows 接网络 gossip。
+2. 随后执行 10.3A C/D/E：公共 VerifiedStore、单 RuntimeStateStore bbolt transaction/schema migration；Linux 保留单 daemon writer，先切换 verified bucket，再用公共 HostRuntime 替换平台无关 event/action loop。全量 race/smoke 通过后才让 Windows 接网络 gossip。
 3. 完成 10.3A F 后继续 10.3 gateway/route desired adapter；Windows 只注入 capabilities/controllers，预置 snapshot 和网络同步必须复用相同 HostRuntime/VerifiedStore，禁止静态 registry 或 Windows 专属 state 旁路。
 4. 然后按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization 实现；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。
 5. Windows adapter 顺序为 Wintun session -> IP Helper address/route ownership -> SCM service -> named-pipe IPC -> network-change/rebind；每层都验证 restart/adopt/cleanup，不能把 route/driver 残留留给安装器兜底。

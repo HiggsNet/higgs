@@ -103,7 +103,7 @@ hint/responder、datagram/object-pull 等纯统计进入有界 observability/met
 公共状态只保留一个 `VerifiedRevision`，仅在已验证 Network 内容发生变化时推进。
 `GossipCheckpoint` 没有独立 revision；checkpoint-only 保存不会让下游 controller 误以为可信事实变化。
 平台 runtime checkpoint 也不反向修改 verified，只记录它所基于的 `SourceVerifiedRevision`。平台
-RuntimeStateStore 可在一次 bbolt transaction 中原子保存这些 sub-root，但不会创建第二个 DB handle、
+RuntimeStateStore 可在一次 bbolt transaction 中原子保存这些逻辑分区，但不会创建第二个 DB handle、
 writer goroutine 或 event loop。
 
 公共 bbolt schema 由 `pkg/core/state` 固定为 `photon:common-state` 根 bucket，其下分别保存 schema/revision、
@@ -118,6 +118,10 @@ discard report，重启后的重新发现与同步负责恢复效率提示。
 root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snapshot 也不得替换既有 root authority；
 它只能在 authority 完全相同时更新由该 authority 验证的 root Zone 内容。未来若增加 root rotation，必须
 先定义由旧 trust anchor 授权的新 pin 迁移协议，不能复用普通 snapshot apply。
+
+Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 RuntimeStateStore 提供的事务：同一事务写完公共
+state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
+迁移函数在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
 
 ## 4. 代码边界
 
