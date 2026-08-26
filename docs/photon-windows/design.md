@@ -90,7 +90,8 @@ state transaction 语义。未来若需要平台加固，只能作为兼容相�
 
 ### 3.2 Verified state 与 Gossip runtime 边界
 
-`VerifiedState` 只保存会影响信任结论的事实：managed Zone、已验证 Network、root pin 以及本机
+`VerifiedState` 只保存会影响信任结论的事实：managed Zone、已验证 Network、完整 Ed25519
+`trusted_root_public_key` pin 以及本机
 raw private key。它不包含 peer session 或同步统计。
 
 Gossip 状态分成两类：session phase、round/catalog cursor、timer generation、chunk assembly、repair

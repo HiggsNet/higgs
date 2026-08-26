@@ -22,9 +22,9 @@ var (
 // deliberately excludes controller observations such as SAs, routes, firewall
 // rules, BIRD processes and tunnel handles.
 type VerifiedState struct {
-	ManagedZone     zone.ZonePath
-	Network         *zone.NetworkState
-	TrustedRootHash []byte
+	ManagedZone          zone.ZonePath
+	Network              *zone.NetworkState
+	TrustedRootPublicKey ed25519.PublicKey
 	// Private keys are intentionally part of the persisted local root. API,
 	// observer and gossip projections must use DTOs that omit these fields.
 	RootPrivateKey     ed25519.PrivateKey
@@ -36,41 +36,41 @@ type VerifiedState struct {
 // Live sessions, timers, cursors, chunk assembly and in-flight pulls belong to
 // gossip.Engine/HostRuntime memory and are deliberately absent here.
 type GossipCheckpoint struct {
-	Peers map[string]PeerCheckpoint
+	Peers map[string]PeerCheckpoint `json:"peers,omitempty"`
 }
 
 // PeerCheckpoint contains only restart hints that affect retry/discovery
 // efficiency. Pure diagnostics and counters belong in observability stores.
 type PeerCheckpoint struct {
-	LastSyncUnix            int64
-	LastAttemptUnix         int64
-	BackoffUntilUnix        int64
-	FailureCount            int
-	LastRelayUnix           int64
-	LastRelayCatalogRootHex string
-	LastRelaySuppressedAt   int64
-	DiscoveredEndpoint      string
-	DiscoveredAtUnix        int64
-	ObservedEndpoint        string
-	ObservedFirstSeenUnix   int64
-	ObservedLastSeenUnix    int64
-	ObservedLastSyncUnix    int64
-	ObservedUntilUnix       int64
-	ObservedFailureCount    int
-	ObservedGraceEndpoints  []ObservedGraceEndpoint
-	RejectedObjects         map[zone.ZonePath]RejectedObject
+	LastSyncUnix            int64                            `json:"last_sync_unix,omitempty"`
+	LastAttemptUnix         int64                            `json:"last_attempt_unix,omitempty"`
+	BackoffUntilUnix        int64                            `json:"backoff_until_unix,omitempty"`
+	FailureCount            int                              `json:"failure_count,omitempty"`
+	LastRelayUnix           int64                            `json:"last_relay_unix,omitempty"`
+	LastRelayCatalogRootHex string                           `json:"last_relay_catalog_root_hex,omitempty"`
+	LastRelaySuppressedAt   int64                            `json:"last_relay_suppressed_at,omitempty"`
+	DiscoveredEndpoint      string                           `json:"discovered_endpoint,omitempty"`
+	DiscoveredAtUnix        int64                            `json:"discovered_at_unix,omitempty"`
+	ObservedEndpoint        string                           `json:"observed_endpoint,omitempty"`
+	ObservedFirstSeenUnix   int64                            `json:"observed_first_seen_unix,omitempty"`
+	ObservedLastSeenUnix    int64                            `json:"observed_last_seen_unix,omitempty"`
+	ObservedLastSyncUnix    int64                            `json:"observed_last_sync_unix,omitempty"`
+	ObservedUntilUnix       int64                            `json:"observed_until_unix,omitempty"`
+	ObservedFailureCount    int                              `json:"observed_failure_count,omitempty"`
+	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"observed_grace_endpoints,omitempty"`
+	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"rejected_objects,omitempty"`
 }
 
 type ObservedGraceEndpoint struct {
-	Endpoint  string
-	UntilUnix int64
+	Endpoint  string `json:"endpoint"`
+	UntilUnix int64  `json:"until_unix"`
 }
 
 type RejectedObject struct {
-	RootHash    []byte
-	Reason      string
-	UpdatedUnix int64
-	UntilUnix   int64
+	RootHash    []byte `json:"root_hash"`
+	Reason      string `json:"reason"`
+	UpdatedUnix int64  `json:"updated_unix"`
+	UntilUnix   int64  `json:"until_unix,omitempty"`
 }
 
 // CommitCandidate is the atomic common-state repository candidate. Verified facts and the
@@ -315,11 +315,11 @@ func cloneVerifiedState(value *VerifiedState) *VerifiedState {
 		return &VerifiedState{Network: zone.NewNetworkState()}
 	}
 	out := &VerifiedState{
-		ManagedZone:        value.ManagedZone,
-		Network:            zone.CloneNetworkState(value.Network),
-		TrustedRootHash:    append([]byte(nil), value.TrustedRootHash...),
-		RootPrivateKey:     append(ed25519.PrivateKey(nil), value.RootPrivateKey...),
-		IdentityPrivateKey: append(ed25519.PrivateKey(nil), value.IdentityPrivateKey...),
+		ManagedZone:          value.ManagedZone,
+		Network:              zone.CloneNetworkState(value.Network),
+		TrustedRootPublicKey: append(ed25519.PublicKey(nil), value.TrustedRootPublicKey...),
+		RootPrivateKey:       append(ed25519.PrivateKey(nil), value.RootPrivateKey...),
+		IdentityPrivateKey:   append(ed25519.PrivateKey(nil), value.IdentityPrivateKey...),
 	}
 	if out.Network == nil {
 		out.Network = zone.NewNetworkState()

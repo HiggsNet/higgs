@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"sync"
 	"testing"
@@ -132,15 +133,15 @@ func TestStoreReadViewIsDetachedAndCASRejectsStaleWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	store := NewStore(&VerifiedState{Network: initial, TrustedRootHash: []byte("root")}, nil)
+	store := NewStore(&VerifiedState{Network: initial, TrustedRootPublicKey: ed25519.PublicKey("root")}, nil)
 	if _, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
 	}
 	view := store.ReadView()
-	view.State.TrustedRootHash[0] = 'X'
+	view.State.TrustedRootPublicKey[0] = 'X'
 	view.State.Network.Zones["catofes."].Records["identity"].Value[0] = 'X'
 	fresh := store.ReadView()
-	if string(fresh.State.TrustedRootHash) != "root" || string(fresh.State.Network.Zones["catofes."].Records["identity"].Value) != "committed" {
+	if string(fresh.State.TrustedRootPublicKey) != "root" || string(fresh.State.Network.Zones["catofes."].Records["identity"].Value) != "committed" {
 		t.Fatal("mutating read view changed committed state")
 	}
 	if _, err := store.ApplyRemoteBatch(context.Background(), Revisions{}, "peer-a", nil, now); !errors.Is(err, ErrVerifiedRevisionStale) {
@@ -150,15 +151,15 @@ func TestStoreReadViewIsDetachedAndCASRejectsStaleWriter(t *testing.T) {
 
 func TestStoreDoesNotRetainInitialState(t *testing.T) {
 	initial, _ := testNetwork(t)
-	rootHash := []byte("root")
-	input := &VerifiedState{Network: initial, TrustedRootHash: rootHash}
+	rootKey := ed25519.PublicKey("root")
+	input := &VerifiedState{Network: initial, TrustedRootPublicKey: rootKey}
 	store := NewStore(input, nil)
 
-	rootHash[0] = 'X'
-	input.TrustedRootHash[1] = 'Y'
+	rootKey[0] = 'X'
+	input.TrustedRootPublicKey[1] = 'Y'
 	delete(initial.Zones, "catofes.")
 	view := store.ReadView()
-	if string(view.State.TrustedRootHash) != "root" || view.State.Network.Zones["catofes."] == nil {
+	if string(view.State.TrustedRootPublicKey) != "root" || view.State.Network.Zones["catofes."] == nil {
 		t.Fatal("store retained mutable initial state")
 	}
 }

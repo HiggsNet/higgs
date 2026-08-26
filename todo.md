@@ -581,6 +581,13 @@ package dependency: app -> host -> gossip -> state -> zone
         - [x] C2b2a：按字段语义纠正 Store 分根：`VerifiedState` 不再包含 peer；新增独立
           `GossipCheckpoint`/checkpoint revision，Repository 在同一 candidate 中原子组合 verified + checkpoint。
           checkpoint 只允许丢失后增加重试/重新发现的行为提示，纯诊断计数继续留在 observability。
+        - [x] C2b2b：新增旧 Linux `SyncPeers` 到公共 `GossipCheckpoint` 的只读白名单投影与迁移报告；
+          session/active-pull/hint/responder/last-error/datagram/object-pull 诊断不进入 checkpoint，无效 peer、
+          非 Zone rejected object 和 malformed hash 作为可丢失条目丢弃。DaemonStateStore 暴露 detached
+          projection 作为后续整体切换 writer 的启动输入，不引入第二个在线 writer。
+        - [x] C2b2c：新增旧 `stateFile -> CommitCandidate{Verified,Gossip}` detached 启动投影；公共
+          `ValidateStateRoot` 统一校验 managed zone、Network、Ed25519 私钥长度和完整
+          `trusted_root_public_key` pin。纠正原 `TrustedRootHash` 命名，Linux/Windows 不再各自解释 root pin。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema
   migration；覆盖事务失败、close failure、no-op、metadata-only、crash fixture/reload、外部锁冲突及
   Linux/Windows path adapter。
