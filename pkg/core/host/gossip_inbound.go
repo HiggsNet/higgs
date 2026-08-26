@@ -118,7 +118,7 @@ func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *g
 		return
 	}
 	cursor := message.FetchCatalogPage.Cursor
-	page, err := gossip.CatalogPageForDigests(view.Digests, cursor, controller.GossipDatagramBudget())
+	page, err := gossip.CatalogPageForDigests(view.Digests, cursor, controller.GossipDatagramBudget(), view.SenderPeerID)
 	if err != nil {
 		controller.ObserveGossipCatalogReject(message.PeerID, cursor, err)
 		return

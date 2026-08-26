@@ -191,17 +191,48 @@ func (t *Transport) SetReadDeadline(deadline time.Time) error {
 }
 
 func (t *Transport) Send(peerID string, message *Message) error {
+	addrs := t.sendAddrsFor(peerID)
+	if len(addrs) == 0 {
+		start := t.now()
+		event := Event{Direction: "send", PeerID: peerID}
+		if message != nil {
+			event.Type = message.Type
+			event.Zones, event.Records = MessageObjectCounts(message)
+		}
+		t.logEvent(event, ErrUnknownPeer, start)
+		return ErrUnknownPeer
+	}
+	return t.sendToAddrs(peerID, message, addrs)
+}
+
+// SendTo replies to a known peer at an explicit address. It is intended for
+// request-scoped responses to an address that Transport.Receive has just
+// validated and returned. It does not install addr as a durable outbound or
+// observed path.
+func (t *Transport) SendTo(peerID string, addr *net.UDPAddr, message *Message) error {
+	if t == nil || addr == nil {
+		return ErrUnknownPeer
+	}
+	if err := t.validatePeer(peerID); err != nil {
+		start := t.now()
+		event := Event{Direction: "send", PeerID: peerID, Addr: udpAddrString(addr)}
+		if message != nil {
+			event.Type = message.Type
+			event.Zones, event.Records = MessageObjectCounts(message)
+		}
+		t.logEvent(event, err, start)
+		return err
+	}
+	copied := *addr
+	return t.sendToAddrs(peerID, message, []*net.UDPAddr{&copied})
+}
+
+func (t *Transport) sendToAddrs(peerID string, message *Message, addrs []*net.UDPAddr) error {
 	start := t.now()
 	event := Event{Direction: "send", PeerID: peerID}
 	if message != nil {
 		event.Type = message.Type
 		event.Zones, event.Records = MessageObjectCounts(message)
-	}
-
-	addrs := t.sendAddrsFor(peerID)
-	if len(addrs) == 0 {
-		t.logEvent(event, ErrUnknownPeer, start)
-		return ErrUnknownPeer
 	}
 
 	if message == nil {

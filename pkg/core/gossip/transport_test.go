@@ -61,6 +61,46 @@ func TestAddKnownPeerIDDoesNotAffectAddPeer(t *testing.T) {
 	}
 }
 
+func TestSendToUsesExplicitReplyAddressOverConfiguredOutbound(t *testing.T) {
+	receiver, err := Listen(Config{
+		PeerID:     "peer-a",
+		ListenAddr: "127.0.0.1:0",
+		KnownPeers: map[string]*net.UDPAddr{"peer-b": nil},
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(receiver): %v", err)
+	}
+	defer receiver.Close()
+
+	sender, err := Listen(Config{
+		PeerID:     "peer-b",
+		ListenAddr: "127.0.0.1:0",
+		KnownPeers: map[string]*net.UDPAddr{
+			"peer-a": {IP: net.ParseIP("192.0.2.10"), Port: 33434},
+		},
+	})
+	if err != nil {
+		skipRestrictedSocket(t, err)
+		t.Fatalf("Listen(sender): %v", err)
+	}
+	defer sender.Close()
+
+	if err := sender.SendTo("peer-a", receiver.LocalAddr(), &Message{Type: MessagePing, Ping: &Ping{}}); err != nil {
+		t.Fatalf("SendTo: %v", err)
+	}
+	if err := receiver.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	packet, err := receiver.Receive()
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if packet.Message.Type != MessagePing || packet.Message.PeerID != "peer-b" {
+		t.Fatalf("packet = %#v, want ping from peer-b", packet.Message)
+	}
+}
+
 func TestRemovePeerAddrsKeepsKnownPeerID(t *testing.T) {
 	transport := &Transport{}
 	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 1234}})

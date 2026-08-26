@@ -131,16 +131,14 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 		t.Fatalf("timer peer projection mutation leaked: %q", got)
 	}
 
-	projection := store.syncStateProjection()
-	page, err := gossip.CatalogPageForDigests(projection.digests, "", budget)
+	page, err := store.catalogPageProjection("", budget, "node-a.catofes.")
 	if err != nil || page == nil || len(page.Entries) == 0 {
 		t.Fatalf("catalog page projection = %#v, err=%v", page, err)
 	}
 	wantDigestRoot := append([]byte(nil), page.Entries[0].RootHash...)
 	page.CatalogRoot[0] ^= 0xff
 	page.Entries[0].RootHash[0] ^= 0xff
-	againProjection := store.syncStateProjection()
-	againPage, err := gossip.CatalogPageForDigests(againProjection.digests, "", budget)
+	againPage, err := store.catalogPageProjection("", budget, "node-a.catofes.")
 	if err != nil || string(againPage.CatalogRoot) != string(wantCatalogRoot) || string(againPage.Entries[0].RootHash) != string(wantDigestRoot) {
 		t.Fatalf("catalog page projection mutation leaked: %#v, err=%v", againPage, err)
 	}
@@ -155,12 +153,23 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 		t.Fatalf("zone snapshot projection mutation leaked: %#v, err=%v", againSnapshot, err)
 	}
 
-	relay := store.relayProjection(config, now)
+	relay := store.relayProjection(config, now, budget)
+	if relay.err != nil || relay.summary == nil {
+		t.Fatalf("relay projection summary = %#v, err=%v", relay.summary, relay.err)
+	}
+	if string(relay.summary.CatalogRoot) != string(wantCatalogRoot) {
+		t.Fatalf("relay catalog root = %x, want %x", relay.summary.CatalogRoot, wantCatalogRoot)
+	}
 	peer = relay.peerStates["peer-a"]
 	peer.RejectedDigests["digest-a"] = rejectedDigestState{Reason: "changed"}
 	relay.peerStates["peer-a"] = peer
-	if got := store.relayProjection(config, now).peerStates["peer-a"].RejectedDigests["digest-a"].Reason; got != "old" {
+	relay.summary.CatalogRoot[0] ^= 0xff
+	againRelay := store.relayProjection(config, now, budget)
+	if got := againRelay.peerStates["peer-a"].RejectedDigests["digest-a"].Reason; got != "old" {
 		t.Fatalf("relay peer projection mutation leaked: %q", got)
+	}
+	if string(againRelay.summary.CatalogRoot) != string(wantCatalogRoot) {
+		t.Fatal("relay catalog summary projection mutation leaked")
 	}
 }
 

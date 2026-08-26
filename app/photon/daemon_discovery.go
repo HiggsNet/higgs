@@ -65,6 +65,22 @@ func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile
 	bootstrapPeers := configuredKnownPeers(config)
 	activeDiscovered := make(map[string]bool)
 
+	// Bootstrap peers must remain dialable even before their zone or endpoint
+	// record has been learned. Re-seed their configured addresses on every
+	// discovery refresh so reloads and address-book cleanup cannot leave the
+	// configuration visible in diagnostics but absent from the live transport.
+	for peerID, bootstrapAddr := range bootstrapPeers {
+		entries := discovered[peerID]
+		current := view.SyncPeers[peerID]
+		addrs := buildPeerAddrs(peerID, entries, bootstrapAddr, current, config.EndpointGrace, config.EndpointSourceOrder, now)
+		if len(addrs) == 0 {
+			continue
+		}
+		action := plan.peers[peerID]
+		action.setAddrs = addrs
+		plan.peers[peerID] = action
+	}
+
 	for peerID, entries := range discovered {
 		if peerID == config.PeerID || peerID == string(view.ManagedZone) || len(entries) == 0 {
 			continue

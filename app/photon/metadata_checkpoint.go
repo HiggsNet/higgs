@@ -22,12 +22,27 @@ func (d *DaemonService) markMetadataCheckpointDirty() {
 	if d == nil || d.StateStore == nil {
 		return
 	}
-	now := d.metadataCheckpointNow()
-	revision := d.StateStore.Meta().Revision
 	maxDelay := d.Interval
 	if maxDelay <= 0 || maxDelay > defaultMetadataCheckpointMaxDelay {
 		maxDelay = defaultMetadataCheckpointMaxDelay
 	}
+	d.markMetadataCheckpointDirtyWithin(maxDelay)
+}
+
+// markMetadataCheckpointDirtyWithin schedules a bounded checkpoint for
+// control-state that has a stricter durability requirement than ordinary peer
+// statistics. A new urgent update may shorten an existing normal deadline,
+// but never bypasses the backoff after a failed save.
+func (d *DaemonService) markMetadataCheckpointDirtyWithin(maxDelay time.Duration) {
+	if d == nil || d.StateStore == nil {
+		return
+	}
+	if maxDelay <= 0 || maxDelay > defaultMetadataCheckpointMaxDelay {
+		maxDelay = defaultMetadataCheckpointMaxDelay
+	}
+	now := d.metadataCheckpointNow()
+	revision := d.StateStore.Meta().Revision
+	due := now.Add(maxDelay)
 
 	d.metadataCheckpointMu.Lock()
 	defer d.metadataCheckpointMu.Unlock()
@@ -37,7 +52,9 @@ func (d *DaemonService) markMetadataCheckpointDirty() {
 		// Schedule from the first dirty update, rather than sliding the due
 		// time on every peer response. This gives the in-memory batch a strict
 		// upper bound even while sync traffic remains continuous.
-		checkpoint.due = now.Add(maxDelay)
+		checkpoint.due = due
+	} else if checkpoint.retry <= 0 && due.Before(checkpoint.due) {
+		checkpoint.due = due
 	}
 	if revision > checkpoint.dirtyRevision {
 		checkpoint.dirtyRevision = revision

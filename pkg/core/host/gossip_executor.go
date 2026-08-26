@@ -23,8 +23,9 @@ var ErrGossipControllerRequired = errors.New("gossip action controller is requir
 // GossipStateView is the bounded read projection required by the common
 // executor after snapshot application. It never exposes a live state root.
 type GossipStateView struct {
-	Loaded  bool
-	Digests []corestate.ZoneDigest
+	Loaded       bool
+	Digests      []corestate.ZoneDigest
+	SenderPeerID string
 }
 
 // GossipSnapshotApplyResult reports the two independent consequences of a

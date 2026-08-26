@@ -3,8 +3,10 @@ package main
 import (
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
 )
 
@@ -66,5 +68,69 @@ func TestValidateEndpointACLScopes(t *testing.T) {
 		Selectors: []string{"*.catofes."},
 	}); err == nil {
 		t.Fatal("IP-scope ACL accepted a protocol")
+	}
+}
+
+func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
+	acl := endpointACL{
+		Name: "socks5-main", Destination: "fd42::20", Scope: endpointACLScopeIP,
+		Selectors: []string{"*.catofes.", "node-a.catofes."},
+	}
+	state := &stateFile{
+		ManagedZone: "node-a.catofes.",
+		Network:     zone.NewNetworkState(),
+		EndpointACLs: map[string]endpointACL{
+			acl.Name: acl,
+		},
+	}
+	appConfig := defaultAppConfig()
+	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+		ID: "host", NetNS: "host", IsHost: true, Enabled: true,
+		Mode: firewall.ModeManaged, Backend: firewall.BackendNFT,
+	}}
+	service := newDaemonService(&Runtime{Config: appConfig}, state, &syncConfigFile{}, time.Second)
+	service.firewallDriver = &captureFirewallOwnerDriver{}
+	beforeRevision := service.StateStore.Meta().Revision
+	notifications := 0
+	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+
+	// Validation canonicalizes selector order, so the differently ordered input
+	// must still be recognized as the same committed ACL.
+	incoming := acl
+	incoming.Selectors = []string{"node-a.catofes.", "*.catofes."}
+	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventEndpointACLApply, EndpointACL: &incoming})
+	if result.Error != nil {
+		t.Fatalf("no-op apply: %v", result.Error)
+	}
+	if result.StateCommitted {
+		t.Fatal("no-op apply reported a committed state change")
+	}
+	if got := service.StateStore.Meta().Revision; got != beforeRevision {
+		t.Fatalf("no-op apply revision = %d, want %d", got, beforeRevision)
+	}
+	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatalf("no-op apply side effects: notifications=%d dirty=%v/%v/%v", notifications, service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
+func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
+	state := &stateFile{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState(), EndpointACLs: map[string]endpointACL{}}
+	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, &syncConfigFile{}, time.Second)
+	beforeRevision := service.StateStore.Meta().Revision
+	notifications := 0
+	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+
+	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventEndpointACLRemove, Key: "missing"})
+	if result.Error != nil {
+		t.Fatalf("no-op remove: %v", result.Error)
+	}
+	if result.StateCommitted {
+		t.Fatal("no-op remove reported a committed state change")
+	}
+	if got := service.StateStore.Meta().Revision; got != beforeRevision {
+		t.Fatalf("no-op remove revision = %d, want %d", got, beforeRevision)
+	}
+	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatalf("no-op remove side effects: notifications=%d dirty=%v/%v/%v", notifications, service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
 }

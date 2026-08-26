@@ -14,6 +14,19 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+// Compatibility aliases keep tests ported from the pre-host-runtime gossip
+// layout focused on behavior while production code uses pkg/core/gossip.
+type SyncAction = gossip.SyncAction
+type ApplySnapshotAction = gossip.ApplySnapshotAction
+type SnapshotAppliedEvent = gossip.SnapshotAppliedEvent
+type SyncTimerEvent = gossip.SyncTimerEvent
+type PongReceivedEvent = gossip.PongReceivedEvent
+type ObjectPullResultEvent = gossip.ObjectPullResultEvent
+
+var NewSyncSession = gossip.NewSyncSession
+
+const SyncSessionCompleted = gossip.SyncSessionCompleted
+
 func (d *DaemonService) setState(state *stateFile) {
 	d.replaceCommittedState(state)
 }

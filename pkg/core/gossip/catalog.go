@@ -9,7 +9,9 @@ import (
 
 var ErrCatalogPageTooLarge = fmt.Errorf("catalog page exceeds datagram budget")
 
-func CatalogPageForDigests(entries []corestate.ZoneDigest, cursor string, budget int) (*corestate.CatalogPage, error) {
+// CatalogPageForDigests builds a page that remains within budget after
+// Transport.Send installs senderPeerID and full-width nonce/timestamp fields.
+func CatalogPageForDigests(entries []corestate.ZoneDigest, cursor string, budget int, senderPeerID string) (*corestate.CatalogPage, error) {
 	if budget <= 0 {
 		budget = DefaultDatagramBudget
 	}
@@ -27,7 +29,7 @@ func CatalogPageForDigests(entries []corestate.ZoneDigest, cursor string, budget
 		if i+1 < len(entries) {
 			next.NextCursor = strconv.Itoa(i + 1)
 		}
-		size, err := WireEncodeSize(&Message{Type: MessageCatalogPage, CatalogPage: next})
+		size, err := WireEncodeSizeForPeer(&Message{Type: MessageCatalogPage, CatalogPage: next}, senderPeerID)
 		if err != nil {
 			return nil, err
 		}

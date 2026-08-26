@@ -1,18 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"net"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-// handleObjectChunk keeps UDP assembly and transport repair outside the
-// committed state transaction, then applies a completed snapshot through the
-// daemon StateStore. The non-daemon SyncRuntime path retains its standalone
-// implementation for sync-once compatibility.
+// handleObjectChunk keeps UDP assembly and transport repair outside the FSM,
+// then returns the decoded snapshot to the active session. The session emits
+// ApplySnapshotAction and waits for SnapshotAppliedEvent before completing.
 func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits corestate.SyncLimits) error {
+	return d.handleObjectChunkFrom(message, nil, limits)
+}
+
+func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr *net.UDPAddr, _ corestate.SyncLimits) error {
 	if d == nil || d.Sync == nil {
 		return errors.New("daemon service is not initialized")
 	}
@@ -25,15 +31,23 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits corest
 	data, complete, err := udpChunkAssemblies.Add(message.PeerID, chunk, now)
 	if err != nil {
 		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
+		_ = d.postSyncEvent(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err})
 		return err
 	}
 	if !complete {
 		if d.Sync.Transport != nil {
 			udpChunkAssemblies.ScheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
-				if err := d.Sync.Transport.Send(message.PeerID, &gossip.Message{
+				msg := &gossip.Message{
 					Type:            gossip.MessageObjectChunkNACK,
 					ObjectChunkNACK: nack,
-				}); err == nil {
+				}
+				var err error
+				if replyAddr != nil {
+					err = d.Sync.Transport.SendTo(message.PeerID, replyAddr, msg)
+				} else {
+					err = d.Sync.Transport.Send(message.PeerID, msg)
+				}
+				if err == nil {
 					recordDatagramRepairNACK(d.PeerObservability, message.PeerID, false, d.Sync.now())
 				}
 			})
@@ -47,32 +61,19 @@ func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits corest
 	snapshot, err := gossip.DecodeZoneSnapshotObject(data)
 	if err != nil {
 		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
+		_ = d.postSyncEvent(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err})
 		return err
 	}
 
-	pullLimits := limits
-	pullLimits.MaxBytes = gossip.MaxChunkObjectBytes
-	result, applied, err := d.applySyncSnapshotAction(message.PeerID, gossip.ApplySnapshotAction{
-		PeerID:        message.PeerID,
-		Snapshot:      snapshot,
-		RelaxedLimits: true,
-	}, pullLimits, now)
-	if err != nil {
+	actualRoot := digestForSnapshot(snapshot).RootHash
+	if len(chunk.RootHash) > 0 && !bytes.Equal(chunk.RootHash, actualRoot) {
+		err := fmt.Errorf("chunk snapshot root mismatch for %s: advertised %x, decoded %x", snapshot.Zone, chunk.RootHash, actualRoot)
+		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
+		_ = d.postSyncEvent(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err})
 		return err
 	}
-	if !applied {
-		return nil
-	}
-
 	recordDatagramChunkFallback(d.PeerObservability, message.PeerID, now)
-	d.logInfo("sync", "zone_applied", map[string]any{
-		"peer_id":     message.PeerID,
-		"zone":        result.Zone,
-		"records":     result.Records,
-		"delegations": result.Delegation,
-		"via":         "udp_chunks",
-	})
-	return d.saveCommittedState()
+	return d.postSyncEvent(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot})
 }
 
 func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *gossip.ObjectChunk, applyErr error, now time.Time) {
@@ -96,4 +97,5 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 		})
 		return
 	}
+	d.markMetadataCheckpointDirty()
 }

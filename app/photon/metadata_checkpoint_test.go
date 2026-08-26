@@ -108,6 +108,21 @@ func TestMetadataCheckpointDeadlineDoesNotSlide(t *testing.T) {
 	}
 }
 
+func TestUrgentMetadataCheckpointShortensNormalDeadline(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(5160, 0)
+	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Minute)
+
+	service.markMetadataCheckpointDirty()
+	if got, want := service.metadataCheckpointDue(), now.Add(time.Minute); !got.Equal(want) {
+		t.Fatalf("normal checkpoint due = %s, want %s", got, want)
+	}
+	service.markMetadataCheckpointDirtyWithin(verifiedPacketMetadataCheckpointMaxDelay)
+	if got, want := service.metadataCheckpointDue(), now.Add(verifiedPacketMetadataCheckpointMaxDelay); !got.Equal(want) {
+		t.Fatalf("urgent checkpoint due = %s, want %s", got, want)
+	}
+}
+
 func TestMetadataCheckpointKeepsUpdateCreatedDuringSaveDirty(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(5170, 0)

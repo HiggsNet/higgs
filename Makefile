@@ -93,6 +93,10 @@ install-script-check:
 	@contrib/install.sh --help | grep -q -- '--admin'
 	@grep -q 'install_admin=false' contrib/install.sh
 	@grep -q 'if \[ "$$install_admin" = true \]; then' contrib/install.sh
+	@grep -Fq 'if ! sudo test -e "$$admin_config" && ! sudo test -L "$$admin_config"; then' contrib/install.sh
+	@if grep -Fq '[ -e "$$admin_config" ] || sudo install' contrib/install.sh; then \
+		echo 'admin config existence must be checked through sudo' >&2; exit 1; \
+	fi
 	@grep -q 'Environment=PHOTON_STATE=/etc/photon/photon.db' contrib/systemd/photon.service
 	@grep -q 'Environment=PHOTON_ADMIN_CONFIG=/etc/photon/admin/config.yaml' contrib/systemd/photon-admin.service
 	@grep -q 'Environment=PHOTON_ADMIN_STATE=/etc/photon/admin/photon.db' contrib/systemd/photon-admin.service

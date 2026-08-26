@@ -15,6 +15,7 @@ func TestSyncEventMetadata(t *testing.T) {
 		{&RoundTimeoutEvent{PeerID: "peer"}, "round_timeout"},
 		{&ObjectPullResultEvent{PeerID: "peer"}, "object_pull_result"},
 		{&ObjectChunkEvent{PeerID: "peer"}, "object_chunk"},
+		{&SnapshotAppliedEvent{PeerID: "peer"}, "snapshot_applied"},
 	}
 	for _, test := range tests {
 		if got := SyncEventName(test.event); got != test.name {

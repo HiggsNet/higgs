@@ -299,6 +299,7 @@ func syncServe(ctx context.Context) error {
 	}
 	logger := newAppLogger(config)
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	defer service.flushMetadataCheckpointOnShutdown()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
@@ -322,6 +323,8 @@ func syncServe(ctx context.Context) error {
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
 	})
+	checkpointTicker := time.NewTicker(250 * time.Millisecond)
+	defer checkpointTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -344,6 +347,10 @@ func syncServe(ctx context.Context) error {
 			}
 		case result := <-service.objectPullResults:
 			service.acceptObjectPullResult(result)
+		case <-checkpointTicker.C:
+			if err := service.flushMetadataCheckpoint(true); err != nil {
+				logger.Warn("state", "metadata_checkpoint_failed", map[string]any{"error": err})
+			}
 		}
 	}
 }
@@ -362,6 +369,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	defer service.flushMetadataCheckpointOnShutdown()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
@@ -616,7 +624,7 @@ func rejectedDigestKey(path zone.ZonePath) string {
 	return "zone:" + path.String()
 }
 
-func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now time.Time) (bool, string) {
+func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID, catalogRoot string, now time.Time) (bool, string) {
 	switch {
 	case peerID == "":
 		return false, "empty_peer_id"
@@ -624,6 +632,8 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now
 		return false, "source_peer"
 	case backoffRemaining(peerState, now) > 0:
 		return false, "backoff"
+	case catalogRoot != "" && peerState.LastRelayCatalogRootHex == catalogRoot:
+		return false, "relay_root_unchanged"
 	case peerState.LastRelayUnix != 0 && now.Sub(time.Unix(peerState.LastRelayUnix, 0)) < relayMinInterval:
 		return false, "relay_throttled"
 	default:
@@ -633,13 +643,14 @@ func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID string, now
 
 // recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
 // lock on state.
-func recordRelaySuccess(state *stateFile, peerID, sourcePeerID string, now time.Time) {
+func recordRelaySuccess(state *stateFile, peerID, sourcePeerID, catalogRoot string, now time.Time) {
 	if state == nil || peerID == "" {
 		return
 	}
 	normalizeSyncPeers(state)
 	peerState := state.SyncPeers[peerID]
 	peerState.LastRelayUnix = now.Unix()
+	peerState.LastRelayCatalogRootHex = catalogRoot
 	peerState.LastUpdateSource = sourcePeerID
 	peerState.LastRelaySuppression = ""
 	peerState.LastRelaySuppressedAt = 0
@@ -1306,6 +1317,10 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
+	return sr.handleObjectChunkNACKFrom(message, nil)
+}
+
+func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {
 	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
 		return nil
 	}
@@ -1315,7 +1330,14 @@ func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
 		return nil
 	}
 	for _, chunk := range chunks {
-		if err := sr.Transport.Send(message.PeerID, &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}); err != nil {
+		msg := &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}
+		var err error
+		if replyAddr != nil {
+			err = sr.Transport.SendTo(message.PeerID, replyAddr, msg)
+		} else {
+			err = sr.Transport.Send(message.PeerID, msg)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1329,6 +1351,10 @@ type datagramSendDiagnostics struct {
 }
 
 func sendDetachedSnapshotWithDiagnostics(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
+	return sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, peerID, nil, now, logger)
+}
+
+func sendDetachedSnapshotWithDiagnosticsTo(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
 	diag := datagramSendDiagnostics{Oversized: append([]gossip.OversizedDatagramObject(nil), plan.Oversized...)}
 	for _, oversized := range plan.Oversized {
 		if logger != nil && logger.debugEnabled() {
@@ -1339,16 +1365,27 @@ func sendDetachedSnapshotWithDiagnostics(snapshot *corestate.ZoneSnapshot, plan 
 		}
 	}
 	for _, announce := range plan.Announces {
-		if err := transport.Send(peerID, &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}); err != nil {
+		msg := &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}
+		var err error
+		if replyAddr != nil {
+			err = transport.SendTo(peerID, replyAddr, msg)
+		} else {
+			err = transport.Send(peerID, msg)
+		}
+		if err != nil {
 			return diag, err
 		}
 	}
-	chunks, err := sendDetachedZoneSnapshotChunks(snapshot, transport, peerID, now)
+	chunks, err := sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, replyAddr, now)
 	diag.ChunkFallbacks = chunks
 	return diag, err
 }
 
 func sendDetachedZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, now time.Time) (int, error) {
+	return sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, nil, now)
+}
+
+func sendDetachedZoneSnapshotChunksTo(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time) (int, error) {
 	if snapshot == nil || transport == nil {
 		return 0, nil
 	}
@@ -1369,7 +1406,13 @@ func sendDetachedZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, transport 
 			Type:        gossip.MessageObjectChunk,
 			ObjectChunk: chunk,
 		}
-		if err := transport.Send(peerID, msg); err != nil {
+		var err error
+		if replyAddr != nil {
+			err = transport.SendTo(peerID, replyAddr, msg)
+		} else {
+			err = transport.Send(peerID, msg)
+		}
+		if err != nil {
 			return sent, err
 		}
 		sent++

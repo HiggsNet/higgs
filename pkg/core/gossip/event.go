@@ -21,6 +21,8 @@ func SyncEventName(event SyncEvent) string {
 		return "object_pull_result"
 	case *ObjectChunkEvent:
 		return "object_chunk"
+	case *SnapshotAppliedEvent:
+		return "snapshot_applied"
 	default:
 		return fmt.Sprintf("%T", event)
 	}
@@ -46,6 +48,8 @@ func SyncEventPeerID(event SyncEvent) string {
 	case *ObjectPullResultEvent:
 		return event.PeerID
 	case *ObjectChunkEvent:
+		return event.PeerID
+	case *SnapshotAppliedEvent:
 		return event.PeerID
 	default:
 		return ""
