@@ -113,7 +113,7 @@ authorization 和 transport records 作为可信事实来源。
   `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing`、`pkg/transport/ipsec` 已通过
   Windows amd64 编译。
 - [x] 新建 Photon Windows schema v1 和 `config validate`：root trust、managed zone、
-  identity key reference、bbolt state、overlay/split aggregates、gateway selector/bootstrap
+  bbolt state、overlay/split aggregates、gateway selector/bootstrap
   hints、Wintun、log、reconnect 均严格解析；未知字段、多 YAML 文档、full-tunnel default
   route 和不完整配置 fail closed。
 - [x] 新建 `internal/photonclient/trust` 预置状态 adapter：不复制 gossip 实现，而是把现有
@@ -229,13 +229,12 @@ authorization 和 transport records 作为可信事实来源。
   - `TunnelDevice`：batch read/write、MTU、name/LUID metadata、close；
   - `DatagramTransport`：共享 UDP receive/send、peer endpoint、rebind、close；
   - `NetworkObserver`：interface/default-route/address/cost 变化事件；
-  - `SecureKeyStore`：load/create signer、零化临时 key buffer、可迁移 schema；
   - `Clock/Scheduler`：单 deadline heap、可测试 timer，不在协议包中散落 ticker；
-  - `StateSource`：detached verified snapshot + revision/change stream。
+  - `StateSource`：detached verified snapshot + local raw identity key + revision/change stream。
 - [ ] portable core 不得自行创建 TUN、bind 系统 socket、修改 OS route/DNS、安装 service、
   读取 Windows registry 或监听 Unix signal。平台 adapter 创建并注入资源，core 只消费
   capability。
-- [x] 增加 memory TUN、fake datagram、fake network observer、fake key store 和 manual
+- [x] 增加 memory TUN、fake datagram、fake network observer、含 raw identity key 的 memory state source 和 manual
   clock；无管理员权限完成 `inner packet -> route lookup -> fake ESP/peer -> datagram` 及
   反向注入的端到端测试。
 - [x] 定义统一 lifecycle：`Start(ctx)` 成功前不宣告 ready；任一关键 receive loop 退出要
@@ -255,7 +254,7 @@ authorization 和 transport records 作为可信事实来源。
   app state、VICI、XFRM、BIRD、netns、firewall、health 等 Linux runtime 绝不进入
   Photon Windows dependency graph。
 - [x] 新建 Photon Windows 独立配置 schema。最小字段包括 trusted root、managed
-  zone/identity、state path、overlay id、gateway selector/bootstrap hints、Wintun adapter、
+  zone、state path、overlay id、gateway selector/bootstrap hints、Wintun adapter、
   split aggregates、MTU、log level 和 reconnect policy；默认 fail closed，未知字段报错，
   提供 `config validate`。
 - [x] 第一窄切口支持加载已签名的预置 Photon state/snapshot，验证 delegation、record、
@@ -302,11 +301,11 @@ package dependency: app -> host -> gossip -> state -> zone
   auto-join、平台 controller 或 ChangeSet。
 - `pkg/core/host` 提供 Linux/Windows 共用的唯一 HostRuntime 实现：拥有 bounded event queue、单写
   event loop、scheduler、gossip action executor、object-pull worker completion、RuntimeStateStore/Bolt
-  owner、persistence ordering 和 ChangeSet dispatch。平台 composition 只注入 UDP/clock/signer/repository、
+  owner、persistence ordering 和 ChangeSet dispatch。平台 composition 只注入 UDP/clock/repository、
   lifecycle/logger 与 controller capabilities，不复制 host event/action switch。
 - `pkg/core/state` 提供唯一一套 verified aggregate 与事务语义。公共 HostRuntime 同步调用
-  `state.VerifiedStore`，后者拥有 managed zone、root trust/pin、已验证 Network、identity public
-  metadata/key reference、持久化 peer sync metadata 和 verified revision；它不是第二个后台 runtime，
+  `state.VerifiedStore`，后者拥有 managed zone、root trust/pin、已验证 Network、本机 raw Ed25519
+  private key material、持久化 peer sync metadata 和 verified revision；它不是第二个后台 runtime，
   不创建 goroutine/写入线程/独立 DB handle，也不拥有 socket、session、timer、object-pull worker、SA、
   route、firewall rule、BIRD process、Wintun/WFP handle 或任何 observed platform object。
 - `pkg/core/gossip` 只拥有 wire codec、receiver/demux、session FSM、Engine、timer action/event types、
@@ -323,15 +322,15 @@ package dependency: app -> host -> gossip -> state -> zone
   dispatch、shutdown drain 和 ChangeSet fanout 迁入；`app/photon` 与 `app/photon-windows` 只创建一个
   `host.Runtime` 实例并注入 resources/controllers。公共 host 不 bind socket、不加载 registry、不调用
   systemd/SCM，也不 import 具体 Linux/Windows controller package。
-- [ ] 定义平台 capability，而不是两个 HostRuntime 实现：`DatagramIO`、`Signer/KeyStore`、
-  `RuntimeRepository`、`Clock/SchedulerWakeup`、`Logger/Metrics`、`PlatformController`。Linux/Windows adapter
+- [ ] 定义平台 capability，而不是两个 HostRuntime 实现：`DatagramIO`、`RuntimeRepository`、
+  `Clock/SchedulerWakeup`、`Logger/Metrics`、`PlatformController`。Linux/Windows adapter
   的输入、错误、背压、close 和 ownership contract 必须一致；平台差异不能扩展 gossip Action 语义。
 - [ ] `PlatformController` 只接收 detached state view/ChangeSet 和自己的 observed input，返回 typed
   plan/completion；不得直接访问 Engine、event channel、bbolt handle 或 committed root。耗时 Observe/Apply
   可在 HostRuntime 管理的 bounded worker 中运行，completion 必须回到公共 event queue，由唯一 writer
   做 source-revision CAS 和 checkpoint commit。
 - [ ] HostRuntime action executor 对 Linux/Windows 只有一份 type switch/order 测试。平台 adapter 只执行
-  `SendDatagram`、key sign、controller apply 等 capability；测试用 memory UDP/fake repository/manual clock/
+  `SendDatagram`、controller apply 等 capability；测试用 memory UDP/fake repository/manual clock/
   fake controllers 驱动完整 `packet -> Engine -> state commit -> completion -> send/controller`，不需要 OS。
 
 **计时器 ownership：**
@@ -358,21 +357,21 @@ package dependency: app -> host -> gossip -> state -> zone
 **公共 state 数据与 API：**
 
 - [ ] 定义不可混入平台字段的 `state.VerifiedState`：至少包含 `ManagedZone`、`Network`、
-  trusted-root identity/hash、identity key reference/public key、`Peers map[PeerID]PeerSyncMetadata`；
+  trusted-root identity/hash、root/identity raw Ed25519 private key、`Peers map[PeerID]PeerSyncMetadata`；
   schema guard 明确禁止 IPsec/link/firewall/routing/BIRD/admission observed state。auto-join pending 尽量
   从 verified state 推导，只有确需跨重启保留的时间戳/错误才进入明确 metadata。
 - [ ] 定义 `state.VerifiedStore` 的单 owner/revision 模型和四组窄 API，由 HostRuntime 的唯一 event
   loop 同步调用，而不是暴露通用
   `func(*NetworkState)` callback：
   - `ReadView/ZoneDigests/Catalog/Snapshot`：锁内生成 detached 或 bounded DTO；
-  - `ApplyLocalIntent(intent, signer, now)`：本地 authority-owned mutation；
+  - `ApplyLocalIntent(intent, now)`：从 Store 当前 revision 的本机私钥直接完成 authority-owned mutation；
   - `ApplyRemoteBatch(peer, snapshots, limits, now)`：远端 verified snapshot transaction；
   - `UpdatePeerMetadata(peer, typed patch)`：不改变 Network 的 sync metadata transaction。
 - [ ] `ApplyLocalIntent` 统一承接 config/DNS/admin/endpoint publisher 产生的 typed intent，包括 signed
   record put/revoke、delegation/revocation 和需要的 recovery mutation。输入 adapter 只做语法解析和
   来源采集；基于当前 revision 的权限、版本、history、跨 record 约束、签名 payload 和最终验证必须
-  只有 state 一份实现。平台 `SecureKeyStore` 只提供 `crypto.Signer`/key reference，不把 DPAPI、CNG
-  或 Linux key file 逻辑放入 transaction。
+  只有 state 一份实现。Linux/Windows 使用相同的 raw Ed25519 key 字段和签名路径，不要求额外的平台
+  密钥 capability、系统加密封装或不可导出密钥适配层。
 - [ ] `ApplyRemoteBatch` 具体拥有 target-zone COW、逐 snapshot savepoint、部分成功、rejected digest、
   root pin/chain/record/revocation 验证、auto-join 和 managed-zone authority refresh；不提供 generic
   platform finalizer。中间失败保留此前成功并继续后续项，最终至多发布一个 verified revision；CAS
@@ -396,7 +395,7 @@ package dependency: app -> host -> gossip -> state -> zone
    ```text
    config watcher / DNS resolver / daemon control request
        -> platform adapter 生成 typed LocalIntent
-       -> state.ApplyLocalIntent(intent, injected Signer, now)
+       -> state.ApplyLocalIntent(intent, now)，使用同一 committed candidate 中的本机私钥
        -> 基于 committed revision 验证、签名、构造 COW candidate
        -> Repository.Commit(candidate, scope=verified) 成功
        -> 发布内存 revision，返回 CommitResult/ChangeSet
@@ -492,8 +491,8 @@ package dependency: app -> host -> gossip -> state -> zone
    - [ ] 设计 schema migration：兼容读取当前 `_meta/cli_state`，一次性拆成公共 verified/sync metadata 与
      Linux controller metadata；migration 必须同一 bbolt transaction、可重复、断电安全，并保留旧 DB
      fixture。迁移在唯一 RuntimeStateStore 的同一 bbolt transaction 内把旧大 JSON 拆为 verified/sync 与
-     platform runtime bucket；失败整体 rollback，下次启动幂等重试。Windows 新库直接写新 schema。私钥
-     只迁为 key reference/public metadata，明文私钥迁移到平台 SecureKeyStore 另列安全步骤。
+     platform runtime bucket；失败整体 rollback，下次启动幂等重试。Windows 新库直接写新 schema，
+     root/identity/transport 私钥作为普通 raw key material 进入同一个 RuntimeStateStore transaction。
 
 **Linux 逻辑拆分、单 Runtime/单写迁移：**
 
@@ -558,6 +557,28 @@ package dependency: app -> host -> gossip -> state -> zone
       Windows amd64 build）通过。
 - [ ] C：实现内存 VerifiedStore、revision/CAS、local/remote transaction、ChangeSet 和 fake Repository；覆盖
   retain、失败不变、success-reject-success、auto-join/refresh COW、concurrent read 与单 writer/race。
+  - [x] C1：新增公共 `state.Store`/`VerifiedState`、detached `ReadView`/`ZoneDigests`、verified/metadata 双
+    revision CAS、`ChangeSet` 和 commit-before-publish `Repository` contract；`ApplyRemoteBatch` 以逐对象
+    savepoint 保留 success-reject-success，统一 expected-root/验证拒绝元数据并单批发布。memory repository
+    已覆盖持久化失败不发布、输入/读视图不 retain、stale writer、并发 reader 与单 writer race。
+  - [ ] C2：补齐 typed `ApplyLocalIntent`、通用 `UpdatePeerMetadata`、auto-join/managed authority refresh COW
+    和 CAS 纯重算，再将 Linux snapshot apply adapter 切到公共 transaction。
+    - [x] C2a：公共 Store 新增 typed `PeerMetadataPatch`，覆盖 sync/backoff、discovered/observed endpoint、
+      hint、datagram/object-pull bounded counters 与 rejected object clear/upsert；metadata-only commit 不推进
+      verified revision。parent snapshot apply 后在同一 savepoint 调用公共 `ReconcileManagedAuthority`，匹配
+      identity 才 adoption，refresh 保留本地 records/delegations/revocations/history，旧 epoch、同 epoch conflict、
+      refresh identity mismatch 和无效 chain 均 fail closed；远端 managed-zone snapshot 不再覆盖本地内容。
+    - [ ] C2b：实现 typed `ApplyLocalIntent` 与 raw-key/CAS 纯重算，并将 Linux snapshot apply、auto-join 和
+      peer metadata adapter 切到公共 Store；完成迁移后删除 app 内重复 mutation。
+      - [x] C2b1：公共 Store 新增 sealed local intent：`PutRecordIntent`、`PutDelegationIntent`、
+        `RevokeDelegationIntent`；Store 直接持有并持久化 root/identity raw Ed25519 private key，按当前 authority
+        选择授权 key 后调用公共 crypto sign/verify。revocation 在同一
+        commit 清理目标及后代 peer metadata，推进 verified/metadata revision 并返回 security-priority
+        ChangeSet。repository failure、missing/unauthorized key、record history、delegate/revoke ordering 与
+        retained pointer 已覆盖。
+      - [ ] C2b2：将 DaemonStateStore 的 verified root 嵌入公共 Store 后切换在线
+        record/delegation/revocation、snapshot apply 和 peer metadata；
+        迁移完成删除 app 内重复 mutation，不能在双 Store 并存期间切一半 writer。
 - [ ] D：实现公共 verified codec/transaction 与平台唯一 RuntimeStateStore 的 bbolt composition、旧 schema
   migration；覆盖事务失败、close failure、no-op、metadata-only、crash fixture/reload、外部锁冲突及
   Linux/Windows path adapter。
@@ -577,10 +598,10 @@ package dependency: app -> host -> gossip -> state -> zone
 - [ ] 复用 `BuildAuthorizedRouteSet` 并包成窄 `RouteAuthorizer`。Babel install/replace 前
   检查 source/destination、origin/zone binding、assignment 与 announcement；authorization
   变化必须反向清扫已经安装的 SADR entry，不能只影响新 update。
-- [ ] 私钥第一版至少使用 Windows DPAPI machine scope 加密后落盘，并限制文件 ACL 为
-  SYSTEM/Administrators/service identity；评估 CNG/NCrypt non-exportable key 是否支持所需
-  Ed25519 签名。不能复制 Photon 当前明文 bbolt 私钥限制到 Windows 新产品。
-- [ ] 持久化只保存重启恢复所需状态：verified Zone store、identity reference、Babel
+- [ ] 私钥沿用 Photon 的管理员责任模型：root/Zone identity/transport raw key material 可直接存入 Windows
+  bbolt RuntimeStateStore，不强制 DPAPI/CNG/non-exportable key。安装器可设置合理 ACL，但本项目不宣称抵御
+  已取得 Administrators/SYSTEM 权限的本机攻击者；仍禁止通过日志、IPC、Observer 或 gossip 输出私钥。
+- [ ] 持久化只保存重启恢复所需状态：verified Zone store、identity private key、Babel
   originate seqno、schema/version 和必要 endpoint hints；SA traffic keys、临时 DH secret、
   UDP session 和 raw decrypted packet 不落盘。
 
@@ -590,7 +611,8 @@ package dependency: app -> host -> gossip -> state -> zone
   parser/crypto/state machine 是“独立重写、带 MIT notice 移植、暂不采用”中的哪一种；
   不直接 import upstream `internal/ike`，也不为此强行把主 module 升到 Go 1.26。
 - [ ] 将 codec/parser 与会话状态机拆开：header/payload/SA proposal/SK/AUTH/NAT-T 可做
-  deterministic unit/fuzz；随机数、时钟、UDP、peer identity 和 key signer 全部注入。
+  deterministic unit/fuzz；随机数、时钟、UDP 和 peer identity 可注入，私钥从 Store 的 detached transaction
+  candidate 读取并使用公共 Ed25519 实现。
 - [ ] 实现 initiator-only `IKE_SA_INIT -> IKE_AUTH -> CHILD_SA`，强制验证 responder
   identity 与 verified `ipsec/transport-key`；拒绝 unknown critical payload、downgrade、
   proposal mismatch、错误 SPI/message ID、重复/越序 response 和未验证 AUTH。

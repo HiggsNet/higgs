@@ -2,15 +2,13 @@ package testkit
 
 import (
 	"context"
-	"crypto"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"io"
 	"net"
 	"sync"
 
 	"github.com/HiggsNet/photon/internal/photonclient"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const defaultQueueSize = 64
@@ -274,7 +272,7 @@ type MemoryStateSource struct {
 
 func NewMemoryStateSource(snapshot photonclient.StateSnapshot) *MemoryStateSource {
 	return &MemoryStateSource{
-		snapshot: snapshot,
+		snapshot: cloneStateSnapshot(snapshot),
 		changes:  make(chan uint64, defaultQueueSize),
 		done:     make(chan struct{}),
 	}
@@ -290,7 +288,7 @@ func (s *MemoryStateSource) Snapshot(ctx context.Context) (photonclient.StateSna
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.snapshot, nil
+	return cloneStateSnapshot(s.snapshot), nil
 }
 
 func (s *MemoryStateSource) Changes() <-chan uint64 { return s.changes }
@@ -301,7 +299,7 @@ func (s *MemoryStateSource) Publish(snapshot photonclient.StateSnapshot) error {
 	if s.closed {
 		return net.ErrClosed
 	}
-	s.snapshot = snapshot
+	s.snapshot = cloneStateSnapshot(snapshot)
 	select {
 	case s.changes <- snapshot.Revision:
 		return nil
@@ -323,36 +321,10 @@ func (s *MemoryStateSource) Close() error {
 
 func (s *MemoryStateSource) Closed() bool { return isClosed(s.done) }
 
-// MemoryKeyStore keeps generated Ed25519 signers in memory for tests.
-type MemoryKeyStore struct {
-	mu      sync.Mutex
-	signers map[string]crypto.Signer
-}
-
-func NewMemoryKeyStore() *MemoryKeyStore {
-	return &MemoryKeyStore{signers: make(map[string]crypto.Signer)}
-}
-
-func (s *MemoryKeyStore) LoadOrCreateSigner(ctx context.Context, keyID string) (crypto.Signer, error) {
-	if keyID == "" {
-		return nil, errors.New("memory key ID is empty")
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if signer := s.signers[keyID]; signer != nil {
-		return signer, nil
-	}
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	s.signers[keyID] = privateKey
-	return privateKey, nil
+func cloneStateSnapshot(snapshot photonclient.StateSnapshot) photonclient.StateSnapshot {
+	snapshot.Network = zone.CloneNetworkState(snapshot.Network)
+	snapshot.IdentityPrivateKey = append([]byte(nil), snapshot.IdentityPrivateKey...)
+	return snapshot
 }
 
 func receiveBytes(ctx context.Context, done <-chan struct{}, input <-chan []byte) ([]byte, error) {

@@ -80,6 +80,11 @@ func TestStaticSourceReturnsDetachedSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, identityPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.IdentityPrivateKey = identityPrivate
 	source, err := NewStaticSource(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -89,12 +94,16 @@ func TestStaticSourceReturnsDetachedSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(first.Network.Zones, first.ManagedZone)
+	first.IdentityPrivateKey[0] ^= 0xff
 	second, err := source.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.Network.Zones[second.ManagedZone] == nil {
 		t.Fatal("caller mutation escaped into static source")
+	}
+	if !second.IdentityPrivateKey.Equal(identityPrivate) {
+		t.Fatal("caller private-key mutation escaped into static source")
 	}
 	if err := source.Close(); err != nil {
 		t.Fatal(err)

@@ -27,17 +27,12 @@ type Config struct {
 	SchemaVersion        int
 	TrustedRootPublicKey ed25519.PublicKey
 	ManagedZone          zone.ZonePath
-	Identity             IdentityConfig
 	State                StateConfig
 	Overlay              OverlayConfig
 	Gateway              GatewayConfig
 	Wintun               WintunConfig
 	Log                  LogConfig
 	Reconnect            ReconnectConfig
-}
-
-type IdentityConfig struct {
-	KeyID string
 }
 
 type StateConfig struct {
@@ -80,10 +75,7 @@ type rawConfig struct {
 	SchemaVersion        int    `yaml:"schema_version"`
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
 	ManagedZone          string `yaml:"managed_zone"`
-	Identity             struct {
-		KeyID string `yaml:"key_id"`
-	} `yaml:"identity"`
-	State struct {
+	State                struct {
 		Path string `yaml:"path"`
 	} `yaml:"state"`
 	Overlay struct {
@@ -165,9 +157,6 @@ func normalizeConfig(raw rawConfig) (*Config, error) {
 		SchemaVersion:        raw.SchemaVersion,
 		TrustedRootPublicKey: root,
 		ManagedZone:          managed,
-		Identity: IdentityConfig{
-			KeyID: strings.TrimSpace(raw.Identity.KeyID),
-		},
 		State: StateConfig{
 			Path: strings.TrimSpace(raw.State.Path),
 		},
@@ -181,12 +170,6 @@ func normalizeConfig(raw rawConfig) (*Config, error) {
 		Log: LogConfig{
 			Level: strings.ToLower(strings.TrimSpace(raw.Log.Level)),
 		},
-	}
-	if config.Identity.KeyID == "" {
-		return nil, errors.New("identity.key_id is required")
-	}
-	if len(config.Identity.KeyID) > 128 {
-		return nil, errors.New("identity.key_id is longer than 128 characters")
 	}
 	if config.State.Path == "" {
 		return nil, errors.New("state.path is required")

@@ -16,8 +16,6 @@ func validConfigYAML() string {
 	return `schema_version: 1
 trusted_root_public_key: ` + base64.StdEncoding.EncodeToString(root) + `
 managed_zone: laptop-a.catofes.
-identity:
-  key_id: photon-zone-identity
 state:
   path: C:\ProgramData\HiggsNet\Photon Windows\photon.db
 overlay:

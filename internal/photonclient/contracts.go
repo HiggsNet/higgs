@@ -5,7 +5,7 @@ package photonclient
 
 import (
 	"context"
-	"crypto"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -73,18 +73,13 @@ type NetworkObserver interface {
 	Close() error
 }
 
-// SecureKeyStore returns a signer without requiring the private key to be
-// exportable. Windows implementations can therefore use DPAPI or CNG.
-type SecureKeyStore interface {
-	LoadOrCreateSigner(ctx context.Context, keyID string) (crypto.Signer, error)
-}
-
 // StateSnapshot is detached verified Photon state. Network and all reachable
 // mutable fields must not be changed after publication.
 type StateSnapshot struct {
-	Revision    uint64
-	ManagedZone zone.ZonePath
-	Network     *zone.NetworkState
+	Revision           uint64
+	ManagedZone        zone.ZonePath
+	Network            *zone.NetworkState
+	IdentityPrivateKey ed25519.PrivateKey
 }
 
 // StateSource supplies verified state; raw network objects must pass Photon
@@ -115,7 +110,6 @@ type Resources struct {
 	Tunnel   TunnelDevice
 	Datagram DatagramTransport
 	Networks NetworkObserver
-	Keys     SecureKeyStore
 	States   StateSource
 	Clock    Clock
 }
@@ -131,9 +125,6 @@ func (r Resources) Validate() error {
 	}
 	if r.Networks == nil {
 		missing = append(missing, "network observer")
-	}
-	if r.Keys == nil {
-		missing = append(missing, "key store")
 	}
 	if r.States == nil {
 		missing = append(missing, "state source")

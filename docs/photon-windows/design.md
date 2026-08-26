@@ -73,6 +73,21 @@ transport record，Babel route 必须在写入 SADR table 前通过 `AuthorizedR
 阻止这个已认证 gateway 冒充另一个已授权 route origin。因此该阶段必须标记为
 experimental，不能作为 production security boundary 发布。
 
+### 3.1 本机私钥模型
+
+Photon Windows 沿用 Photon Linux 的管理员责任模型。root、Zone identity 和 transport 的
+Ed25519/private key material 可以作为普通原始字节直接保存在同一个 bbolt
+RuntimeStateStore 中，不强制 DPAPI、CNG、NCrypt 或 non-exportable key。
+
+本项目不宣称抵御已经取得本机 Administrators/SYSTEM 权限的攻击者；数据库文件、备份、磁盘和
+主机访问控制由管理员负责。安装器可以设置合理 ACL，但 ACL/磁盘加密不是 Photon 协议正确性的
+前置条件。程序仍必须避免把私钥写入日志、IPC、Observer、gossip、crash diagnostics 或导出的
+Zone snapshot；这是防止意外远程泄漏，不是把进程内 Store 当作不可信边界。
+
+公共 Store 直接根据当前 authority 从同一事务 candidate 选择授权私钥并调用公共 Ed25519
+sign/verify。Windows 与 Linux 不维护两套 signer/key-store adapter，也不为硬件不可导出密钥改变
+state transaction 语义。未来若需要平台加固，只能作为兼容相同持久化和签名语义的可选扩展。
+
 ## 4. 代码边界
 
 ```text
@@ -144,6 +159,7 @@ portable core 不得：
 平台 adapter 创建资源并通过窄接口转移给 runtime。首批接口位于
 `internal/photonclient/contracts.go`，测试替身位于
 `internal/photonclient/testkit`。
+本机 identity 私钥随 verified/local state snapshot 提供，不是独立平台 resource capability。
 
 ## 5. 生命周期
 

@@ -105,7 +105,6 @@ func testResources(mtu int) photonclient.Resources {
 		Tunnel:   testkit.NewMemoryTunnel("memory0", mtu),
 		Datagram: testkit.NewMemoryDatagram(),
 		Networks: testkit.NewMemoryNetworkObserver(photonclient.NetworkChange{}),
-		Keys:     testkit.NewMemoryKeyStore(),
 		States:   testkit.NewMemoryStateSource(photonclient.StateSnapshot{}),
 		Clock:    testkit.NewManualClock(time.Unix(0, 0)),
 	}

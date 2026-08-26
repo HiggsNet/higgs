@@ -109,6 +109,7 @@ func NewStaticSource(snapshot photonclient.StateSnapshot) (*StaticSource, error)
 		return nil, errors.New("verified static state snapshot is incomplete")
 	}
 	snapshot.Network = zone.CloneNetworkState(snapshot.Network)
+	snapshot.IdentityPrivateKey = append(ed25519.PrivateKey(nil), snapshot.IdentityPrivateKey...)
 	return &StaticSource{snapshot: snapshot, changes: make(chan uint64)}, nil
 }
 
@@ -118,6 +119,7 @@ func (s *StaticSource) Snapshot(ctx context.Context) (photonclient.StateSnapshot
 	}
 	copy := s.snapshot
 	copy.Network = zone.CloneNetworkState(s.snapshot.Network)
+	copy.IdentityPrivateKey = append(ed25519.PrivateKey(nil), s.snapshot.IdentityPrivateKey...)
 	return copy, nil
 }
 

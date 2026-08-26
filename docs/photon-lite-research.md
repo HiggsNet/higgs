@@ -270,8 +270,8 @@ type NetworkObserver interface {
     Changes() <-chan NetworkChange
 }
 
-type SecureKeyStore interface {
-    LoadOrCreateIdentity(...) (Signer, error)
+type StateSource interface {
+    Snapshot() (VerifiedStateWithLocalPrivateKeys, error)
 }
 ```
 
@@ -344,7 +344,8 @@ Android 上不应让 Go core 调用 Linux `tun.CreateTUN`。普通 App 必须由
 - `ConnectivityManager` network callback 应触发 UDP rebind 和 IKE reconnect；
 - 设置并更新 underlying network；
 - 必须处理 `onRevoke()`、always-on boot、app upgrade 和厂商后台限制；
-- 私钥建议用 Android Keystore 中的 wrapping key 加密存储，而不是直接明文落盘；
+- 默认可与 Windows/Linux 一样由 RuntimeStateStore 直接保存 raw private key；Android Keystore wrapping
+  只能作为可选平台加固，不能成为 portable core 或公共 state transaction 的强制依赖；
 - 第一版可在网络切换时重连，不必立即实现 MOBIKE。
 
 Android 的 `Ikev2VpnProfile` 是可评估的 gateway-only 备选，但认证主要是证书、PSK、
