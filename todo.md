@@ -630,6 +630,9 @@ package dependency: app -> host -> gossip -> state -> zone
       - [x] E1b1：从旧 `PeerRuntimeState/SyncPeers` 类型中删除 `DatagramStats/ObjectPullStats`；在线统计只由
         有界 `PeerObservabilityStore` 持有，inspect/HTTP 构建器显式接收独立 diagnostics，不再把统计临时塞回
         legacy peer 对象。旧数据库 JSON 中这两个可丢失字段直接忽略且永不回写。
+      - [x] E1b2：将 active-pull 展示状态、hint 计数/最近原因和 read-only responder 统计从 `SyncPeers` 删除，
+        直接写入 `PeerObservabilityStore`；这些更新不再推进 daemon state revision 或触发 metadata checkpoint。
+        在线 inspect/HTTP 继续合并展示，离线数据库诊断按重启后已丢失处理。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
@@ -870,7 +873,9 @@ package dependency: app -> host -> gossip -> state -> zone
   - [x] **7.11.0 先拆 committed control state 与纯 observability**
     - 这一步是 state-store 性能优化的前置阶段。Phase 6.7.7 已把 inspect/readmodel/presenter 从 `app/photon` 拆出，但数据所有权仍集中在 `stateFile`：代码模块化不等于存储模型已经模块化。先消除不该发生的 commit，再优化剩余 commit 的复制方式。
     - 先按语义把数据分为三层：必须强一致和持久化的权威状态；会影响调度、路径选择和重启收敛的控制器运行状态；只供 observer/debug/status 使用、允许丢失或短暂不一致的 observability。readmodel 在读取时合并 committed control snapshot、observability snapshot 和 health/BIRD actual snapshot，现有 CLI/HTTP DTO 尽量保持不变。
-    - 第一窄切口只迁移已经确认纯诊断的 `DatagramStats` 和 `ObjectPullStats`，包括其中的 catalog/page/reject、too-large、repair/fallback 计数与最近一次详情。随后逐字段审计并考虑迁移 hint accepted/suppressed、read-only responder、active-pull 展示状态、relay suppression reason 和其他最近一次 action/error detail；不能因为字段显示在 debug 页面就认定它是纯诊断。
+    - 第一窄切口迁移 `DatagramStats` 和 `ObjectPullStats`，随后已将 hint accepted/suppressed、read-only responder
+      与 active-pull 展示状态一并迁出。继续逐字段审计 relay suppression reason 和其他最近一次 action/error
+      detail；不能因为字段显示在 debug 页面就认定它是纯诊断。
     - `BackoffUntilUnix`、`FailureCount`、`LastRelayUnix`、`DiscoveredAddr`、observed path/TTL/grace、`LastSyncUnix`、`RejectedDigests` 等仍影响同步、限流或实际路径，先留在 control state。`LastError` 当前也参与 observed/discovered path 判断，迁移前应先拆成稳定的控制错误码/状态和仅展示的错误文本。
     - 引入有界的 `PeerObservabilityStore`，优先放在窄职责的 `internal/observability`，由 `app/photon` 负责 wiring，由 `internal/inspect` 继续负责纯 view 构建；不要把 mutable store 放进 `internal/inspect`。store 自带独立锁或分片、按 peer snapshot 和删除/过期能力，不持有 `stateFile` 或 committed 子结构指针。
     - 第一版 diagnostics 不随主 state 持久化，daemon restart 后计数归零；旧 state 中遗留字段由 JSON 解码直接

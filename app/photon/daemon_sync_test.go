@@ -151,10 +151,7 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
 	state.SyncPeers = map[string]syncPeerState{
 		peerID: {
-			ActivePullState:       string(gossip.SyncSessionFailed),
-			ActivePullLastEvent:   "catalog_page_timeout",
-			ActivePullUpdatedUnix: now.Add(-time.Hour).Unix(),
-			BackoffUntilUnix:      now.Add(-time.Minute).Unix(),
+			BackoffUntilUnix: now.Add(-time.Minute).Unix(),
 		},
 	}
 	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
@@ -322,8 +319,9 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	if peerState.LastSyncUnix != now.Unix() {
 		t.Fatalf("LastSyncUnix = %d, want %d", peerState.LastSyncUnix, now.Unix())
 	}
-	if peerState.LastHintReason != "ping_summary_match" {
-		t.Fatalf("LastHintReason = %q, want ping_summary_match", peerState.LastHintReason)
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok || observed.LastHintReason != "ping_summary_match" {
+		t.Fatalf("observed hint = %+v, want ping_summary_match", observed)
 	}
 	if peerState.BackoffUntilUnix != 0 {
 		t.Fatalf("BackoffUntilUnix = %d, want 0", peerState.BackoffUntilUnix)
@@ -379,7 +377,7 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 	}
 }
 
-func TestDaemonHintedSessionCommitsPeerChangesOnce(t *testing.T) {
+func TestDaemonHintedSessionWritesOnlyObservability(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
 	service := newDaemonService(&Runtime{
@@ -392,13 +390,12 @@ func TestDaemonHintedSessionCommitsPeerChangesOnce(t *testing.T) {
 		t.Fatalf("startHintedSyncSession: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
-	if after != before+1 {
-		t.Fatalf("state revision = %d, want one commit after %d", after, before)
+	if after != before {
+		t.Fatalf("state revision = %d, want unchanged %d", after, before)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
-	peerState := snapshot.SyncPeers["peer-a"]
-	if peerState.LastHintReason != "test_hint" || peerState.ActivePullLastEvent != "hint_queued" {
-		t.Fatalf("peer state = %+v, want hint and active-pull changes", peerState)
+	observed, ok := service.PeerObservability.Snapshot("peer-a", now)
+	if !ok || observed.LastHintReason != "test_hint" || observed.ActivePullLastEvent != "hint_queued" {
+		t.Fatalf("peer observability = %+v, want hint and active-pull changes", observed)
 	}
 }
 
@@ -434,8 +431,9 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	}
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	if peerState.ActivePullLastEvent != "round_timeout" || peerState.FailureCount != 1 || peerState.LastError != "round timeout" {
-		t.Fatalf("peer state = %+v, want active-pull, backoff, and completion changes", peerState)
+	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	if !ok || observed.ActivePullLastEvent != "round_timeout" || peerState.FailureCount != 1 || peerState.LastError != "round timeout" {
+		t.Fatalf("peer state/observability = %+v/%+v, want active-pull, backoff, and completion changes", peerState, observed)
 	}
 }
 

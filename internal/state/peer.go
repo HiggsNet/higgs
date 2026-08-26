@@ -26,18 +26,6 @@ type PeerRuntimeState struct {
 	ObservedSource          string                        `json:"observed_source,omitempty"`
 	ObservedFailureCount    int                           `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs      []PeerObservedGraceAddrState  `json:"observed_grace_addrs,omitempty"`
-	ActivePullState         string                        `json:"active_pull_state,omitempty"`
-	ActivePullLastEvent     string                        `json:"active_pull_last_event,omitempty"`
-	ActivePullUpdatedUnix   int64                         `json:"active_pull_updated_unix,omitempty"`
-	HintAccepted            int64                         `json:"hint_accepted,omitempty"`
-	HintSuppressed          int64                         `json:"hint_suppressed,omitempty"`
-	LastHintUnix            int64                         `json:"last_hint_unix,omitempty"`
-	LastHintReason          string                        `json:"last_hint_reason,omitempty"`
-	LastHintSuppression     string                        `json:"last_hint_suppression,omitempty"`
-	ReadOnlyResponder       int64                         `json:"read_only_responder,omitempty"`
-	LastResponderUnix       int64                         `json:"last_responder_unix,omitempty"`
-	LastResponderKind       string                        `json:"last_responder_kind,omitempty"`
-	LastResponderZone       string                        `json:"last_responder_zone,omitempty"`
 	RejectedDigests         map[string]PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 

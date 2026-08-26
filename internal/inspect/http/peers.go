@@ -2,6 +2,7 @@ package http
 
 import (
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
@@ -17,7 +18,7 @@ type PeerJSON struct {
 	PeerRuntimeJSON
 }
 
-func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointView, state photonstate.PeerRuntimeState, datagramStats *photonstate.PeerDatagramStats, objectPullStats *photonstate.PeerObjectPullStats) PeerJSON {
+func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointView, state photonstate.PeerRuntimeState, diagnostics observability.PeerSnapshot) PeerJSON {
 	source := "discovered"
 	if configuredAddr != "" {
 		source = "bootstrap"
@@ -28,7 +29,7 @@ func PeerFromInputs(id, configuredAddr string, endpoints []inspect.PeerEndpointV
 		PeerID:          id,
 		Source:          source,
 		ConfiguredAddr:  configuredAddr,
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(state, datagramStats, objectPullStats),
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(state, diagnostics),
 		Endpoints:       endpoints,
 	}
 }
@@ -70,7 +71,7 @@ type PeerRuntimeJSON struct {
 	RejectedDigests       map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 
-func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState, datagramStats *photonstate.PeerDatagramStats, objectPullStats *photonstate.PeerObjectPullStats) PeerRuntimeJSON {
+func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState, diagnostics observability.PeerSnapshot) PeerRuntimeJSON {
 	return PeerRuntimeJSON{
 		LastSyncUnix:          state.LastSyncUnix,
 		LastAttemptUnix:       state.LastAttemptUnix,
@@ -91,20 +92,20 @@ func PeerRuntimeJSONFromState(state photonstate.PeerRuntimeState, datagramStats 
 		ObservedSource:        state.ObservedSource,
 		ObservedFailureCount:  state.ObservedFailureCount,
 		ObservedGraceAddrs:    state.ObservedGraceAddrs,
-		ActivePullState:       state.ActivePullState,
-		ActivePullLastEvent:   state.ActivePullLastEvent,
-		ActivePullUpdatedUnix: state.ActivePullUpdatedUnix,
-		HintAccepted:          state.HintAccepted,
-		HintSuppressed:        state.HintSuppressed,
-		LastHintUnix:          state.LastHintUnix,
-		LastHintReason:        state.LastHintReason,
-		LastHintSuppression:   state.LastHintSuppression,
-		ReadOnlyResponder:     state.ReadOnlyResponder,
-		LastResponderUnix:     state.LastResponderUnix,
-		LastResponderKind:     state.LastResponderKind,
-		LastResponderZone:     state.LastResponderZone,
-		DatagramStats:         datagramStats,
-		ObjectPullStats:       objectPullStats,
+		ActivePullState:       diagnostics.ActivePullState,
+		ActivePullLastEvent:   diagnostics.ActivePullLastEvent,
+		ActivePullUpdatedUnix: diagnostics.ActivePullUpdatedUnix,
+		HintAccepted:          diagnostics.HintAccepted,
+		HintSuppressed:        diagnostics.HintSuppressed,
+		LastHintUnix:          diagnostics.LastHintUnix,
+		LastHintReason:        diagnostics.LastHintReason,
+		LastHintSuppression:   diagnostics.LastHintSuppression,
+		ReadOnlyResponder:     diagnostics.ReadOnlyResponder,
+		LastResponderUnix:     diagnostics.LastResponderUnix,
+		LastResponderKind:     diagnostics.LastResponderKind,
+		LastResponderZone:     diagnostics.LastResponderZone,
+		DatagramStats:         diagnostics.DatagramStats,
+		ObjectPullStats:       diagnostics.ObjectPullStats,
 		RejectedDigests:       state.RejectedDigests,
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -538,51 +539,39 @@ func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time)
 	state.SyncPeers[peerID] = peerState
 }
 
-func recordSyncActivePull(state *stateFile, peerID, event string, session *gossip.SyncSession, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if session != nil {
-		peerState.ActivePullState = string(session.State)
-	} else {
-		peerState.ActivePullState = ""
-	}
-	peerState.ActivePullLastEvent = event
-	peerState.ActivePullUpdatedUnix = now.Unix()
-	state.SyncPeers[peerID] = peerState
+func recordSyncActivePull(store *observability.PeerObservabilityStore, peerID, event string, session *gossip.SyncSession, now time.Time) {
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if session != nil {
+			snapshot.ActivePullState = string(session.State)
+		} else {
+			snapshot.ActivePullState = ""
+		}
+		snapshot.ActivePullLastEvent = event
+		snapshot.ActivePullUpdatedUnix = now.Unix()
+	})
 }
 
-func recordSyncHint(state *stateFile, peerID, reason, suppression string, accepted bool, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if accepted {
-		peerState.HintAccepted++
-		peerState.LastHintSuppression = ""
-	} else {
-		peerState.HintSuppressed++
-		peerState.LastHintSuppression = suppression
-	}
-	peerState.LastHintUnix = now.Unix()
-	peerState.LastHintReason = reason
-	state.SyncPeers[peerID] = peerState
+func recordSyncHint(store *observability.PeerObservabilityStore, peerID, reason, suppression string, accepted bool, now time.Time) {
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		if accepted {
+			snapshot.HintAccepted++
+			snapshot.LastHintSuppression = ""
+		} else {
+			snapshot.HintSuppressed++
+			snapshot.LastHintSuppression = suppression
+		}
+		snapshot.LastHintUnix = now.Unix()
+		snapshot.LastHintReason = reason
+	})
 }
 
-func recordReadOnlyResponder(state *stateFile, peerID, kind string, zoneName zone.ZonePath, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	peerState.ReadOnlyResponder++
-	peerState.LastResponderUnix = now.Unix()
-	peerState.LastResponderKind = kind
-	peerState.LastResponderZone = string(zoneName)
-	state.SyncPeers[peerID] = peerState
+func recordReadOnlyResponder(store *observability.PeerObservabilityStore, peerID, kind string, zoneName zone.ZonePath, now time.Time) {
+	store.Update(peerID, now, func(snapshot *observability.PeerSnapshot) {
+		snapshot.ReadOnlyResponder++
+		snapshot.LastResponderUnix = now.Unix()
+		snapshot.LastResponderKind = kind
+		snapshot.LastResponderZone = string(zoneName)
+	})
 }
 
 func minInt(a, b int) int {

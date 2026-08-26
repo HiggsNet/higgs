@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
@@ -233,11 +234,13 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 			LastRelayUnix:         now.Add(-2 * time.Minute).Unix(),
 			LastRelaySuppression:  "relay_throttled",
 			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
-			ActivePullState:       "object_pulling",
 		},
-		DatagramStats:   &photonstate.PeerDatagramStats{TooLargeDropped: 2},
-		ObjectPullStats: &photonstate.PeerObjectPullStats{Attempts: 3},
-		Now:             now,
+		Diagnostics: observability.PeerSnapshot{
+			ActivePullState: "object_pulling",
+			DatagramStats:   &photonstate.PeerDatagramStats{TooLargeDropped: 2},
+			ObjectPullStats: &photonstate.PeerObjectPullStats{Attempts: 3},
+		},
+		Now: now,
 	})
 
 	if got.PeerID != "node-b.catofes." || got.Source != "bootstrap" || got.ResolvedAddr != "127.0.0.1:2000" {
@@ -260,7 +263,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 
-	flow := BuildPeerSyncFlowFromRuntime(photonstate.PeerRuntimeState{
+	flow := BuildPeerSyncFlowFromObservability(observability.PeerSnapshot{
 		ActivePullUpdatedUnix: now.Unix(),
 		LastHintUnix:          now.Add(-time.Minute).Unix(),
 		LastResponderUnix:     now.Add(-2 * time.Minute).Unix(),

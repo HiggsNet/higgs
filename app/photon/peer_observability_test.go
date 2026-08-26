@@ -13,7 +13,10 @@ func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
 		"sync_peers": {
 			"peer-a.catofes.": {
 				"datagram_stats": {"chunk_fallbacks": 2},
-				"object_pull_stats": {"attempts": 3}
+				"object_pull_stats": {"attempts": 3},
+				"active_pull_state": "object_pulling",
+				"hint_accepted": 2,
+				"read_only_responder": 3
 			}
 		}
 	}`), &meta)
@@ -60,5 +63,10 @@ func TestSaveStateCannotPersistPeerDiagnostics(t *testing.T) {
 	}
 	if _, ok := encodedPeer["object_pull_stats"]; ok {
 		t.Fatalf("object-pull diagnostics were persisted: %#v", encodedPeer)
+	}
+	for _, field := range []string{"active_pull_state", "hint_accepted", "read_only_responder"} {
+		if _, ok := encodedPeer[field]; ok {
+			t.Fatalf("protocol diagnostic %q was persisted: %#v", field, encodedPeer)
+		}
 	}
 }

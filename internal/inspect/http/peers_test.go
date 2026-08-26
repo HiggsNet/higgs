@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
@@ -24,7 +25,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			LastRelaySuppressedAt: 910,
 			ObservedAddr:          "198.51.100.9:33434",
 			ObservedSource:        "verified_packet",
-		}, &photonstate.PeerDatagramStats{ChunkFallbacks: 2}, nil),
+		}, observability.PeerSnapshot{DatagramStats: &photonstate.PeerDatagramStats{ChunkFallbacks: 2}}),
 		Endpoints: []inspect.PeerEndpointView{{
 			Addr:     "192.0.2.10:33434",
 			Source:   "bootstrap",
@@ -52,7 +53,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
 	got := PeersResponse{Peers: []PeerJSON{{
 		PeerID:          "node-b.catofes.",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}, nil, nil),
+		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}, observability.PeerSnapshot{}),
 	}}}
 	data, err := json.Marshal(got)
 	if err != nil {

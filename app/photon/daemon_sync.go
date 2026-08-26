@@ -95,13 +95,6 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 			},
 		}
 		label := "observed_path"
-		if request, ok := gossip.ClassifyReadOnlyRequest(msg); ok &&
-			(request.Kind != gossip.ReadOnlyChunkFallback || d.Sync.Transport != nil) {
-			label += ",read_only_responder"
-			mutations = append(mutations, func(state *stateFile) {
-				recordReadOnlyResponder(state, msg.PeerID, string(request.Kind), request.Zone, now)
-			})
-		}
 		d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...)
 		d.seedObservedPeerPath(msg.PeerID)
 	}
@@ -114,27 +107,6 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 	return d.hostRuntime.ExecuteGossipInbound(ctx, d.hostRuntime.Gossip.PlanInbound(packet), controller)
 }
 
-func packetReadOnlyResponder(msg *gossip.Message) (string, zone.ZonePath, bool) {
-	if msg == nil {
-		return "", "", false
-	}
-	switch msg.Type {
-	case gossip.MessageFetchZone:
-		if msg.FetchZone == nil {
-			return "", "", false
-		}
-		if msg.FetchZone.ChunkFallback {
-			return "chunk_fallback", msg.FetchZone.Zone, true
-		}
-		return "fetch_zone", msg.FetchZone.Zone, true
-	case gossip.MessageFetchCatalogPage:
-		if msg.FetchCatalogPage != nil {
-			return "catalog_page", "", true
-		}
-	}
-	return "", "", false
-}
-
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
 	if d == nil || d.Sync == nil || peerID == "" {
 		return nil
@@ -142,9 +114,7 @@ func (d *DaemonService) handleAnnounceHint(peerID string) error {
 	now := d.Sync.now()
 	if d.hostRuntime.Gossip.HasActiveSession(peerID) {
 		d.hostRuntime.Gossip.DeferHint(peerID)
-		d.recordSyncPeerState(peerID, "sync_hint", func(state *stateFile) {
-			recordSyncHint(state, peerID, "announce_hint", "session_active", false, now)
-		})
+		recordSyncHint(d.PeerObservability, peerID, "announce_hint", "session_active", false, now)
 		d.logDebug("sync", "announce_hint_suppressed", map[string]any{
 			"peer_id": peerID,
 			"reason":  "session_active",
@@ -172,14 +142,8 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		d.hostRuntime.Gossip.RemoveSession(peerID)
 		return err
 	}
-	d.recordSyncPeerStateBatch(peerID, "sync_hint,active_pull",
-		func(state *stateFile) {
-			recordSyncHint(state, peerID, reason, "", true, now)
-		},
-		func(state *stateFile) {
-			recordSyncActivePull(state, peerID, "hint_queued", session, now)
-		},
-	)
+	recordSyncHint(d.PeerObservability, peerID, reason, "", true, now)
+	recordSyncActivePull(d.PeerObservability, peerID, "hint_queued", session, now)
 	d.logDebug("sync", "hinted_sync_started", map[string]any{
 		"peer_id": peerID,
 		"reason":  reason,
@@ -354,9 +318,7 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	eventNow := d.Sync.now()
 	activeSession := &gossip.SyncSession{State: session.State}
 	mutations := newSyncPeerStateMutationBatch(peerID)
-	mutations.add("active_pull", func(state *stateFile) {
-		recordSyncActivePull(state, peerID, eventName, activeSession, eventNow)
-	})
+	recordSyncActivePull(d.PeerObservability, peerID, eventName, activeSession, eventNow)
 	if session.State != engineResult.OldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
@@ -718,6 +680,7 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogSummary(peer
 
 func (controller *daemonGossipActionController) ObserveGossipCatalogPage(peerID string, page *corestate.CatalogPage) {
 	recordCatalogPage(controller.daemon.PeerObservability, peerID, page, controller.now)
+	recordReadOnlyResponder(controller.daemon.PeerObservability, peerID, "catalog_page", "", controller.now)
 }
 
 func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerID, cursor string, err error) {
@@ -733,10 +696,8 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerI
 }
 
 func (controller *daemonGossipActionController) RecordGossipSummaryMatch(_ context.Context, peerID string) error {
-	controller.daemon.recordSyncPeerStateBatch(peerID, "sync_hint,peer_sync",
-		func(state *stateFile) {
-			recordSyncHint(state, peerID, "ping_summary_match", "", true, controller.now)
-		},
+	recordSyncHint(controller.daemon.PeerObservability, peerID, "ping_summary_match", "", true, controller.now)
+	controller.daemon.recordSyncPeerStateBatch(peerID, "peer_sync",
 		func(state *stateFile) {
 			recordPeerSyncAt(state, peerID, nil, controller.now)
 		},
@@ -757,8 +718,10 @@ func (controller *daemonGossipActionController) RespondGossipFetchZone(_ context
 		return nil
 	}
 	if request.ChunkFallback {
+		recordReadOnlyResponder(controller.daemon.PeerObservability, peerID, "chunk_fallback", request.Zone, controller.now)
 		return controller.daemon.respondFetchZoneChunksTo(peerID, request.Zone, controller.replyAddr)
 	}
+	recordReadOnlyResponder(controller.daemon.PeerObservability, peerID, "fetch_zone", request.Zone, controller.now)
 	return controller.daemon.respondFetchZoneTo(peerID, request.Zone, controller.replyAddr)
 }
 

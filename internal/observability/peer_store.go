@@ -10,8 +10,20 @@ import (
 // PeerSnapshot contains diagnostics that are safe to lose on daemon restart.
 // Values returned by PeerObservabilityStore are detached from the mutable store.
 type PeerSnapshot struct {
-	DatagramStats   *photonstate.PeerDatagramStats
-	ObjectPullStats *photonstate.PeerObjectPullStats
+	ActivePullState       string
+	ActivePullLastEvent   string
+	ActivePullUpdatedUnix int64
+	HintAccepted          int64
+	HintSuppressed        int64
+	LastHintUnix          int64
+	LastHintReason        string
+	LastHintSuppression   string
+	ReadOnlyResponder     int64
+	LastResponderUnix     int64
+	LastResponderKind     string
+	LastResponderZone     string
+	DatagramStats         *photonstate.PeerDatagramStats
+	ObjectPullStats       *photonstate.PeerObjectPullStats
 }
 
 type peerEntry struct {
@@ -154,7 +166,7 @@ func (s *PeerObservabilityStore) evictOldestLocked() {
 }
 
 func clonePeerSnapshot(in PeerSnapshot) PeerSnapshot {
-	out := PeerSnapshot{}
+	out := in
 	if in.DatagramStats != nil {
 		stats := *in.DatagramStats
 		out.DatagramStats = &stats

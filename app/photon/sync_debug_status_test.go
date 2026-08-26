@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -55,8 +56,8 @@ func TestSyncStatusAdapterDoesNotProjectEphemeralDiagnosticsFromState(t *testing
 	if peer.PeerID != "node-b.catofes." || peer.ConfiguredAddr != "127.0.0.1:9999" {
 		t.Fatalf("bootstrap peer = %+v", peer)
 	}
-	if peer.SyncFlow.ActivePullState != string(gossip.SyncSessionObjectPulling) || peer.SyncFlow.ReadOnlyResponder != 3 {
-		t.Fatalf("sync flow = %+v", peer.SyncFlow)
+	if peer.SyncFlow.ActivePullState != "" || peer.SyncFlow.HintAccepted != 0 || peer.SyncFlow.HintSuppressed != 0 || peer.SyncFlow.ReadOnlyResponder != 0 {
+		t.Fatalf("offline status retained ephemeral sync diagnostics: %+v", peer.SyncFlow)
 	}
 	if peer.DatagramStats != (inspect.PeerDatagramStatsView{}) || peer.ObjectPullStats != (inspect.PeerObjectPullStatsView{}) {
 		t.Fatalf("offline status retained ephemeral diagnostics: datagram=%+v object-pull=%+v", peer.DatagramStats, peer.ObjectPullStats)
@@ -103,8 +104,7 @@ func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
 		"127.0.0.1:9999",
 		"127.0.0.1:2000",
 		diagnosticSyncPeerState(now),
-		diagnosticDatagramStats(now),
-		diagnosticObjectPullStats(now),
+		diagnosticPeerObservability(now),
 		now,
 	)
 
@@ -137,6 +137,11 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
 		ObservedSource:        string(gossip.MessagePing),
 		LastUpdateSource:      "node-c.catofes.",
+	}
+}
+
+func diagnosticPeerObservability(now time.Time) observability.PeerSnapshot {
+	return observability.PeerSnapshot{
 		ActivePullState:       string(gossip.SyncSessionObjectPulling),
 		ActivePullLastEvent:   "catalog_page",
 		ActivePullUpdatedUnix: now.Unix(),
@@ -149,6 +154,8 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		LastResponderUnix:     now.Unix(),
 		LastResponderKind:     "chunk_fallback",
 		LastResponderZone:     "node-b.catofes.",
+		DatagramStats:         diagnosticDatagramStats(now),
+		ObjectPullStats:       diagnosticObjectPullStats(now),
 	}
 }
 

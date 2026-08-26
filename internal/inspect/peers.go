@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -193,20 +194,18 @@ type PeerDebugInput struct {
 	ConfiguredAddr string
 	ResolvedAddr   string
 	photonstate.PeerRuntimeState
-	DatagramStats   *photonstate.PeerDatagramStats
-	ObjectPullStats *photonstate.PeerObjectPullStats
-	Now             time.Time
+	Diagnostics observability.PeerSnapshot
+	Now         time.Time
 }
 
 type PeerRuntimeDebugInput struct {
-	PeerID          string
-	Source          string
-	ConfiguredAddr  string
-	ResolvedAddr    string
-	State           photonstate.PeerRuntimeState
-	DatagramStats   *photonstate.PeerDatagramStats
-	ObjectPullStats *photonstate.PeerObjectPullStats
-	Now             time.Time
+	PeerID         string
+	Source         string
+	ConfiguredAddr string
+	ResolvedAddr   string
+	State          photonstate.PeerRuntimeState
+	Diagnostics    observability.PeerSnapshot
+	Now            time.Time
 }
 
 type PeerSyncFlowView struct {
@@ -268,8 +267,7 @@ func BuildPeerDebugFromRuntime(input PeerRuntimeDebugInput) PeerDebugView {
 		ConfiguredAddr:   input.ConfiguredAddr,
 		ResolvedAddr:     input.ResolvedAddr,
 		PeerRuntimeState: input.State,
-		DatagramStats:    input.DatagramStats,
-		ObjectPullStats:  input.ObjectPullStats,
+		Diagnostics:      input.Diagnostics,
 		Now:              input.Now,
 	})
 }
@@ -292,13 +290,13 @@ func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 		LastUpdateSource: input.LastUpdateSource,
 		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
 		RelaySuppression: formatPeerDebugRelaySuppression(input.LastRelaySuppression, input.LastRelaySuppressedAt),
-		SyncFlow:         BuildPeerSyncFlowFromRuntime(input.PeerRuntimeState),
-		DatagramStats:    BuildPeerDatagramStats(input.DatagramStats),
-		ObjectPullStats:  BuildPeerObjectPullStats(input.ObjectPullStats),
+		SyncFlow:         BuildPeerSyncFlowFromObservability(input.Diagnostics),
+		DatagramStats:    BuildPeerDatagramStats(input.Diagnostics.DatagramStats),
+		ObjectPullStats:  BuildPeerObjectPullStats(input.Diagnostics.ObjectPullStats),
 	}
 }
 
-func BuildPeerSyncFlowFromRuntime(state photonstate.PeerRuntimeState) PeerSyncFlowView {
+func BuildPeerSyncFlowFromObservability(state observability.PeerSnapshot) PeerSyncFlowView {
 	return PeerSyncFlowView{
 		ActivePullState:     state.ActivePullState,
 		ActivePullLastEvent: state.ActivePullLastEvent,

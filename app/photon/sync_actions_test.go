@@ -40,8 +40,6 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 		t.Fatal("metadata-only catalog event reported a Network change")
 	}
 
-	snapshot, _ := service.StateStore.Snapshot()
-	peerState := snapshot.SyncPeers[peerID]
 	observed, ok := service.PeerObservability.Snapshot(peerID, now)
 	if !ok {
 		t.Fatal("peer observability snapshot missing")
@@ -53,8 +51,8 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
 		t.Fatalf("catalog stats = %+v, want committed summary", stats)
 	}
-	if peerState.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || peerState.ActivePullLastEvent != "catalog_summary" {
-		t.Fatalf("active pull = state %q event %q, want committed catalog diffing summary", peerState.ActivePullState, peerState.ActivePullLastEvent)
+	if observed.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || observed.ActivePullLastEvent != "catalog_summary" {
+		t.Fatalf("active pull = state %q event %q, want observable catalog diffing summary", observed.ActivePullState, observed.ActivePullLastEvent)
 	}
 }
 
@@ -94,14 +92,12 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
-	peerState := snapshot.SyncPeers[peerID]
 	observed, ok := service.PeerObservability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || observed.DatagramStats.LastCatalogRootHex != "3132" {
 		t.Fatalf("catalog stats = %+v, want observability summary", observed.DatagramStats)
 	}
-	if peerState.ActivePullState != string(gossip.SyncSessionCatalogDiffing) {
-		t.Fatalf("active pull state = %q, want catalog diffing", peerState.ActivePullState)
+	if observed.ActivePullState != string(gossip.SyncSessionCatalogDiffing) {
+		t.Fatalf("active pull state = %q, want catalog diffing", observed.ActivePullState)
 	}
 }
 
@@ -194,13 +190,8 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
-	peerState := snapshot.SyncPeers[peerID]
-	if peerState.ReadOnlyResponder != 0 {
-		t.Fatalf("read-only responder count = %d, want no StateStore write", peerState.ReadOnlyResponder)
-	}
 	observed, ok := service.PeerObservability.Snapshot(peerID, now)
-	if !ok || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {
+	if !ok || observed.ReadOnlyResponder != 1 || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {
 		t.Fatalf("catalog page stats = %+v, want observability catalog page", observed.DatagramStats)
 	}
 }

@@ -17,6 +17,7 @@ func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {
 		wg.Go(func() {
 			for range 100 {
 				store.Update("peer-a", now, func(snapshot *PeerSnapshot) {
+					snapshot.HintAccepted++
 					if snapshot.DatagramStats == nil {
 						snapshot.DatagramStats = &photonstate.PeerDatagramStats{}
 					}
@@ -28,7 +29,7 @@ func TestPeerStoreSnapshotIsDetachedAndConcurrent(t *testing.T) {
 	wg.Wait()
 
 	snapshot, ok := store.Snapshot("peer-a", now)
-	if !ok || snapshot.DatagramStats == nil || snapshot.DatagramStats.ChunkFallbacks != 800 {
+	if !ok || snapshot.HintAccepted != 800 || snapshot.DatagramStats == nil || snapshot.DatagramStats.ChunkFallbacks != 800 {
 		t.Fatalf("snapshot = %#v, want 800 fallbacks", snapshot)
 	}
 	snapshot.DatagramStats.ChunkFallbacks = 0
