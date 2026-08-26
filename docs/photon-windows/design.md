@@ -123,6 +123,12 @@ Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 RuntimeStateSt
 state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
 迁移函数在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
 
+Linux 已增加未接入在线路径的 RuntimeStateStore owner，用来验证最终 handle 生命周期和事务组合：它持有唯一
+bbolt handle，首次加载在同一事务内迁移并读取完整 aggregate，公共 Repository 写入和 Linux runtime 聚合写入
+均复用该 handle。字节完全相同的提交回滚为空操作；公共状态校验或提交失败会连同同事务的平台 payload 一起
+回滚。第二个进程/handle 必须在有界超时后因文件锁冲突失败，Close 错误必须返回给生命周期 owner。E 阶段会
+整体替换现有 Linux loader/writer，替换完成前两套路径不会同时在线。
+
 ## 4. 代码边界
 
 ```text

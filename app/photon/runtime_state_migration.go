@@ -150,6 +150,12 @@ func linuxRuntimeStateFromLegacy(state *stateFile) *linuxRuntimeState {
 }
 
 func saveLinuxRuntimeStateTx(tx *bolt.Tx, state *linuxRuntimeState) (bool, error) {
+	if tx == nil || !tx.Writable() {
+		return false, errors.New("linux runtime save requires a writable bbolt transaction")
+	}
+	if state == nil {
+		return false, errors.New("linux runtime state is nil")
+	}
 	bucket, err := tx.CreateBucketIfNotExists(bucketLinuxRuntime)
 	if err != nil {
 		return false, err
@@ -191,6 +197,9 @@ func loadLinuxRuntimeStateTx(tx *bolt.Tx) (*linuxRuntimeState, bool, error) {
 	payload := bucket.Get(keyRuntimePayload)
 	if payload == nil {
 		return nil, true, fmt.Errorf("%w: payload is missing", errLinuxRuntimeStateCorrupt)
+	}
+	if bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+		return nil, true, fmt.Errorf("%w: payload is null", errLinuxRuntimeStateCorrupt)
 	}
 	var state linuxRuntimeState
 	if err := json.Unmarshal(payload, &state); err != nil {

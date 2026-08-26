@@ -602,6 +602,12 @@ package dependency: app -> host -> gossip -> state -> zone
     `LoadNetworkTx`/`SaveNetworkTx`/`DeleteNetworkTx` primitive，不持有第二个 handle。迁移对新格式幂等，
     新旧表示并存时 fail closed，malformed metadata/任一步失败整体 rollback；fixture 覆盖字段 ownership、
     checkpoint 白名单、旧字段删除和重复执行。E 阶段整体切换前不调用该迁移，避免半切 writer。
+  - [x] D3：新增尚未接入在线路径的 Linux `RuntimeStateStore` owner：进程级只持有一个 bbolt handle，
+    在同一事务内组合公共 candidate 与 Linux runtime payload，并直接实现公共 `state.Repository`；首次聚合加载
+    可在 owner 提供的事务内执行 D2 迁移。byte-identical aggregate 通过事务 rollback 成为真正 no-op；公共写入
+    失败时同事务内先写的平台 payload 也整体 rollback。测试覆盖迁移后关闭/重开、事务 txid no-op、context
+    cancellation、外部第二 handle 锁超时、close error 传播和重复 Close。该 owner 仍不接当前 daemon loader/writer，
+    留待 E 阶段一次性切换，避免 legacy/common 双写。
 - [ ] E：Linux 在保留单 DaemonStateStore/单 event-loop writer 的前提下先切换 verified bucket，再把
   platform-neutral host loop 替换为公共 Runtime；删除 `stateFile.Network/SyncPeers` 双份在线所有权，跑
   全量 `make check`、
