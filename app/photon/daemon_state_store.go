@@ -51,13 +51,6 @@ type protocolPublishResult struct {
 	Common           corestate.LocalIntentBatchResult
 }
 
-type syncPeerMutationView struct {
-	ManagedZone  zone.ZonePath
-	Network      *zone.NetworkState
-	SyncPeers    map[string]syncPeerState
-	PeerCleanups map[string]peerLifecycleCleanupState
-}
-
 // NewDaemonStateStore combines the common state owner and Linux runtime owner
 // into the detached read view consumed by daemon planners and projections.
 func NewDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState) (*DaemonStateStore, error) {
@@ -245,11 +238,11 @@ func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID st
 	return result, nil
 }
 
-func (s *DaemonStateStore) UpdateCommonPeerCheckpoint(ctx context.Context, peerID string, patch corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
-	return s.UpdateCommonPeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
+func (s *DaemonStateStore) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+	return s.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
 }
 
-func (s *DaemonStateStore) UpdateCommonPeerCheckpoints(ctx context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+func (s *DaemonStateStore) UpdatePeerCheckpoints(ctx context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
 	if s == nil || s.common == nil {
 		return corestate.CommitResult{}, errors.New("daemon common state store is not initialized")
 	}

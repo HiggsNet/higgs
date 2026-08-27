@@ -168,10 +168,19 @@ authorization 和 transport records 作为可信事实来源。
 - [x] chunk quiet-repair 已删除 `ChunkAssemblyStore` 内部 `time.AfterFunc`：gossip 只计算 repair deadline 和
   缺失索引，HostRuntime Scheduler 以 peer/transfer generation 统一 replace/cancel/stale-fire，并把到期事件经
   同一个 host queue 发送 NACK；`pkg/core/gossip` 已不再创建任何 timer/ticker/goroutine。
+- [x] peer discovery 的 verified-zone admission、endpoint/source 排序、recent/observed path、checkpoint
+  patch、persist-before-publish 和 UDP address book 更新已整体进入公共 HostRuntime；Linux 原 planner/apply
+  及重复地址合并实现已删除。在线 daemon 直接从 common Store 与 Linux cleanup owner 组装输入，不新增
+  `DaemonStateStore` discovery view。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制
   Linux snapshot apply、auto-join、record mutation 或 bbolt schema。
+  - discovery 不得通过 `DaemonStateStore` 新增专用组合 view：peer/endpoint 规划和可重建 UDP address
+    book 已归公共 HostRuntime/transport runtime，平台 adapter 只负责 socket I/O；待公共 Runtime 直接持有
+    common/Linux owner 后删除 `daemon_discovery.go` 中剩余的输入组装与触发。
+  - `daemon_state_projection.go` 不是目标架构层；每个调用方改用其 owner 的 typed input 后立即删除对应
+    projection，最终删除整个文件。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

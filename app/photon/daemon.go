@@ -1706,7 +1706,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 				}},
 			}
 		}
-		if _, err := d.StateStore.UpdateCommonPeerCheckpoints(context.Background(), patches); err != nil {
+		if _, err := d.StateStore.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
 			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 			return
 		}

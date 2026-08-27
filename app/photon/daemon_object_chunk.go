@@ -73,7 +73,7 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 	if reason == "" {
 		reason = "verify_failed"
 	}
-	_, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
+	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
 		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
 			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
 			UpdatedUnix: now.Unix(), UntilUnix: now.Add(rejectedDigestTTL).Unix(),

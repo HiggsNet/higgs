@@ -84,11 +84,11 @@ func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) 
 
 func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision(t *testing.T) {
 	store, _ := newDaemonStateStoreTestFixture(t, nil)
-	result, err := store.UpdateCommonPeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
+	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
 		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: 42},
 	})
 	if err != nil {
-		t.Fatalf("UpdateCommonPeerCheckpoint: %v", err)
+		t.Fatalf("UpdatePeerCheckpoint: %v", err)
 	}
 	if !result.Committed || result.Changes.VerifiedRevision != 0 || store.Meta().Revision != 0 {
 		t.Fatalf("checkpoint result/meta = %+v/%+v", result, store.Meta())

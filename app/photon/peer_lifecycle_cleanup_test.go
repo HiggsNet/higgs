@@ -112,7 +112,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 	if _, ok := cleaned.PeerCleanups["node-b.catofes."]; !ok {
 		t.Fatal("offline peer suppression marker is missing")
 	}
-	if _, err := service.StateStore.UpdateCommonPeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+	if _, err := service.StateStore.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {
 		t.Fatalf("record successful sync: %v", err)

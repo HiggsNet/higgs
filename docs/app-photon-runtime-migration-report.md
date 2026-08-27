@@ -118,10 +118,10 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `cpu_profile.go` | daemon CPU profile 生命周期 | `internal/runtimeprofile` 或薄 app helper；不属于状态层 |
 | `daemon.go` | event loop、控制服务、timer、admin mutation、publisher、controller 生命周期 | 公共循环进 `pkg/core/host`；Unix control 和 Linux controller 下沉；最终只留 composition root |
 | `daemon_common_intent.go` | control DTO 到公共 intent 的转换 | typed control command 落地后删除，不保留永久 adapter |
-| `daemon_discovery.go` | peer/checkpoint 到 transport 地址的规划与应用 | 规划进 host/gossip；checkpoint 写 state；I/O 通过 transport capability |
+| `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | chunk/NACK transport 与 checkpoint/观测 adapter | assembly 已由每个 host Runtime 独占；repair deadline/缺失索引在 gossip，timer/action 已进 host Scheduler |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
-| `daemon_state_projection.go` | 聚合 stateFile 的 protocol/controller/inspect 投影 | protocol read API 进 state/host；展示进 inspect；controller 使用 typed input；最终删除 |
+| `daemon_state_projection.go` | 聚合 stateFile 的 protocol/controller/inspect 投影 | 仅为迁移期拆分清单；protocol 读取进 state/host、展示进 inspect、controller 使用 typed input 后逐项删除，最终不保留该文件或通用 projection 层 |
 | `daemon_state_store.go` | E1 唯一 writer 协调器和聚合读视图 | owner/排序进入 host；Linux persistence 进入 capability；聚合 view 消失后删除 |
 | `daemon_sync.go` | Linux gossip event 预处理、snapshot capability、checkpoint、发送、relay、session 收尾 | FSM→action 桥接及 worker completion 已进 `pkg/core/host`；继续迁走平台无关执行，FSM 保持在 `pkg/core/gossip` |
 

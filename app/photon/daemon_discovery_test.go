@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
@@ -21,13 +23,8 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 			ObservedUntilUnix:     now.Add(-time.Minute).Unix(),
 		},
 	}
-	view := syncPeerMutationView{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-		SyncPeers:   state.SyncPeers,
-	}
-
-	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	plan := corehost.PlanGossipDiscovery(testDaemonGossipDiscoveryInput(state, config), now)
+	updates := plan.Patches
 
 	// Planning must not mutate either state or transport.
 	original := state.SyncPeers["node-b.catofes."]
@@ -42,7 +39,7 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 		t.Fatalf("expired observed path was not cleared: %+v", peer)
 	}
 
-	foundKnown := slices.Contains(plan.knownPeerIDs, "node-b.catofes.")
+	foundKnown := slices.Contains(plan.KnownPeerIDs, "node-b.catofes.")
 	if !foundKnown {
 		t.Fatal("verified node-b was not included in known-peer plan")
 	}
@@ -51,13 +48,21 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 	if addr := transport.PeerAddr("node-b.catofes."); addr != nil {
 		t.Fatalf("transport changed before plan commit/apply: %v", addr)
 	}
-	applyDaemonDiscoveryPlan(transport, plan)
+	corehost.ApplyGossipDiscoveryPlan(transport, plan)
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("transport address after apply = %v", addr)
 	}
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr != nil {
 		t.Fatalf("expired observed address remained after apply: %v", addr)
 	}
+}
+
+func testDaemonGossipDiscoveryInput(state *stateFile, config *syncConfigFile) corehost.GossipDiscoveryInput {
+	checkpoint, _ := projectLegacyGossipCheckpoint(state.SyncPeers)
+	return daemonGossipDiscoveryInput(corestate.View{State: &corestate.VerifiedState{
+		ManagedZone: state.ManagedZone,
+		Network:     state.Network,
+	}, Gossip: checkpoint}, state.PeerCleanups, config)
 }
 
 func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.T) {
@@ -73,13 +78,8 @@ func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.
 			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "expired:33434", UntilUnix: now.Add(-time.Minute).Unix()}, {Addr: "198.51.100.21:33434", UntilUnix: now.Add(time.Minute).Unix()}},
 		},
 	}
-	view := syncPeerMutationView{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-		SyncPeers:   state.SyncPeers,
-	}
-
-	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	plan := corehost.PlanGossipDiscovery(testDaemonGossipDiscoveryInput(state, config), now)
+	updates := plan.Patches
 	if len(updates) != 0 {
 		t.Fatalf("unchanged peer produced state updates: %+v", updates)
 	}
@@ -90,7 +90,7 @@ func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.
 		t.Fatalf("planning compacted committed grace paths: %+v", original.ObservedGraceAddrs)
 	}
 	transport := &gossip.Transport{}
-	applyDaemonDiscoveryPlan(transport, plan)
+	corehost.ApplyGossipDiscoveryPlan(transport, plan)
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("no-op state plan did not repair transport: %v", addr)
 	}
@@ -104,18 +104,13 @@ func TestPlanDaemonDiscoveredPeersRepairsConfiguredBootstrapWithoutZone(t *testi
 	now := time.Unix(time.Now().Unix(), 0)
 	peerID := "bootstrap.example."
 	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
-	view := syncPeerMutationView{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-		SyncPeers:   map[string]syncPeerState{},
-	}
-
-	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	plan := corehost.PlanGossipDiscovery(testDaemonGossipDiscoveryInput(state, config), now)
+	updates := plan.Patches
 	if len(updates) != 0 {
 		t.Fatalf("configured bootstrap produced state updates: %+v", updates)
 	}
 	transport := &gossip.Transport{}
-	applyDaemonDiscoveryPlan(transport, plan)
+	corehost.ApplyGossipDiscoveryPlan(transport, plan)
 	if addr := transport.PeerAddr(peerID); addr == nil || addr.String() != "127.0.0.1:33434" {
 		t.Fatalf("configured bootstrap address after repair = %v", addr)
 	}
@@ -125,21 +120,17 @@ func TestPlanDaemonDiscoveredPeersKeepsLifecycleCleanedCacheAbsent(t *testing.T)
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(time.Now().Unix(), 0)
 	putSignedEndpointRecord(t, state, "203.0.113.10", 33434, now, 1)
-	view := syncPeerMutationView{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-		SyncPeers:   map[string]syncPeerState{},
-		PeerCleanups: map[string]peerLifecycleCleanupState{
-			"node-b.catofes.": {CleanupUnix: now.Unix(), Reason: peerCleanupReasonOffline},
-		},
+	state.PeerCleanups = map[string]peerLifecycleCleanupState{
+		"node-b.catofes.": {CleanupUnix: now.Unix(), Reason: peerCleanupReasonOffline},
 	}
 
-	updates, plan := planDaemonDiscoveredPeers(view, config, now)
+	plan := corehost.PlanGossipDiscovery(testDaemonGossipDiscoveryInput(state, config), now)
+	updates := plan.Patches
 	if _, ok := updates["node-b.catofes."]; ok {
 		t.Fatalf("lifecycle-cleaned peer cache was recreated: %+v", updates)
 	}
 	transport := &gossip.Transport{}
-	applyDaemonDiscoveryPlan(transport, plan)
+	corehost.ApplyGossipDiscoveryPlan(transport, plan)
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("lifecycle-cleaned peer is not dialable for recovery: %v", addr)
 	}

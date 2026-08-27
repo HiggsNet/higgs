@@ -499,24 +499,6 @@ func (s *DaemonStateStore) relayProjection(config *syncConfigFile, now time.Time
 	return out
 }
 
-func (s *DaemonStateStore) observedPathsProjection(peerID string, now time.Time) ([]gossip.ObservedPath, bool, bool) {
-	if s == nil || peerID == "" {
-		return nil, false, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, false, false
-	}
-	state := s.committed
-	return plannedObservedPaths(syncPeerMutationView{
-		ManagedZone:  state.ManagedZone,
-		Network:      state.Network,
-		SyncPeers:    state.SyncPeers,
-		PeerCleanups: state.PeerCleanups,
-	}, peerID, cloneSyncPeerState(state.SyncPeers[peerID]), now)
-}
-
 func (s *DaemonStateStore) healthTargetsProjection(groups []ipsec.LinkGroupSpec) (string, []health.ProbeTarget) {
 	if s == nil {
 		return "", nil

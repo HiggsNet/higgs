@@ -127,7 +127,7 @@ func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *ne
 	for _, item := range grace {
 		typedGrace = append(typedGrace, corestate.ObservedGraceEndpoint{Endpoint: item.Addr, UntilUnix: item.UntilUnix})
 	}
-	_, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
+	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
 		ObservedEndpoint:  corestate.PatchField[string]{Set: true, Value: endpoint},
 		ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: firstSeen},
 		ObservedLastUnix:  corestate.PatchField[int64]{Set: true, Value: now.Unix()},
@@ -380,7 +380,7 @@ func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...fu
 			fn(&peer)
 		}
 	}
-	if _, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, fullPeerCheckpointPatch(peer)); err != nil {
+	if _, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, fullPeerCheckpointPatch(peer)); err != nil {
 		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
 			"peer_id": peerID,
 			"label":   label,
