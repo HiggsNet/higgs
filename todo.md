@@ -669,6 +669,9 @@ package dependency: app -> host -> gossip -> state -> zone
         切换前仍由同一入口维持原持久化行为。硬切试验已确认 record writer 不能早于 endpoint publisher、admin、
         remote/checkpoint 和测试持久化单独启用，否则必然形成半在线状态；后续不再提交单功能兼容 wrapper，而是在
         一个未拆分的 cutover 批次内同时接入生产启动、迁完剩余调用点，并删除旧在线 writer/save 路径后再提交。
+        公共 Store 已补充批量本机 intent 原语：多条 publisher mutation 在同一 detached candidate 中按顺序校验、
+        签名，任一失败整批回滚，只执行一次持久化且 VerifiedRevision 最多推进一次；原单条 API 反向复用该实现，
+        避免形成两套 mutation 语义。下一步直接用它替换 startup/endpoint 的旧 `BeginUpdate` 聚合事务。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

@@ -125,6 +125,22 @@ func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent co
 	return result, nil
 }
 
+func (s *DaemonStateStore) ApplyCommonLocalIntents(ctx context.Context, intents []corestate.LocalIntent, now time.Time) (corestate.LocalIntentBatchResult, error) {
+	if s == nil || s.common == nil {
+		return corestate.LocalIntentBatchResult{}, errors.New("daemon common state store is not initialized")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	result, err := s.common.ApplyLocalIntents(ctx, intents, now)
+	if err != nil {
+		return corestate.LocalIntentBatchResult{}, err
+	}
+	if result.Committed {
+		s.refreshComposedView()
+	}
+	return result, nil
+}
+
 func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
 	if s == nil || s.common == nil {
 		return corestate.RemoteBatchResult{}, errors.New("daemon common state store is not initialized")

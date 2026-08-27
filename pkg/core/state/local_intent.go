@@ -118,6 +118,14 @@ type LocalIntentResult struct {
 	Authority  *zone.ZoneAuthority
 }
 
+// LocalIntentBatchResult is one atomic local-authority transaction. All
+// intents are evaluated against the same candidate in order and the verified
+// revision advances at most once.
+type LocalIntentBatchResult struct {
+	CommitResult
+	Results []LocalIntentResult
+}
+
 // PreviewLocalIntent runs the same validation, normalization and signing path
 // as ApplyLocalIntent against a detached snapshot, without persisting or
 // publishing the candidate. VerifiedRevision remains the currently committed
@@ -154,12 +162,33 @@ func (store *Store) PreviewLocalIntent(intent LocalIntent, now time.Time) (Local
 // Private keys are ordinary persisted Store state under the administrator's
 // filesystem/host security policy. Publication occurs only after persistence.
 func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, now time.Time) (LocalIntentResult, error) {
-	var out LocalIntentResult
+	batch, err := store.ApplyLocalIntents(ctx, []LocalIntent{intent}, now)
+	if err != nil {
+		return LocalIntentResult{}, err
+	}
+	if len(batch.Results) != 1 {
+		return LocalIntentResult{}, errors.New("local intent transaction produced no result")
+	}
+	out := batch.Results[0]
+	out.CommitResult = batch.CommitResult
+	return out, nil
+}
+
+// ApplyLocalIntents validates, signs and commits an ordered set of
+// authority-owned mutations as one candidate. A later failure discards all
+// earlier mutations in the batch.
+func (store *Store) ApplyLocalIntents(ctx context.Context, intents []LocalIntent, now time.Time) (LocalIntentBatchResult, error) {
+	var out LocalIntentBatchResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
 	}
-	if intent == nil {
-		return out, errors.New("local intent is nil")
+	if len(intents) == 0 {
+		return out, errors.New("local intent batch is empty")
+	}
+	for _, intent := range intents {
+		if intent == nil {
+			return LocalIntentBatchResult{}, errors.New("local intent is nil")
+		}
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -176,6 +205,57 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 	candidate := cloneVerifiedState(store.state)
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
+	changedZones := make([]zone.ZonePath, 0, len(intents))
+	var securityPriority bool
+	var metadataChanged bool
+	out.Results = make([]LocalIntentResult, 0, len(intents))
+	for _, intent := range intents {
+		result, changed, additional, secure, checkpointChanged, err := applyLocalIntentCandidate(candidate, gossipCandidate, intent, now)
+		if err != nil {
+			return LocalIntentBatchResult{}, err
+		}
+		if changed != "" {
+			changedZones = appendZoneOnce(changedZones, changed)
+		}
+		for _, path := range additional {
+			changedZones = appendZoneOnce(changedZones, path)
+		}
+		securityPriority = securityPriority || secure
+		metadataChanged = metadataChanged || checkpointChanged
+		out.Results = append(out.Results, result)
+	}
+	if len(changedZones) == 0 && !metadataChanged {
+		out.Changes.VerifiedRevision = baseRevision
+		return out, nil
+	}
+	nextRevision := baseRevision
+	if len(changedZones) > 0 {
+		nextRevision++
+	}
+	changes := ChangeSet{
+		VerifiedRevision:        nextRevision,
+		ChangedZones:            changedZones,
+		NetworkChanged:          len(changedZones) > 0,
+		GossipCheckpointChanged: metadataChanged,
+		SecurityPriority:        securityPriority,
+	}
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+			return LocalIntentBatchResult{}, err
+		}
+	}
+	store.mu.Lock()
+	store.state = candidate
+	store.gossip = gossipCandidate
+	store.revision = nextRevision
+	store.mu.Unlock()
+	out.Committed = true
+	out.Changes = changes
+	return cloneLocalIntentBatchResult(out), nil
+}
+
+func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *GossipCheckpoint, intent LocalIntent, now time.Time) (LocalIntentResult, zone.ZonePath, []zone.ZonePath, bool, bool, error) {
+	var out LocalIntentResult
 	var changed zone.ZonePath
 	var additionallyChanged []zone.ZonePath
 	var securityPriority bool
@@ -218,35 +298,7 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 	default:
 		err = fmt.Errorf("unsupported local intent %T", intent)
 	}
-	if err != nil {
-		return LocalIntentResult{}, err
-	}
-	if changed == "" {
-		out.Changes.VerifiedRevision = baseRevision
-		return out, nil
-	}
-	nextRevision := baseRevision + 1
-	changedZones := append([]zone.ZonePath{changed}, additionallyChanged...)
-	changes := ChangeSet{
-		VerifiedRevision:        nextRevision,
-		ChangedZones:            changedZones,
-		NetworkChanged:          true,
-		GossipCheckpointChanged: metadataChanged,
-		SecurityPriority:        securityPriority,
-	}
-	if store.commit != nil {
-		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
-			return LocalIntentResult{}, err
-		}
-	}
-	store.mu.Lock()
-	store.state = candidate
-	store.gossip = gossipCandidate
-	store.revision = nextRevision
-	store.mu.Unlock()
-	out.Committed = true
-	out.Changes = changes
-	return cloneLocalIntentResult(out), nil
+	return out, changed, additionallyChanged, securityPriority, metadataChanged, err
 }
 
 func applyUpdateRootAuthorityIntent(state *VerifiedState, intent UpdateRootAuthorityIntent, now time.Time) (*zone.ZoneAuthority, zone.ZonePath, error) {
@@ -458,6 +510,15 @@ func cloneLocalIntentResult(value LocalIntentResult) LocalIntentResult {
 	value.Delegation = cloneDelegation(value.Delegation)
 	value.Revocation = cloneRevocation(value.Revocation)
 	value.Authority = cloneAuthority(value.Authority)
+	return value
+}
+
+func cloneLocalIntentBatchResult(value LocalIntentBatchResult) LocalIntentBatchResult {
+	value.Changes.ChangedZones = append([]zone.ZonePath(nil), value.Changes.ChangedZones...)
+	value.Results = append([]LocalIntentResult(nil), value.Results...)
+	for i := range value.Results {
+		value.Results[i] = cloneLocalIntentResult(value.Results[i])
+	}
 	return value
 }
 

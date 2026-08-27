@@ -56,6 +56,36 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	}
 }
 
+func TestStoreApplyLocalIntentsCommitsOnceAndRollsBackAsBatch(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
+	sink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit)
+
+	batch, err := store.ApplyLocalIntents(context.Background(), []LocalIntent{
+		PutRecordIntent{Zone: "node-a.catofes.", Key: "endpoint-a", Type: "text", Value: []byte("a")},
+		PutRecordIntent{Zone: "node-a.catofes.", Key: "endpoint-b", Type: "text", Value: []byte("b")},
+	}, now)
+	if err != nil {
+		t.Fatalf("ApplyLocalIntents: %v", err)
+	}
+	if !batch.Committed || batch.Changes.VerifiedRevision != 1 || sink.commits != 1 || len(batch.Results) != 2 {
+		t.Fatalf("batch = %+v commits=%d", batch, sink.commits)
+	}
+
+	_, err = store.ApplyLocalIntents(context.Background(), []LocalIntent{
+		PutRecordIntent{Zone: "node-a.catofes.", Key: "would-rollback", Type: "text", Value: []byte("x")},
+		PutRecordIntent{Zone: "node-a.catofes.", Key: "sync/endpoint/udp", Type: "text", Value: []byte("reserved")},
+	}, now.Add(time.Second))
+	if !errors.Is(err, ErrReservedRecordIntent) {
+		t.Fatalf("failed batch error = %v, want ErrReservedRecordIntent", err)
+	}
+	view := store.ReadView()
+	if view.Revision != 1 || sink.commits != 1 || view.State.Network.Zones["node-a.catofes."].Records["would-rollback"] != nil {
+		t.Fatalf("failed batch published: revision=%d commits=%d", view.Revision, sink.commits)
+	}
+}
+
 func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	network, _, _, _ := managedAuthorityFixture(t, true)
 	store := NewStore(&VerifiedState{Network: network}, nil)
