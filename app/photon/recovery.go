@@ -381,14 +381,12 @@ func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, runtime *linux
 	if rt == nil {
 		return errors.New("runtime is nil")
 	}
-	drivers, err := newIPsecCleanupDrivers(rt.Config)
+	platformRuntime, err := newLinuxRuntimeForIPsecCleanup(rt.Config)
 	if err != nil {
 		return err
 	}
-	if drivers.close != nil {
-		defer func() { _ = drivers.close() }()
-	}
-	_, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+	defer func() { _ = platformRuntime.Close() }()
+	_, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, platformRuntime, rt.Now())
 	return err
 }
 

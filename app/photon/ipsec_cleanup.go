@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -47,38 +46,43 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 	if rt == nil {
 		return 0, 0, errors.New("runtime is nil")
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return 0, 0, err
 	}
-	state.Lock()
-	defer state.Unlock()
-	if len(state.LinkInstances) == 0 && !includeOrphans {
-		markIPsecCleanupSnapshot(state, rt.Now())
-		if err := rt.SaveState(state); err != nil {
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+	now := rt.Now()
+	if len(runtimeCandidate.LinkInstances) == 0 && !includeOrphans {
+		runtimeCandidate.IPsecReconcile = markIPsecCleanupReconcile(runtimeCandidate.IPsecReconcile, now)
+		if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
 			return 0, 0, err
 		}
 		return 0, 0, nil
 	}
-	drivers, err := newIPsecCleanupDrivers(rt.Config)
+	platformRuntime, err := newLinuxRuntimeForIPsecCleanup(rt.Config)
 	if err != nil {
 		return 0, 0, err
 	}
-	if drivers.close != nil {
-		defer func() { _ = drivers.close() }()
-	}
+	defer func() { _ = platformRuntime.Close() }()
 	cleaned := 0
-	if len(state.LinkInstances) > 0 {
-		cleaned, err = cleanupIPsecLinkInstances(ctx, state, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+	if len(runtimeCandidate.LinkInstances) > 0 {
+		ids := make([]string, 0, len(runtimeCandidate.LinkInstances))
+		for id := range runtimeCandidate.LinkInstances {
+			ids = append(ids, id)
+		}
+		cleaned, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtimeCandidate, ids, platformRuntime, now)
 		if err != nil {
 			return cleaned, 0, err
 		}
 	} else {
-		markIPsecCleanupSnapshot(state, rt.Now())
+		runtimeCandidate.IPsecReconcile = markIPsecCleanupReconcile(runtimeCandidate.IPsecReconcile, now)
 	}
 	orphans := 0
 	if includeOrphans {
-		orphans, err = cleanupIPsecOrphanConnections(ctx, state, drivers.ipsecDriver)
+		orphans, err = platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
 		if err != nil {
 			return cleaned, orphans, err
 		}
@@ -86,7 +90,7 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 	if err != nil {
 		return cleaned, orphans, err
 	}
-	if err := rt.SaveState(state); err != nil {
+	if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
 		return cleaned, orphans, err
 	}
 	return cleaned, orphans, nil
@@ -100,22 +104,11 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if workspace == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
-	ipsecDriver := d.IPsecDriver
-	xfrmDriver := d.XFRMDriver
-	var closeFn func() error
+	platformRuntime := d.linuxRuntime
 	if len(workspace.LinkInstances) > 0 || includeOrphans {
-		if ipsecDriver == nil || xfrmDriver == nil {
-			drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
-			if err != nil {
-				return 0, 0, err
-			}
-			ipsecDriver = drivers.ipsecDriver
-			xfrmDriver = drivers.xfrmDriver
-			closeFn = drivers.close
+		if platformRuntime == nil {
+			return 0, 0, errors.New("linux runtime is not initialized")
 		}
-	}
-	if closeFn != nil {
-		defer func() { _ = closeFn() }()
 	}
 
 	cleaned := 0
@@ -124,7 +117,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 		now := d.Sync.now()
 		var err error
 		if len(state.LinkInstances) > 0 {
-			cleaned, err = cleanupIPsecLinkInstances(ctx, state, ipsecDriver, xfrmDriver, now)
+			cleaned, err = cleanupIPsecLinkInstances(ctx, state, platformRuntime, now)
 			if err != nil {
 				return err
 			}
@@ -132,7 +125,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 			markIPsecCleanupSnapshot(state, now)
 		}
 		if includeOrphans {
-			orphans, err = cleanupIPsecOrphanConnections(ctx, state, ipsecDriver)
+			orphans, err = cleanupIPsecOrphanConnections(ctx, state, platformRuntime)
 			if err != nil {
 				return err
 			}
@@ -158,9 +151,9 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	return cleaned, orphans, nil
 }
 
-func newIPsecCleanupDrivers(config *appConfig) (configuredIPsecDrivers, error) {
+func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, error) {
 	if config == nil {
-		return configuredIPsecDrivers{}, errors.New("config is nil")
+		return nil, errors.New("config is nil")
 	}
 	driver := config.IPsec.Driver
 	if driver == "" {
@@ -169,61 +162,44 @@ func newIPsecCleanupDrivers(config *appConfig) (configuredIPsecDrivers, error) {
 	switch driver {
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
-		return configuredIPsecDrivers{ipsecDriver: dryRun, xfrmDriver: dryRun}, nil
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun}), nil
 	case ipsecDriverStrongSwan:
 		client, err := ipsec.NewGoviciClient(config.IPsec.VICISocket)
 		if err != nil {
-			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
+			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
-		return configuredIPsecDrivers{
-			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client},
-			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
-			close:       client.Close,
-		}, nil
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+			IPsecDriver: &ipsec.StrongSwanDriver{VICI: client},
+			XFRMDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
+			Close:       client.Close,
+		}), nil
 	default:
-		return configuredIPsecDrivers{}, fmt.Errorf("unsupported ipsec driver %q", driver)
+		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}
 }
 
-func cleanupIPsecLinkInstances(ctx context.Context, state *stateFile, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, now time.Time) (int, error) {
+func cleanupIPsecLinkInstances(ctx context.Context, state *stateFile, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
 	if state == nil {
 		return 0, errors.New("state is nil")
 	}
-	if ipsecDriver == nil {
-		return 0, errors.New("ipsec driver is nil")
-	}
-	if xfrmDriver == nil {
-		return 0, errors.New("xfrm driver is nil")
-	}
-	instances := linkInstancesToIPsec(state.LinkInstances)
-	ids := make([]string, 0, len(instances))
-	for id := range instances {
+	ids := make([]string, 0, len(state.LinkInstances))
+	for id := range state.LinkInstances {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
-	cleaned := 0
-	for _, id := range ids {
-		inst := instances[id]
-		if err := inst.Owner.Validate(inst); err != nil {
-			return cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
-		}
-		action := ipsec.ReconcileAction{Action: ipsec.ReconcileActionTeardown, Instance: &inst}
-		if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, ipsec.NetNSSpec{}); err != nil {
-			return cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
-		}
-		delete(instances, id)
-		cleaned++
+	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, state.LinkInstances, ids, platformRuntime)
+	if err != nil {
+		return cleaned, err
 	}
-	state.LinkInstances = linkInstancesFromIPsec(instances)
+	state.LinkInstances = links
 	markIPsecCleanupSnapshot(state, now)
 	return cleaned, nil
 }
 
-func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []string, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, now time.Time) (int, error) {
+func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []string, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
 	if state == nil {
 		return 0, errors.New("state is nil")
 	}
-	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, state.LinkInstances, ids, ipsecDriver, xfrmDriver)
+	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, state.LinkInstances, ids, platformRuntime)
 	if err != nil {
 		return cleaned, err
 	}
@@ -234,11 +210,11 @@ func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []
 	return cleaned, nil
 }
 
-func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, ids []string, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, now time.Time) (int, error) {
+func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, ids []string, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
 	if runtime == nil {
 		return 0, errors.New("linux runtime state is nil")
 	}
-	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, runtime.LinkInstances, ids, ipsecDriver, xfrmDriver)
+	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, runtime.LinkInstances, ids, platformRuntime)
 	if err != nil {
 		return cleaned, err
 	}
@@ -249,70 +225,29 @@ func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeSta
 	return cleaned, nil
 }
 
-func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) (map[string]linkInstanceState, int, error) {
-	if len(ids) == 0 {
-		return cloneLinkInstances(linkInstances), 0, nil
-	}
-	if ipsecDriver == nil {
-		return nil, 0, errors.New("ipsec driver is nil")
-	}
-	if xfrmDriver == nil {
-		return nil, 0, errors.New("xfrm driver is nil")
-	}
+func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, platformRuntime *photonlinux.Runtime) (map[string]linkInstanceState, int, error) {
 	instances := linkInstancesToIPsec(linkInstances)
-	sortedIDs := append([]string(nil), ids...)
-	sort.Strings(sortedIDs)
-	cleaned := 0
-	for _, id := range sortedIDs {
-		inst, ok := instances[id]
-		if !ok {
-			continue
-		}
-		if err := inst.Owner.Validate(inst); err != nil {
-			return nil, cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
-		}
-		action := ipsec.ReconcileAction{Action: ipsec.ReconcileActionTeardown, Instance: &inst}
-		if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, ipsec.NetNSSpec{}); err != nil {
-			return nil, cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
-		}
-		delete(instances, id)
-		cleaned++
+	remaining, cleaned, err := platformRuntime.CleanupIPsecLinks(ctx, instances, ids)
+	if err != nil {
+		return nil, cleaned, err
 	}
-	return linkInstancesFromIPsec(instances), cleaned, nil
+	return linkInstancesFromIPsec(remaining), cleaned, nil
 }
 
-func cleanupIPsecOrphanConnections(ctx context.Context, state *stateFile, ipsecDriver ipsec.IPsecDriver) (int, error) {
-	lister, ok := ipsecDriver.(ipsec.ConnectionLister)
-	if !ok {
-		return 0, fmt.Errorf("ipsec driver does not support listing loaded connections")
-	}
-	conns, err := lister.ListConnections(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("list ipsec connections: %w", err)
-	}
-	keep := managedIPsecConnectionNames(state)
-	cleaned := 0
-	for _, conn := range conns {
-		if !isPhotonIPsecConnectionName(conn.Name) || keep[conn.Name] {
-			continue
-		}
-		if err := ipsecDriver.TerminateSA(ctx, conn.Name); err != nil {
-			return cleaned, fmt.Errorf("terminate orphan ipsec connection %s: %w", conn.Name, err)
-		}
-		if err := ipsecDriver.UnloadConnection(ctx, conn.Name); err != nil {
-			return cleaned, fmt.Errorf("unload orphan ipsec connection %s: %w", conn.Name, err)
-		}
-		cleaned++
-	}
-	return cleaned, nil
+func cleanupIPsecOrphanConnections(ctx context.Context, state *stateFile, platformRuntime *photonlinux.Runtime) (int, error) {
+	return platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNames(state))
 }
 
 func managedIPsecConnectionNames(state *stateFile) map[string]bool {
-	out := make(map[string]bool)
 	if state == nil {
-		return out
+		return make(map[string]bool)
 	}
-	for _, inst := range linkInstancesToIPsec(state.LinkInstances) {
+	return managedIPsecConnectionNamesFromLinks(state.LinkInstances)
+}
+
+func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) map[string]bool {
+	out := make(map[string]bool)
+	for _, inst := range linkInstancesToIPsec(links) {
 		for _, name := range []string{inst.TransportID, inst.IKEName, inst.StagedIKEName} {
 			if name != "" {
 				out[name] = true
@@ -320,10 +255,6 @@ func managedIPsecConnectionNames(state *stateFile) map[string]bool {
 		}
 	}
 	return out
-}
-
-func isPhotonIPsecConnectionName(name string) bool {
-	return strings.HasPrefix(name, "ipsec-")
 }
 
 func markIPsecCleanupSnapshot(state *stateFile, now time.Time) {

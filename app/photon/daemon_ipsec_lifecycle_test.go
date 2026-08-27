@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
@@ -103,8 +105,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
 
@@ -187,8 +188,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
@@ -251,8 +251,7 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
@@ -338,8 +337,7 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
@@ -391,8 +389,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
@@ -442,8 +439,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
@@ -479,8 +475,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
 	latest := service.currentState()
@@ -542,7 +537,8 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	driver := &ipsec.DryRunDriver{}
 
-	cleaned, err := cleanupIPsecLinkInstances(context.Background(), state, driver, driver, now)
+	platformRuntime := photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	cleaned, err := cleanupIPsecLinkInstances(context.Background(), state, platformRuntime, now)
 	if err != nil {
 		t.Fatalf("cleanupIPsecLinkInstances: %v", err)
 	}
@@ -591,8 +587,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	}
 	driver := &ipsec.DryRunDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", true)
 	if err != nil {
@@ -627,6 +622,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 
 func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
 	state.LinkInstances = nil
 	now := time.Unix(5105, 0)
 	rt := &Runtime{
@@ -647,12 +643,14 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	if orphans != 0 {
 		t.Fatalf("orphans = %d, want 0", orphans)
 	}
-	latest, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("openLinuxDaemonState: %v", err)
 	}
-	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastRunUnix != now.Unix() {
-		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp", latest.IPsecReconcile)
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	if startup.Runtime.IPsecReconcile == nil || startup.Runtime.IPsecReconcile.LastRunUnix != now.Unix() {
+		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp", startup.Runtime.IPsecReconcile)
 	}
 }
 
@@ -677,7 +675,8 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 		},
 	}
 
-	cleaned, err := cleanupIPsecOrphanConnections(context.Background(), state, driver)
+	platformRuntime := photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	cleaned, err := cleanupIPsecOrphanConnections(context.Background(), state, platformRuntime)
 	if err != nil {
 		t.Fatalf("cleanupIPsecOrphanConnections: %v", err)
 	}
@@ -720,8 +719,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Reply: reply}
@@ -780,8 +778,7 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	state.Lock()
 	unlock := state.Unlock
@@ -827,8 +824,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Orphans: true, Reply: reply}

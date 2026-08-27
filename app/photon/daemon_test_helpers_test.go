@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -31,6 +32,18 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 		store.refreshView()
 	}
 	return newDaemonServiceWithStore(rt, store, config, interval)
+}
+
+func installTestIPsecDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
+	if service == nil {
+		return
+	}
+	if err := service.installLinuxRuntime(photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		IPsecDriver: ipsecDriver,
+		XFRMDriver:  xfrmDriver,
+	})); err != nil {
+		panic(err)
+	}
 }
 
 func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {

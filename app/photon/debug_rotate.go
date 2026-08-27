@@ -84,15 +84,14 @@ func debugRotate(ctx context.Context, filter string) error {
 	var liveSAs []linkSAState
 	var liveErr error
 	if rt.Config != nil && rt.Config.IPsec.Driver != ipsecDriverDryRun {
-		drivers, err := newIPsecCleanupDrivers(rt.Config)
+		platformRuntime, err := newLinuxRuntimeForIPsecCleanup(rt.Config)
 		if err != nil {
 			liveErr = err
 		} else {
-			if drivers.close != nil {
-				defer drivers.close()
-			}
-			if drivers.ipsecDriver != nil {
-				sas, err := drivers.ipsecDriver.ListSAs(ctx)
+			defer platformRuntime.Close()
+			ipsecDriver, _ := platformRuntime.IPsecDrivers()
+			if ipsecDriver != nil {
+				sas, err := ipsecDriver.ListSAs(ctx)
 				if err != nil {
 					liveErr = err
 				} else {

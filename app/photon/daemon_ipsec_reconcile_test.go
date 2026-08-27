@@ -366,8 +366,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 			t.Fatalf("advance state revision during apply: %v", err)
 		}
 	}
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
 		t.Fatalf("reconcileIPsecLinks: %v", err)
@@ -411,8 +410,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		close(started)
 		<-unblock
 	}
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	done := make(chan error, 1)
 	go func() {
@@ -563,8 +561,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.Events <- daemonEvent{
 		Type: daemonEventRecordPut,
@@ -630,8 +627,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: true, XFRMIfID: 77}}
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: false, XFRMIfID: 77}}

@@ -915,8 +915,11 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 
 func (d *DaemonService) ipsecDrivers() (ipsec.IPsecDriver, ipsec.XFRMDriver) {
 	var dryRun *ipsec.DryRunDriver
-	ipsecDriver := d.IPsecDriver
-	xfrmDriver := d.XFRMDriver
+	var ipsecDriver ipsec.IPsecDriver
+	var xfrmDriver ipsec.XFRMDriver
+	if d != nil && d.linuxRuntime != nil {
+		ipsecDriver, xfrmDriver = d.linuxRuntime.IPsecDrivers()
+	}
 	if ipsecDriver == nil || xfrmDriver == nil {
 		dryRun = &ipsec.DryRunDriver{}
 	}

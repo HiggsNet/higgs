@@ -17,6 +17,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -34,10 +35,8 @@ type DaemonService struct {
 	Hooks                  DaemonHooks
 	StateStore             *DaemonStateStore
 	PeerObservability      *observability.PeerObservabilityStore
-	IPsecDriver            ipsec.IPsecDriver
-	XFRMDriver             ipsec.XFRMDriver
+	linuxRuntime           *photonlinux.Runtime
 	ipsecDNSResolver       ipsec.DNSResolver
-	closeIPsecDriver       func() error
 	health                 *health.Manager
 	healthUpdates          <-chan struct{}
 	healthSpoolMu          sync.Mutex
@@ -269,15 +268,15 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if initialState == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
-	if d.IPsecDriver == nil && d.XFRMDriver == nil {
-		if err := d.configureIPsecDriversFromConfig(); err != nil {
+	if d.linuxRuntime == nil {
+		if err := d.configureLinuxRuntimeFromConfig(); err != nil {
 			return err
 		}
 	}
 	if d.hostRuntime != nil {
 		defer d.hostRuntime.Stop()
 	}
-	defer d.closeConfiguredIPsecDriver()
+	defer d.closeLinuxRuntime()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -1166,24 +1165,17 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
-	var ipsecDrivers configuredIPsecDrivers
-	refreshIPsecDrivers := (d.IPsecDriver == nil && d.XFRMDriver == nil) || d.closeIPsecDriver != nil
-	if refreshIPsecDrivers {
-		var err error
-		ipsecDrivers, err = newConfiguredIPsecDrivers(config.IPsec, func(event string, fields map[string]any) {
-			d.logDebug("ipsec", event, fields)
-		})
-		if err != nil {
-			return err
-		}
+	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, func(event string, fields map[string]any) {
+		d.logDebug("ipsec", event, fields)
+	})
+	if err != nil {
+		return err
 	}
 	d.Sync.App.Config = config
 	d.Sync.App.StatePath = statePath
 	d.Sync.Config = syncConfig
-	if refreshIPsecDrivers {
-		if err := d.installConfiguredIPsecDrivers(ipsecDrivers); err != nil {
-			return err
-		}
+	if err := d.installLinuxRuntime(linuxRuntime); err != nil {
+		return err
 	}
 	d.Log = newAppLogger(syncConfig)
 	d.ControlSocketPath = socketPath
@@ -1362,22 +1354,11 @@ func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, state *s
 	if d == nil || d.Sync == nil || state == nil || d.Sync.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	ipsecDriver := d.IPsecDriver
-	xfrmDriver := d.XFRMDriver
-	var closeFn func() error
-	if ipsecDriver == nil || xfrmDriver == nil {
-		drivers, err := newIPsecCleanupDrivers(d.Sync.App.Config)
-		if err != nil {
-			return err
-		}
-		ipsecDriver = drivers.ipsecDriver
-		xfrmDriver = drivers.xfrmDriver
-		closeFn = drivers.close
+	platformRuntime := d.linuxRuntime
+	if platformRuntime == nil {
+		return errors.New("linux runtime is not initialized")
 	}
-	if closeFn != nil {
-		defer func() { _ = closeFn() }()
-	}
-	_, err := cleanupIPsecLinkInstancesByID(ctx, state, plan.LinkInstances, ipsecDriver, xfrmDriver, d.Sync.now())
+	_, err := cleanupIPsecLinkInstancesByID(ctx, state, plan.LinkInstances, platformRuntime, d.Sync.now())
 	return err
 }
 
@@ -1789,7 +1770,8 @@ type ipsecLifecycleEventSubscriber interface {
 }
 
 func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
-	subscriber, ok := d.IPsecDriver.(ipsecLifecycleEventSubscriber)
+	ipsecDriver, _ := d.ipsecDrivers()
+	subscriber, ok := ipsecDriver.(ipsecLifecycleEventSubscriber)
 	if !ok || subscriber == nil {
 		return func() {}
 	}
@@ -1934,46 +1916,38 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 		return err
 	}
 	defer boltStore.Close()
-	if err := service.configureIPsecDriversFromConfig(); err != nil {
-		return err
-	}
 	return service.Run(ctx)
 }
 
-func (d *DaemonService) configureIPsecDriversFromConfig() error {
+func (d *DaemonService) configureLinuxRuntimeFromConfig() error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	drivers, err := newConfiguredIPsecDrivers(d.Sync.App.Config.IPsec, func(event string, fields map[string]any) {
+	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, func(event string, fields map[string]any) {
 		d.logDebug("ipsec", event, fields)
 	})
 	if err != nil {
 		return err
 	}
-	return d.installConfiguredIPsecDrivers(drivers)
+	return d.installLinuxRuntime(runtime)
 }
 
-type configuredIPsecDrivers struct {
-	ipsecDriver ipsec.IPsecDriver
-	xfrmDriver  ipsec.XFRMDriver
-	close       func() error
-}
-
-func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, fields map[string]any)) (configuredIPsecDrivers, error) {
+func newConfiguredLinuxRuntime(config ipsecConfig, logConfig func(event string, fields map[string]any)) (*photonlinux.Runtime, error) {
 	driver := config.Driver
 	if driver == "" {
 		driver = ipsecDriverStrongSwan
 	}
 	switch driver {
 	case ipsecDriverDryRun:
-		return configuredIPsecDrivers{}, nil
+		dryRun := &ipsec.DryRunDriver{}
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun}), nil
 	case ipsecDriverStrongSwan:
 		if len(config.LinkGroups) == 0 {
-			return configuredIPsecDrivers{}, nil
+			return photonlinux.NewRuntime(photonlinux.RuntimeOptions{}), nil
 		}
 		client, err := ipsec.NewReconnectingGoviciClient(config.VICISocket)
 		if err != nil {
-			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
+			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
 		initiateClientFactory := func() (ipsec.VICIClient, func() error, error) {
 			client, err := ipsec.NewGoviciClient(config.VICISocket)
@@ -1982,45 +1956,45 @@ func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, 
 			}
 			return client, client.Close, nil
 		}
-		return configuredIPsecDrivers{
-			ipsecDriver: &ipsec.StrongSwanDriver{
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+			IPsecDriver: &ipsec.StrongSwanDriver{
 				VICI:                  client,
 				LogConfig:             logConfig,
 				InitiateAsync:         true,
 				InitiateClientFactory: initiateClientFactory,
 			},
-			xfrmDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
-			close:      client.Close,
-		}, nil
+			XFRMDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			Close:      client.Close,
+		}), nil
 	default:
-		return configuredIPsecDrivers{}, fmt.Errorf("unsupported ipsec driver %q", driver)
+		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}
 }
 
-func (d *DaemonService) installConfiguredIPsecDrivers(drivers configuredIPsecDrivers) error {
-	if err := d.closeConfiguredIPsecDriver(); err != nil {
-		if drivers.close != nil {
-			_ = drivers.close()
+func (d *DaemonService) installLinuxRuntime(runtime *photonlinux.Runtime) error {
+	if d == nil {
+		if runtime != nil {
+			_ = runtime.Close()
+		}
+		return errors.New("daemon service is nil")
+	}
+	if err := d.closeLinuxRuntime(); err != nil {
+		if runtime != nil {
+			_ = runtime.Close()
 		}
 		return err
 	}
-	d.IPsecDriver = drivers.ipsecDriver
-	d.XFRMDriver = drivers.xfrmDriver
-	d.closeIPsecDriver = drivers.close
+	d.linuxRuntime = runtime
 	return nil
 }
 
-func (d *DaemonService) closeConfiguredIPsecDriver() error {
-	if d == nil || d.closeIPsecDriver == nil {
+func (d *DaemonService) closeLinuxRuntime() error {
+	if d == nil || d.linuxRuntime == nil {
 		return nil
 	}
-	closeFn := d.closeIPsecDriver
-	d.closeIPsecDriver = nil
-	err := closeFn()
-	if err != nil {
-		return err
-	}
-	return nil
+	runtime := d.linuxRuntime
+	d.linuxRuntime = nil
+	return runtime.Close()
 }
 
 func (d *DaemonService) logDebug(component, event string, fields map[string]any) {

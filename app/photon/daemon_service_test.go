@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -21,13 +22,63 @@ func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
 	}
 }
 
-func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
-	drivers, err := newConfiguredIPsecDrivers(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil)
+func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsHasNoIPsecDrivers(t *testing.T) {
+	runtime, err := newConfiguredLinuxRuntime(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil)
 	if err != nil {
-		t.Fatalf("newConfiguredIPsecDrivers: %v", err)
+		t.Fatalf("newConfiguredLinuxRuntime: %v", err)
 	}
-	if drivers.ipsecDriver != nil || drivers.xfrmDriver != nil || drivers.close != nil {
-		t.Fatalf("drivers = %+v, want no-op without link groups", drivers)
+	ipsecDriver, xfrmDriver := runtime.IPsecDrivers()
+	if ipsecDriver != nil || xfrmDriver != nil {
+		t.Fatalf("drivers = (%T, %T), want no-op without link groups", ipsecDriver, xfrmDriver)
+	}
+}
+
+func TestDaemonServiceReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
+	service := newTestDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, time.Second)
+	firstClosed := 0
+	firstDriver := &ipsec.DryRunDriver{}
+	first := photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		IPsecDriver: firstDriver,
+		XFRMDriver:  firstDriver,
+		Close: func() error {
+			firstClosed++
+			return nil
+		},
+	})
+	if err := service.installLinuxRuntime(first); err != nil {
+		t.Fatalf("install first Linux runtime: %v", err)
+	}
+	if got, _ := service.ipsecDrivers(); got != firstDriver {
+		t.Fatalf("active IPsec driver = %T, want first injected driver", got)
+	}
+
+	secondClosed := 0
+	secondDriver := &ipsec.DryRunDriver{}
+	second := photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		IPsecDriver: secondDriver,
+		XFRMDriver:  secondDriver,
+		Close: func() error {
+			secondClosed++
+			return nil
+		},
+	})
+	if err := service.installLinuxRuntime(second); err != nil {
+		t.Fatalf("replace Linux runtime: %v", err)
+	}
+	if firstClosed != 1 {
+		t.Fatalf("first runtime close calls = %d, want 1", firstClosed)
+	}
+	if got, _ := service.ipsecDrivers(); got != secondDriver {
+		t.Fatalf("active IPsec driver = %T, want replacement driver", got)
+	}
+	if err := service.closeLinuxRuntime(); err != nil {
+		t.Fatalf("close Linux runtime: %v", err)
+	}
+	if secondClosed != 1 {
+		t.Fatalf("second runtime close calls = %d, want 1", secondClosed)
+	}
+	if service.linuxRuntime != nil {
+		t.Fatal("Linux runtime remains installed after close")
 	}
 }
 

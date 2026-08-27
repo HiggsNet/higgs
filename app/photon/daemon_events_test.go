@@ -236,8 +236,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonService(rt, latest, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
 

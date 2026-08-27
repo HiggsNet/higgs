@@ -513,8 +513,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
+	installTestIPsecDrivers(service, driver, driver)
 
 	// Create the link first.
 	service.notifyStateChanged()
@@ -618,8 +617,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = ipsecDriver
-	service.XFRMDriver = ipsecDriver
+	installTestIPsecDrivers(service, ipsecDriver, ipsecDriver)
 	service.firewallDriver = firewallDriver
 	service.birdProcessManager = &fakeBirdProcessManager{running: false}
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {

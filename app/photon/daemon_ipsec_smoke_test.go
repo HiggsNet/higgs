@@ -44,8 +44,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	})
 
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.IPsecDriver = &observedIPsecDriver{}
-	service.XFRMDriver = ipsec.NewSystemXFRMDriver(group.NetNS)
+	installTestIPsecDrivers(service, &observedIPsecDriver{}, ipsec.NewSystemXFRMDriver(group.NetNS))
 	service.recoverIPsecLinksOnStart(ctx)
 
 	latest, err := rt.LoadState()
@@ -217,11 +216,9 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 		t.Fatalf("SaveState(node-b): %v", err)
 	}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
-	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
+	installTestIPsecDrivers(serviceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
-	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
+	installTestIPsecDrivers(serviceB, &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupB.NetNS, nsB))
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -261,8 +258,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 		t.Fatalf("LoadState(node-a before restart): %v", err)
 	}
 	restartServiceA := newTestDaemonService(rtA, restartedA, configA, time.Second)
-	restartServiceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	restartServiceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
+	installTestIPsecDrivers(restartServiceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
 	recoveredA, err := rtA.LoadState()
 	if err != nil {
@@ -456,11 +452,9 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 		t.Fatalf("SaveState(node-b): %v", err)
 	}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
-	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
+	installTestIPsecDrivers(serviceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
-	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
+	installTestIPsecDrivers(serviceB, &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupB.NetNS, nsB))
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -634,11 +628,9 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 		t.Fatalf("SaveState(node-b): %v", err)
 	}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
-	serviceA.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
-	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
+	installTestIPsecDrivers(serviceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
-	serviceB.IPsecDriver = &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
-	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
+	installTestIPsecDrivers(serviceB, &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupB.NetNS, nsB))
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
@@ -931,12 +923,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 
 	serviceA := newTestDaemonService(rtA, stateA, configA, 200*time.Millisecond)
 	serviceA.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
-	serviceA.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciA, clientA)
-	serviceA.XFRMDriver = daemonTestXFRMDriver(groupA.NetNS, nsA)
+	installTestIPsecDrivers(serviceA, newDaemonTestStrongSwanDriver(t, viciA, clientA), daemonTestXFRMDriver(groupA.NetNS, nsA))
 	serviceB := newTestDaemonService(rtB, stateB, configB, 200*time.Millisecond)
 	serviceB.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
-	serviceB.IPsecDriver = newDaemonTestStrongSwanDriver(t, viciB, clientB)
-	serviceB.XFRMDriver = daemonTestXFRMDriver(groupB.NetNS, nsB)
+	installTestIPsecDrivers(serviceB, newDaemonTestStrongSwanDriver(t, viciB, clientB), daemonTestXFRMDriver(groupB.NetNS, nsB))
 
 	runCtx, stopDaemons := context.WithCancel(ctx)
 	defer stopDaemons()
@@ -988,8 +978,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	}
 	driverA := &observedIPsecDriver{}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
-	serviceA.IPsecDriver = driverA
-	serviceA.XFRMDriver = driverA
+	installTestIPsecDrivers(serviceA, driverA, driverA)
 
 	stateB := cloneStateFile(stateA)
 	stateB.ManagedZone = "node-b.catofes."
@@ -1009,8 +998,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	}
 	driverB := &observedIPsecDriver{}
 	serviceB := newTestDaemonService(rtB, stateB, &configB, time.Second)
-	serviceB.IPsecDriver = driverB
-	serviceB.XFRMDriver = driverB
+	installTestIPsecDrivers(serviceB, driverB, driverB)
 
 	serviceA.notifyStateChanged()
 	serviceB.notifyStateChanged()
@@ -1122,10 +1110,8 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
 	serviceA.Sync.Transport = transportA
 	serviceB.Sync.Transport = transportB
-	serviceA.IPsecDriver = driverA
-	serviceA.XFRMDriver = driverA
-	serviceB.IPsecDriver = driverB
-	serviceB.XFRMDriver = driverB
+	installTestIPsecDrivers(serviceA, driverA, driverA)
+	installTestIPsecDrivers(serviceB, driverB, driverB)
 
 	tcpAddrA := objectPullTCPAddr(transportA.LocalAddr().String())
 	listenerA, err := objectPullTCPServe(tcpAddrA, serviceA.objectPullResponse)

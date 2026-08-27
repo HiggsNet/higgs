@@ -162,7 +162,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `inspect_links.go` | Linux link 到 inspect input | Linux controller 输出稳定 DTO，view 进 inspect |
 | `inspect_peers.go` | verified/checkpoint/bootstrap/observability endpoint view | `internal/inspect`，不再依赖 stateFile |
 | `ipam.go` | IPAM CLI、旧 mutation 和报告 | mutation 只调 state intent；报告进 inspect；CLI 进 photoncli；旧 apply 函数删除 |
-| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup | `internal/photonlinux/ipsec` controller |
+| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI、装配与 runtime adapter | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已进 `internal/photonlinux/ipsec`；daemon 唯一 `internal/photonlinux.Runtime` 已持有 driver/close 生命周期，online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli，配置到 runtime 的构造留在 Linux composition |
 | `ipsec_publish.go` | transport key/address/port/overlay record 和私有 runtime | record 构造进 transport/state publisher；key/port 本机事实进 platform runtime；排序由 host 保证 |
 | `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | `internal/photonlinux/ipsec` PlatformController |
 | `join.go` | join DTO、issue/revoke/accept、key/bundle、旧 direct writer | DTO/验证进 state admission；文件 CLI 进 photoncli；全部 mutation 复用 Store；旧 writer 删除 |
@@ -210,7 +210,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 1. **删除剩余旧 direct writer**：`recovery.go` 已完成；`authority.go`、`join.go`、`record.go`、`ipam.go`、`route.go`、`service.go`、`state_gc.go` 的 `--direct` 路径继续统一改为打开 BoltStore 后调用同一个 typed Store/controller API。
 2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
-3. **抽 Linux controllers**：IPsec、routing、firewall 三条独立迁移线，各自接收 detached input，返回 typed completion。
+3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
 4. **删除聚合 stateFile**：先替换 protocol projection，再替换 controller input、inspect/observer 和离线 CLI read path；随后删除 `linux_state_view.go`、`daemon_state_store.go`、aggregate clone 和旧 state loader。
 5. **收口 CLI/展示**：`debug_*.go`、`status.go`、`zone.go`、`db.go` 最终只做参数解析、control/read model 调用和 presenter 输出。
 
