@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -537,7 +536,7 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	driver := &ipsec.DryRunDriver{}
 
-	platformRuntime := photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	platformRuntime := newTestLinuxRuntime(driver, driver)
 	cleaned, err := cleanupIPsecLinkInstances(context.Background(), state, platformRuntime, now)
 	if err != nil {
 		t.Fatalf("cleanupIPsecLinkInstances: %v", err)
@@ -675,7 +674,7 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 		},
 	}
 
-	platformRuntime := photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	platformRuntime := newTestLinuxRuntime(driver, driver)
 	cleaned, err := cleanupIPsecOrphanConnections(context.Background(), state, platformRuntime)
 	if err != nil {
 		t.Fatalf("cleanupIPsecOrphanConnections: %v", err)

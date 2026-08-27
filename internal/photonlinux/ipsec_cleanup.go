@@ -1,4 +1,4 @@
-package ipsec
+package photonlinux
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 // CleanupLinkInstances tears down the selected Photon-owned StrongSwan/XFRM
 // resources and returns the remaining platform runtime instances. Missing IDs
 // are already clean and therefore succeed, making retries idempotent.
-func CleanupLinkInstances(ctx context.Context, instances map[string]transportipsec.LinkInstance, ids []string, ipsecDriver transportipsec.IPsecDriver, xfrmDriver transportipsec.XFRMDriver) (map[string]transportipsec.LinkInstance, int, error) {
+func (r *Runtime) CleanupIPsecLinks(ctx context.Context, instances map[string]transportipsec.LinkInstance, ids []string) (map[string]transportipsec.LinkInstance, int, error) {
 	remaining := maps.Clone(instances)
 	if remaining == nil {
 		remaining = make(map[string]transportipsec.LinkInstance)
@@ -22,10 +22,10 @@ func CleanupLinkInstances(ctx context.Context, instances map[string]transportips
 	if len(ids) == 0 {
 		return remaining, 0, nil
 	}
-	if ipsecDriver == nil {
+	if r == nil || r.ipsecDriver == nil {
 		return nil, 0, errors.New("ipsec driver is nil")
 	}
-	if xfrmDriver == nil {
+	if r.xfrmDriver == nil {
 		return nil, 0, errors.New("xfrm driver is nil")
 	}
 	sortedIDs := append([]string(nil), ids...)
@@ -40,7 +40,7 @@ func CleanupLinkInstances(ctx context.Context, instances map[string]transportips
 			return nil, cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
 		}
 		action := transportipsec.ReconcileAction{Action: transportipsec.ReconcileActionTeardown, Instance: &instance}
-		if _, err := transportipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, transportipsec.NetNSSpec{}); err != nil {
+		if _, err := transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, transportipsec.NetNSSpec{}); err != nil {
 			return nil, cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
 		}
 		delete(remaining, id)
@@ -51,8 +51,11 @@ func CleanupLinkInstances(ctx context.Context, instances map[string]transportips
 
 // CleanupOrphanConnections removes Photon-named StrongSwan connections that
 // are no longer referenced by platform runtime state.
-func CleanupOrphanConnections(ctx context.Context, keep map[string]bool, driver transportipsec.IPsecDriver) (int, error) {
-	lister, ok := driver.(transportipsec.ConnectionLister)
+func (r *Runtime) CleanupIPsecOrphans(ctx context.Context, keep map[string]bool) (int, error) {
+	if r == nil || r.ipsecDriver == nil {
+		return 0, errors.New("ipsec driver is nil")
+	}
+	lister, ok := r.ipsecDriver.(transportipsec.ConnectionLister)
 	if !ok {
 		return 0, errors.New("ipsec driver does not support listing loaded connections")
 	}
@@ -65,10 +68,10 @@ func CleanupOrphanConnections(ctx context.Context, keep map[string]bool, driver 
 		if !strings.HasPrefix(connection.Name, "ipsec-") || keep[connection.Name] {
 			continue
 		}
-		if err := driver.TerminateSA(ctx, connection.Name); err != nil {
+		if err := r.ipsecDriver.TerminateSA(ctx, connection.Name); err != nil {
 			return cleaned, fmt.Errorf("terminate orphan ipsec connection %s: %w", connection.Name, err)
 		}
-		if err := driver.UnloadConnection(ctx, connection.Name); err != nil {
+		if err := r.ipsecDriver.UnloadConnection(ctx, connection.Name); err != nil {
 			return cleaned, fmt.Errorf("unload orphan ipsec connection %s: %w", connection.Name, err)
 		}
 		cleaned++

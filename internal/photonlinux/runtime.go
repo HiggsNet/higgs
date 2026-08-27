@@ -2,9 +2,9 @@ package photonlinux
 
 import (
 	"context"
+	"errors"
 	"sync"
 
-	linuxipsec "github.com/HiggsNet/photon/internal/photonlinux/ipsec"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -19,32 +19,57 @@ type Runtime struct {
 	ipsecDriver transportipsec.IPsecDriver
 	xfrmDriver  transportipsec.XFRMDriver
 	close       func() error
+	logger      Logger
 	closeOnce   sync.Once
 	closeErr    error
+}
+
+type Logger interface {
+	Debug(component, event string, fields map[string]any)
+	Warn(component, event string, fields map[string]any)
 }
 
 type RuntimeOptions struct {
 	IPsecDriver transportipsec.IPsecDriver
 	XFRMDriver  transportipsec.XFRMDriver
 	Close       func() error
+	Logger      Logger
 }
 
-func NewRuntime(options RuntimeOptions) *Runtime {
+func NewRuntime(options RuntimeOptions) (*Runtime, error) {
+	if options.IPsecDriver == nil {
+		return nil, errors.New("ipsec driver is required")
+	}
+	if options.XFRMDriver == nil {
+		return nil, errors.New("xfrm driver is required")
+	}
 	return &Runtime{
 		ipsecDriver: options.IPsecDriver,
 		xfrmDriver:  options.XFRMDriver,
 		close:       options.Close,
-	}
+		logger:      options.Logger,
+	}, nil
 }
 
-// IPsecDrivers exposes the Linux transport dependencies while the existing
-// daemon reconcile implementation is being moved behind Runtime. New common
-// code must not depend on these Linux-facing driver types.
-func (r *Runtime) IPsecDrivers() (transportipsec.IPsecDriver, transportipsec.XFRMDriver) {
-	if r == nil {
-		return nil, nil
+func (r *Runtime) ListIPsecSAs(ctx context.Context) ([]transportipsec.SAState, error) {
+	return r.ipsecDriver.ListSAs(ctx)
+}
+
+func (r *Runtime) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec) (transportipsec.ApplyPlan, error) {
+	return transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, netns)
+}
+
+type ipsecLifecycleSubscriber interface {
+	SubscribeLifecycleEvents(context.Context) (<-chan transportipsec.VICIEvent, func(), error)
+}
+
+func (r *Runtime) SubscribeIPsecLifecycle(ctx context.Context) (<-chan transportipsec.VICIEvent, func(), bool, error) {
+	subscriber, ok := r.ipsecDriver.(ipsecLifecycleSubscriber)
+	if !ok || subscriber == nil {
+		return nil, nil, false, nil
 	}
-	return r.ipsecDriver, r.xfrmDriver
+	events, stop, err := subscriber.SubscribeLifecycleEvents(ctx)
+	return events, stop, true, err
 }
 
 // Close releases dependencies created for this runtime. Dependencies injected
@@ -59,18 +84,4 @@ func (r *Runtime) Close() error {
 		}
 	})
 	return r.closeErr
-}
-
-func (r *Runtime) CleanupIPsecLinks(ctx context.Context, instances map[string]transportipsec.LinkInstance, ids []string) (map[string]transportipsec.LinkInstance, int, error) {
-	if r == nil {
-		return linuxipsec.CleanupLinkInstances(ctx, instances, ids, nil, nil)
-	}
-	return linuxipsec.CleanupLinkInstances(ctx, instances, ids, r.ipsecDriver, r.xfrmDriver)
-}
-
-func (r *Runtime) CleanupIPsecOrphans(ctx context.Context, keep map[string]bool) (int, error) {
-	if r == nil {
-		return linuxipsec.CleanupOrphanConnections(ctx, keep, nil)
-	}
-	return linuxipsec.CleanupOrphanConnections(ctx, keep, r.ipsecDriver)
 }

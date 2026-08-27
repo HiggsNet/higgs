@@ -162,9 +162,9 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `inspect_links.go` | Linux link 到 inspect input | Linux controller 输出稳定 DTO，view 进 inspect |
 | `inspect_peers.go` | verified/checkpoint/bootstrap/observability endpoint view | `internal/inspect`，不再依赖 stateFile |
 | `ipam.go` | IPAM CLI、旧 mutation 和报告 | mutation 只调 state intent；报告进 inspect；CLI 进 photoncli；旧 apply 函数删除 |
-| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI、装配与 runtime adapter | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已进 `internal/photonlinux/ipsec`；daemon 唯一 `internal/photonlinux.Runtime` 已持有 driver/close 生命周期，online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli，配置到 runtime 的构造留在 Linux composition |
+| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI、装配与 runtime adapter | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已作为唯一 `photonlinux.Runtime` 的真实方法迁入 `internal/photonlinux/ipsec_cleanup.go`；online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；driver 在配置构造时明确选择，不在运行中隐式补 DryRun；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli |
 | `ipsec_publish.go` | transport key/address/port/overlay record 和私有 runtime | record 构造进 transport/state publisher；key/port 本机事实进 platform runtime；排序由 host 保证 |
-| `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | `internal/photonlinux/ipsec` PlatformController |
+| `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | app 仅保留协议规划、rotation 编排与结果提交；SA live observation、action apply、lifecycle subscription，以及 XFRM batch observe、missing-link filter、diagnostic address、drift repair 都直接实现为唯一 `photonlinux.Runtime` 的方法，并按 `runtime.go`、`xfrm.go`、`ipsec_cleanup.go` 分文件组织；没有嵌套子 Runtime 或逐方法代理，迁移期 `XFRMDriver()` 访问口已删除 |
 | `join.go` | join DTO、issue/revoke/accept、key/bundle、旧 direct writer | DTO/验证进 state admission；文件 CLI 进 photoncli；全部 mutation 复用 Store；旧 writer 删除 |
 
 ### 3.4 Key、link、logging、object-pull、observer、peer

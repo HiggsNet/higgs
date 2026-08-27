@@ -162,7 +162,7 @@ func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, er
 	switch driver {
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun}), nil
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
 	case ipsecDriverStrongSwan:
 		client, err := ipsec.NewGoviciClient(config.IPsec.VICISocket)
 		if err != nil {
@@ -172,7 +172,7 @@ func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, er
 			IPsecDriver: &ipsec.StrongSwanDriver{VICI: client},
 			XFRMDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
 			Close:       client.Close,
-		}), nil
+		})
 	default:
 		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -102,7 +103,7 @@ func (d *DaemonService) completeSyncSession(session *gossip.SyncSession, changed
 }
 
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
-	matches, _ := xfrmLinkStateMatchReason(state, spec)
+	matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec)
 	return matches
 }
 

@@ -1165,9 +1165,8 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
-	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, func(event string, fields map[string]any) {
-		d.logDebug("ipsec", event, fields)
-	})
+	nextLogger := newAppLogger(syncConfig)
+	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, nextLogger)
 	if err != nil {
 		return err
 	}
@@ -1177,7 +1176,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if err := d.installLinuxRuntime(linuxRuntime); err != nil {
 		return err
 	}
-	d.Log = newAppLogger(syncConfig)
+	d.Log = nextLogger
 	d.ControlSocketPath = socketPath
 	if d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
@@ -1765,18 +1764,12 @@ func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	return true
 }
 
-type ipsecLifecycleEventSubscriber interface {
-	SubscribeLifecycleEvents(context.Context) (<-chan ipsec.VICIEvent, func(), error)
-}
-
 func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
-	ipsecDriver, _ := d.ipsecDrivers()
-	subscriber, ok := ipsecDriver.(ipsecLifecycleEventSubscriber)
-	if !ok || subscriber == nil {
+	if d == nil || d.linuxRuntime == nil {
 		return func() {}
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	go d.runIPsecLifecycleEventWatcher(watchCtx, subscriber)
+	go d.runIPsecLifecycleEventWatcher(watchCtx, d.linuxRuntime)
 	return cancel
 }
 
@@ -1785,12 +1778,15 @@ func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) fun
 // attempt is bounded by a timeout and retried with backoff: a wedged VICI
 // daemon (accepting connections but never answering) must degrade to warning
 // logs instead of blocking daemon startup, which a synchronous subscribe did.
-func (d *DaemonService) runIPsecLifecycleEventWatcher(ctx context.Context, subscriber ipsecLifecycleEventSubscriber) {
+func (d *DaemonService) runIPsecLifecycleEventWatcher(ctx context.Context, runtime *photonlinux.Runtime) {
 	backoff := time.Second
 	for {
 		subscribeCtx, cancelSubscribe := context.WithTimeout(ctx, ipsecLifecycleSubscribeTimeout)
-		events, stop, err := subscriber.SubscribeLifecycleEvents(subscribeCtx)
+		events, stop, supported, err := runtime.SubscribeIPsecLifecycle(subscribeCtx)
 		cancelSubscribe()
+		if !supported {
+			return
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -1923,16 +1919,20 @@ func (d *DaemonService) configureLinuxRuntimeFromConfig() error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, func(event string, fields map[string]any) {
-		d.logDebug("ipsec", event, fields)
-	})
+	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, d.Log)
 	if err != nil {
 		return err
 	}
 	return d.installLinuxRuntime(runtime)
 }
 
-func newConfiguredLinuxRuntime(config ipsecConfig, logConfig func(event string, fields map[string]any)) (*photonlinux.Runtime, error) {
+func newConfiguredLinuxRuntime(config ipsecConfig, logger photonlinux.Logger) (*photonlinux.Runtime, error) {
+	var logConfig func(event string, fields map[string]any)
+	if logger != nil {
+		logConfig = func(event string, fields map[string]any) {
+			logger.Debug("ipsec", event, fields)
+		}
+	}
 	driver := config.Driver
 	if driver == "" {
 		driver = ipsecDriverStrongSwan
@@ -1940,10 +1940,19 @@ func newConfiguredLinuxRuntime(config ipsecConfig, logConfig func(event string, 
 	switch driver {
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun}), nil
+		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+			IPsecDriver: dryRun,
+			XFRMDriver:  dryRun,
+			Logger:      logger,
+		})
 	case ipsecDriverStrongSwan:
 		if len(config.LinkGroups) == 0 {
-			return photonlinux.NewRuntime(photonlinux.RuntimeOptions{}), nil
+			dryRun := &ipsec.DryRunDriver{}
+			return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+				IPsecDriver: dryRun,
+				XFRMDriver:  dryRun,
+				Logger:      logger,
+			})
 		}
 		client, err := ipsec.NewReconnectingGoviciClient(config.VICISocket)
 		if err != nil {
@@ -1965,7 +1974,8 @@ func newConfiguredLinuxRuntime(config ipsecConfig, logConfig func(event string, 
 			},
 			XFRMDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
 			Close:      client.Close,
-		}), nil
+			Logger:     logger,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}

@@ -46,7 +46,7 @@ func TestStartIPsecLifecycleEventWatcherDoesNotBlockStartup(t *testing.T) {
 		}
 	}}
 	d := &DaemonService{Events: make(chan daemonEvent, 4)}
-	installTestIPsecDrivers(d, driver, nil)
+	installTestIPsecDrivers(d, driver, &ipsec.DryRunDriver{})
 
 	start := time.Now()
 	stop := d.startIPsecLifecycleEventWatcher(context.Background())
@@ -75,7 +75,7 @@ func TestStartIPsecLifecycleEventWatcherForwardsEvents(t *testing.T) {
 		return stream, func() { close(stopped) }, nil
 	}}
 	d := &DaemonService{Events: make(chan daemonEvent, 4)}
-	installTestIPsecDrivers(d, driver, nil)
+	installTestIPsecDrivers(d, driver, &ipsec.DryRunDriver{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stop := d.startIPsecLifecycleEventWatcher(ctx)

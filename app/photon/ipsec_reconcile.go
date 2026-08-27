@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -44,8 +45,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		}
 		plan.Desired = injectIPsecKeyMaterial(snapshot, plan.Desired)
 	}
-	ipsecDriver, xfrmDriver := d.ipsecDrivers()
-	sas, err := ipsecDriver.ListSAs(ctx)
+	if d.linuxRuntime == nil {
+		err := errors.New("linux runtime is not configured")
+		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		return err
+	}
+	platformRuntime := d.linuxRuntime
+	sas, err := platformRuntime.ListIPsecSAs(ctx)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
@@ -62,8 +68,8 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		"instances":    len(instances),
 		"sas":          len(sas),
 	})
-	xfrmObservations := d.observeXFRMLinksForReconcile(ctx, xfrmDriver, plan.Desired, instances, groups)
-	sas, missingXFRMLinks, err := d.filterSAsWithMissingXFRMLinks(ctx, xfrmDriver, plan.Desired, instances, sas, xfrmObservations)
+	xfrmObservations := platformRuntime.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
+	sas, missingXFRMLinks, err := platformRuntime.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
@@ -91,7 +97,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
 		case ipsec.ReconcileActionCleanupDuplicateSA:
-			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, ipsec.NetNSSpec{}); err != nil {
+			if _, err := platformRuntime.ApplyIPsecAction(ctx, action, ipsec.NetNSSpec{}); err != nil {
 				d.logWarn("ipsec", "duplicate_sa_gc_failed", map[string]any{
 					"sa_unique_id": action.SAUniqueID,
 					"error":        err,
@@ -101,7 +107,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
-			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
+			if _, err := platformRuntime.ApplyIPsecAction(ctx, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 				if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
@@ -109,7 +115,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 				return err
 			}
 			if shouldAssignIPsecDiagnosticAddresses(action) {
-				if err := d.assignIPsecDiagnosticAddresses(ctx, xfrmDriver, *action.Spec, diagnosticPrefixes); err != nil {
+				if err := platformRuntime.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 					if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
@@ -120,7 +126,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
-	if err := d.maintainExistingXFRMInterfaces(ctx, xfrmDriver, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
+	if err := platformRuntime.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
 		if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
@@ -257,203 +263,6 @@ func addressScope(addr netip.Addr) string {
 	return "public"
 }
 
-type xfrmMaintenanceItem struct {
-	id        string
-	candidate ipsec.TransportLinkSpec
-	state     ipsec.XFRMLinkState
-	matches   bool
-	reason    string
-}
-
-type xfrmReconcileObservations struct {
-	links map[string]ipsec.XFRMLinkState
-}
-
-func (d *DaemonService) observeXFRMLinksForReconcile(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, groups []ipsec.LinkGroupSpec) *xfrmReconcileObservations {
-	inspector, ok := xfrmDriver.(ipsec.XFRMLinkBatchInspector)
-	if !ok || len(desired) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	specs := make([]ipsec.TransportLinkSpec, 0, len(desired)*2)
-	appendSpec := func(spec ipsec.TransportLinkSpec) {
-		key := xfrmObservationKey(spec)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		specs = append(specs, spec)
-	}
-	for _, spec := range desired {
-		id := ipsec.LinkInstanceID(spec)
-		inst, hasInstance := instances[id]
-		for _, candidate := range xfrmLinkInspectCandidates(spec, inst) {
-			appendSpec(candidate)
-		}
-		if hasInstance && shouldMaintainXFRMInstance(inst) {
-			appendSpec(xfrmMaintenanceSpec(spec, inst, groups))
-		}
-	}
-
-	states, err := inspector.InspectLinks(ctx, specs)
-	if err != nil {
-		d.logWarn("ipsec", "xfrm_batch_observe_fallback", map[string]any{
-			"candidates": len(specs),
-			"error":      err.Error(),
-		})
-		return nil
-	}
-	if len(states) != len(specs) {
-		d.logWarn("ipsec", "xfrm_batch_observe_fallback", map[string]any{
-			"candidates": len(specs),
-			"observed":   len(states),
-			"error":      "batch result length mismatch",
-		})
-		return nil
-	}
-	observations := &xfrmReconcileObservations{links: make(map[string]ipsec.XFRMLinkState, len(specs))}
-	for i, spec := range specs {
-		observations.links[xfrmObservationKey(spec)] = states[i]
-	}
-	return observations
-}
-
-func inspectXFRMLinkWithObservations(ctx context.Context, inspector ipsec.XFRMLinkInspector, observed *xfrmReconcileObservations, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {
-	if observed != nil {
-		if state, ok := observed.links[xfrmObservationKey(spec)]; ok {
-			return state, nil
-		}
-	}
-	return inspector.InspectLink(ctx, spec)
-}
-
-func xfrmObservationKey(spec ipsec.TransportLinkSpec) string {
-	return spec.NetNS + "\x00" + spec.InterfaceName
-}
-
-func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, actions []ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix, observed ...*xfrmReconcileObservations) error {
-	driver, ok := xfrmDriver.(interface {
-		ipsec.XFRMDriver
-		ipsec.XFRMLinkInspector
-	})
-	if !ok {
-		d.logDebug("ipsec", "xfrm_maintenance_skip_driver", map[string]any{
-			"reason": "xfrm driver does not implement link inspection",
-		})
-		return nil
-	}
-	if len(desired) == 0 || len(instances) == 0 {
-		d.logDebug("ipsec", "xfrm_maintenance_skip_empty", map[string]any{
-			"desired":   len(desired),
-			"instances": len(instances),
-		})
-		return nil
-	}
-	activeActions := make(map[string]struct{})
-	for _, action := range actions {
-		if !ipsecActionAppliesXFRM(action.Action) {
-			continue
-		}
-		if id := actionInstanceID(action); id != "" {
-			activeActions[id] = struct{}{}
-		}
-	}
-	d.logDebug("ipsec", "xfrm_maintenance_begin", map[string]any{
-		"desired":        len(desired),
-		"instances":      len(instances),
-		"active_actions": len(activeActions),
-	})
-	var observations *xfrmReconcileObservations
-	if len(observed) > 0 {
-		observations = observed[0]
-	}
-	var items []xfrmMaintenanceItem
-	for _, spec := range desired {
-		id := ipsec.LinkInstanceID(spec)
-		if _, ok := activeActions[id]; ok {
-			continue
-		}
-		inst, ok := instances[id]
-		if !ok || !shouldMaintainXFRMInstance(inst) {
-			continue
-		}
-		candidate := xfrmMaintenanceSpec(spec, inst, groups)
-		state, err := inspectXFRMLinkWithObservations(ctx, driver, observations, candidate)
-		if err != nil {
-			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
-		}
-		matches, reason := xfrmLinkStateMatchReason(state, candidate)
-		d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("runtime_ensure", id, "active", candidate, state, matches, reason))
-		if !state.NamespaceExists || !state.InterfaceExists {
-			d.logDebug("ipsec", "xfrm_maintenance_skip_missing", map[string]any{
-				"instance_id": id,
-				"peer":        candidate.PeerZone,
-				"interface":   candidate.InterfaceName,
-				"netns":       candidate.NetNS,
-				"runtime":     "active",
-			})
-			continue
-		}
-		if matches {
-			d.logDebug("ipsec", "xfrm_maintenance_skip_matched", map[string]any{
-				"instance_id": id,
-				"peer":        candidate.PeerZone,
-				"interface":   candidate.InterfaceName,
-				"netns":       candidate.NetNS,
-				"runtime":     "active",
-				"reason":      reason,
-			})
-		}
-		items = append(items, xfrmMaintenanceItem{id: id, candidate: candidate, state: state, matches: matches, reason: reason})
-	}
-
-	var repairs []ipsec.XFRMObservedInterface
-	for _, item := range items {
-		if !item.matches {
-			repairs = append(repairs, ipsec.XFRMObservedInterface{Spec: item.candidate, State: item.state})
-		}
-	}
-	if len(repairs) > 0 {
-		if ensurer, ok := xfrmDriver.(ipsec.XFRMObservedEnsurer); ok && observations != nil {
-			if err := ensurer.EnsureObservedInterfaces(ctx, repairs); err != nil {
-				return fmt.Errorf("maintain observed xfrm interfaces: %w", err)
-			}
-		} else {
-			for _, repair := range repairs {
-				if err := driver.EnsureInterface(ctx, repair.Spec); err != nil {
-					return fmt.Errorf("maintain xfrm interface %q: %w", repair.Spec.InterfaceName, err)
-				}
-			}
-		}
-	}
-
-	for _, item := range items {
-		candidate := item.candidate
-		if candidate.LocalTunnelAddr.IsValid() && !xfrmStateHasAddress(item.state, candidate.LocalTunnelAddr) {
-			if err := driver.AssignAddress(ctx, candidate, tunnelAddressPrefixForDaemon(candidate.LocalTunnelAddr)); err != nil {
-				return fmt.Errorf("maintain xfrm address %q: %w", candidate.InterfaceName, err)
-			}
-		}
-		stateForDiagnostics := &item.state
-		if !item.matches {
-			stateForDiagnostics = nil
-		}
-		if err := d.assignIPsecDiagnosticAddressesIfMissing(ctx, xfrmDriver, candidate, diagnosticPrefixes, stateForDiagnostics); err != nil {
-			return fmt.Errorf("maintain xfrm diagnostic address %q: %w", candidate.InterfaceName, err)
-		}
-		d.logDebug("ipsec", "xfrm_maintenance_applied", map[string]any{
-			"instance_id": item.id,
-			"peer":        candidate.PeerZone,
-			"interface":   candidate.InterfaceName,
-			"netns":       candidate.NetNS,
-			"runtime":     "active",
-			"reason":      item.reason,
-		})
-	}
-	return nil
-}
-
 func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
 	if action.Spec == nil {
 		return false
@@ -486,147 +295,6 @@ func (d *DaemonService) localIPv6DiagnosticPrefixes(state *stateFile, now time.T
 		}
 	}
 	return out
-}
-
-func (d *DaemonService) assignIPsecDiagnosticAddresses(ctx context.Context, xfrmDriver ipsec.XFRMDriver, spec ipsec.TransportLinkSpec, prefixes []netip.Prefix) error {
-	return d.assignIPsecDiagnosticAddressesIfMissing(ctx, xfrmDriver, spec, prefixes, nil)
-}
-
-func (d *DaemonService) assignIPsecDiagnosticAddressesIfMissing(ctx context.Context, xfrmDriver ipsec.XFRMDriver, spec ipsec.TransportLinkSpec, prefixes []netip.Prefix, observed *ipsec.XFRMLinkState) error {
-	if len(prefixes) == 0 {
-		return nil
-	}
-	assigner, ok := xfrmDriver.(ipsec.XFRMExtraAddressAssigner)
-	if !ok {
-		return nil
-	}
-	suffix, ok := ipsecDiagnosticSuffix(spec)
-	if !ok {
-		return nil
-	}
-	for _, prefix := range prefixes {
-		addr, ok := diagnosticAddressForPrefix(prefix, suffix)
-		if !ok {
-			continue
-		}
-		if observed != nil && xfrmStateHasAddress(*observed, addr) {
-			continue
-		}
-		if err := assigner.AssignExtraAddress(ctx, spec, netip.PrefixFrom(addr, 128).String()); err != nil {
-			return err
-		}
-		d.logDebug("ipsec", "diagnostic_address_assigned", map[string]any{
-			"interface": spec.InterfaceName,
-			"netns":     spec.NetNS,
-			"address":   addr.String(),
-			"prefix":    prefix.String(),
-			"path_key":  spec.PathKey,
-		})
-	}
-	return nil
-}
-
-func xfrmStateHasAddress(state ipsec.XFRMLinkState, address netip.Addr) bool {
-	for _, prefix := range state.Addresses {
-		if prefix.Addr() == address {
-			return true
-		}
-	}
-	return false
-}
-
-func ipsecDiagnosticSuffix(spec ipsec.TransportLinkSpec) (uint16, bool) {
-	pathKey := strings.ToLower(spec.PathKey)
-	switch {
-	case strings.Contains(pathKey, "ipv4"):
-		return 0xfff4, true
-	case strings.Contains(pathKey, "ipv6"):
-		return 0xfff6, true
-	}
-	if ip := net.ParseIP(spec.LocalAddress); ip != nil {
-		if ip.To4() != nil {
-			return 0xfff4, true
-		}
-		return 0xfff6, true
-	}
-	return 0, false
-}
-
-func diagnosticAddressForPrefix(prefix netip.Prefix, suffix uint16) (netip.Addr, bool) {
-	prefix = prefix.Masked()
-	if !prefix.Addr().Is6() || prefix.Bits() != 64 {
-		return netip.Addr{}, false
-	}
-	raw := prefix.Addr().As16()
-	raw[14] = byte(suffix >> 8)
-	raw[15] = byte(suffix)
-	return netip.AddrFrom16(raw), true
-}
-
-func ipsecActionAppliesXFRM(action string) bool {
-	switch action {
-	case ipsec.ReconcileActionCreate,
-		ipsec.ReconcileActionUpdate,
-		ipsec.ReconcileActionRepair,
-		ipsec.ReconcileActionPrepareStandby,
-		ipsec.ReconcileActionTeardown,
-		ipsec.ReconcileActionPrepareRotate,
-		ipsec.ReconcileActionCommitRotate,
-		ipsec.ReconcileActionRollbackRotate,
-		ipsec.ReconcileActionCleanupRotate:
-		return true
-	default:
-		return false
-	}
-}
-
-func shouldMaintainXFRMInstance(inst ipsec.LinkInstance) bool {
-	if inst.InterfaceName == "" || inst.XFRMIfID == 0 {
-		return false
-	}
-	switch inst.ActualState {
-	case ipsec.LinkStateUp, ipsec.LinkStateConnecting, ipsec.LinkStateConfiguring:
-		return true
-	default:
-		return false
-	}
-}
-
-func xfrmMaintenanceSpec(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance, groups []ipsec.LinkGroupSpec) ipsec.TransportLinkSpec {
-	out := runtimeSpecForInstanceGeneration(spec, inst, groups)
-	if inst.InterfaceName != "" {
-		out.InterfaceName = inst.InterfaceName
-	}
-	if inst.XFRMIfID != 0 {
-		out.XFRMIfID = inst.XFRMIfID
-	}
-	return out
-}
-
-func runtimeSpecForInstanceGeneration(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance, groups []ipsec.LinkGroupSpec) ipsec.TransportLinkSpec {
-	generation := inst.RemoteGeneration
-	if generation == 0 {
-		generation = spec.Generation
-	}
-	out, err := ipsec.RuntimeSpecForPortGeneration(spec, linkGroupForSpec(spec, groups), generation)
-	if err != nil {
-		return spec
-	}
-	return out
-}
-
-func tunnelAddressPrefixForDaemon(addr netip.Addr) string {
-	if !addr.IsValid() {
-		return ""
-	}
-	bits := 32
-	if addr.Is6() {
-		bits = 128
-		if addr.IsLinkLocalUnicast() {
-			bits = 64
-		}
-	}
-	return netip.PrefixFrom(addr, bits).String()
 }
 
 func (d *DaemonService) ipsecRotateCutoverReady() map[string]bool {
@@ -685,218 +353,6 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 	return fields
 }
 
-func (d *DaemonService) filterSAsWithMissingXFRMLinks(ctx context.Context, xfrmDriver ipsec.XFRMDriver, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState, observed *xfrmReconcileObservations) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
-	if inspector, ok := xfrmDriver.(ipsec.XFRMLinkInspector); ok && len(instances) > 0 {
-		return d.filterSAsWithMissingRuntimeLinks(ctx, inspector, desired, instances, sas, observed)
-	}
-	filter, ok := xfrmDriver.(ipsec.XFRMSAFilter)
-	if !ok {
-		return sas, nil, nil
-	}
-	filtered, missing, err := filter.FilterSAsWithMissingLinks(ctx, desired, sas)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, spec := range missing {
-		d.logDebug("ipsec", "xfrm_link_missing", map[string]any{
-			"instance_id": ipsec.LinkInstanceID(spec),
-			"peer":        spec.PeerZone,
-			"interface":   spec.InterfaceName,
-			"netns":       spec.NetNS,
-		})
-	}
-	return filtered, missing, nil
-}
-
-func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector ipsec.XFRMLinkInspector, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState, observed *xfrmReconcileObservations) ([]ipsec.SAState, map[string]ipsec.TransportLinkSpec, error) {
-	if len(desired) == 0 {
-		return sas, nil, nil
-	}
-	missing := make(map[string]ipsec.TransportLinkSpec)
-	missingCandidates := make(map[string][]ipsec.TransportLinkSpec)
-	for _, spec := range desired {
-		id := ipsec.LinkInstanceID(spec)
-		candidates := xfrmLinkInspectCandidates(spec, instances[id])
-		found := false
-		for _, candidate := range candidates {
-			state, err := inspectXFRMLinkWithObservations(ctx, inspector, observed, candidate)
-			if err != nil {
-				return nil, nil, err
-			}
-			matches, reason := xfrmLinkStateMatchReason(state, candidate)
-			d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("pre_reconcile_filter", id, xfrmCandidateRuntime(spec, candidate, instances[id]), candidate, state, matches, reason))
-			if matches {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		missing[id] = spec
-		missingCandidates[id] = candidates
-		d.logDebug("ipsec", "xfrm_link_missing", map[string]any{
-			"instance_id": id,
-			"peer":        spec.PeerZone,
-			"interface":   spec.InterfaceName,
-			"netns":       spec.NetNS,
-			"reason":      "no_candidate_matched",
-			"candidates":  len(candidates),
-		})
-	}
-	if len(missing) == 0 || len(sas) == 0 {
-		return sas, missing, nil
-	}
-	filtered := sas[:0]
-	for _, sa := range sas {
-		if saMatchesMissingXFRMCandidate(sa, missingCandidates) {
-			continue
-		}
-		filtered = append(filtered, sa)
-	}
-	return filtered, missing, nil
-}
-
-func xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
-	if !state.NamespaceExists || !state.InterfaceExists {
-		if !state.NamespaceExists {
-			return false, "missing_namespace"
-		}
-		return false, "missing_interface"
-	}
-	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
-		if !state.InterfaceUp {
-			return false, "interface_down"
-		}
-		return false, "missing_multicast"
-	}
-	if state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
-		return false, "ipv6_addrgen_enabled"
-	}
-	if state.NamespaceForwardingKnown && !state.NamespaceForwarding {
-		return false, "namespace_forwarding_disabled"
-	}
-	if state.InterfaceForwardingKnown && !state.InterfaceForwarding {
-		return false, "interface_forwarding_disabled"
-	}
-	if !spec.LocalTunnelAddr.IsValid() {
-		return true, "matched_no_expected_address"
-	}
-	for _, prefix := range state.Addresses {
-		if prefix.Addr() == spec.LocalTunnelAddr {
-			return true, "matched"
-		}
-	}
-	return false, "missing_address"
-}
-
-func xfrmLinkObservationLogFields(phase, instanceID, runtime string, spec ipsec.TransportLinkSpec, state ipsec.XFRMLinkState, matches bool, reason string) map[string]any {
-	fields := map[string]any{
-		"phase":            phase,
-		"instance_id":      instanceID,
-		"runtime":          runtime,
-		"matched":          matches,
-		"reason":           reason,
-		"peer":             spec.PeerZone.String(),
-		"group":            spec.OverlayID,
-		"transport_id":     spec.TransportID,
-		"interface":        spec.InterfaceName,
-		"xfrm_if_id":       spec.XFRMIfID,
-		"requested_netns":  spec.NetNS,
-		"observed_netns":   state.NetNS.Target(),
-		"namespace_exists": state.NamespaceExists,
-		"interface_exists": state.InterfaceExists,
-		"flags_known":      state.FlagsKnown,
-		"interface_up":     state.InterfaceUp,
-		"multicast":        state.Multicast,
-		"addresses":        xfrmPrefixStrings(state.Addresses),
-	}
-	if spec.LocalTunnelAddr.IsValid() {
-		fields["expected_local_tunnel_addr"] = spec.LocalTunnelAddr.String()
-	}
-	if spec.PeerTunnelAddr.IsValid() {
-		fields["expected_peer_tunnel_addr"] = spec.PeerTunnelAddr.String()
-	}
-	return fields
-}
-
-func xfrmPrefixStrings(prefixes []netip.Prefix) []string {
-	if len(prefixes) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		out = append(out, prefix.String())
-	}
-	return out
-}
-
-func xfrmCandidateRuntime(base, candidate ipsec.TransportLinkSpec, inst ipsec.LinkInstance) string {
-	if candidate.InterfaceName == inst.StagedInterfaceName && candidate.XFRMIfID == inst.StagedXFRMIfID {
-		return "staged"
-	}
-	if candidate.InterfaceName == inst.InterfaceName && candidate.XFRMIfID == inst.XFRMIfID {
-		return "active"
-	}
-	if candidate.InterfaceName == base.InterfaceName && candidate.XFRMIfID == base.XFRMIfID {
-		return "desired"
-	}
-	return "candidate"
-}
-
-func xfrmLinkInspectCandidates(spec ipsec.TransportLinkSpec, inst ipsec.LinkInstance) []ipsec.TransportLinkSpec {
-	candidates := []ipsec.TransportLinkSpec{spec}
-	if inst.InterfaceName != "" || inst.XFRMIfID != 0 {
-		active := spec
-		if inst.InterfaceName != "" {
-			active.InterfaceName = inst.InterfaceName
-		}
-		if inst.XFRMIfID != 0 {
-			active.XFRMIfID = inst.XFRMIfID
-		}
-		active.LocalTunnelAddr = inst.LocalTunnelAddr
-		active.PeerTunnelAddr = inst.PeerTunnelAddr
-		if !containsXFRMInspectCandidate(candidates, active) {
-			candidates = append(candidates, active)
-		}
-	}
-	if inst.StagedInterfaceName != "" || inst.StagedXFRMIfID != 0 {
-		staged := spec
-		if inst.StagedInterfaceName != "" {
-			staged.InterfaceName = inst.StagedInterfaceName
-		}
-		if inst.StagedXFRMIfID != 0 {
-			staged.XFRMIfID = inst.StagedXFRMIfID
-		}
-		staged.LocalTunnelAddr = inst.StagedLocalTunnelAddr
-		staged.PeerTunnelAddr = inst.StagedPeerTunnelAddr
-		if !containsXFRMInspectCandidate(candidates, staged) {
-			candidates = append(candidates, staged)
-		}
-	}
-	return candidates
-}
-
-func containsXFRMInspectCandidate(candidates []ipsec.TransportLinkSpec, candidate ipsec.TransportLinkSpec) bool {
-	for _, existing := range candidates {
-		if existing.InterfaceName == candidate.InterfaceName && existing.XFRMIfID == candidate.XFRMIfID {
-			return true
-		}
-	}
-	return false
-}
-
-func saMatchesMissingXFRMCandidate(sa ipsec.SAState, missing map[string][]ipsec.TransportLinkSpec) bool {
-	for _, candidates := range missing {
-		for _, spec := range candidates {
-			if sa.Name == spec.TransportID || sa.ChildSA == ipsec.ChildSAName(spec) || (spec.XFRMIfID != 0 && sa.XFRMIfID == spec.XFRMIfID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missing map[string]ipsec.TransportLinkSpec, now time.Time) {
 	if len(missing) == 0 {
 		return
@@ -911,25 +367,6 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 		inst.LastTransition = now.Unix()
 		instances[id] = inst
 	}
-}
-
-func (d *DaemonService) ipsecDrivers() (ipsec.IPsecDriver, ipsec.XFRMDriver) {
-	var dryRun *ipsec.DryRunDriver
-	var ipsecDriver ipsec.IPsecDriver
-	var xfrmDriver ipsec.XFRMDriver
-	if d != nil && d.linuxRuntime != nil {
-		ipsecDriver, xfrmDriver = d.linuxRuntime.IPsecDrivers()
-	}
-	if ipsecDriver == nil || xfrmDriver == nil {
-		dryRun = &ipsec.DryRunDriver{}
-	}
-	if ipsecDriver == nil {
-		ipsecDriver = dryRun
-	}
-	if xfrmDriver == nil {
-		xfrmDriver = dryRun
-	}
-	return ipsecDriver, xfrmDriver
 }
 
 func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateFile, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {

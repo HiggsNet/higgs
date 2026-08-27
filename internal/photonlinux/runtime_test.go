@@ -7,9 +7,27 @@ import (
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+type lifecycleDriver struct {
+	transportipsec.DryRunDriver
+	events chan transportipsec.VICIEvent
+}
+
+func (d *lifecycleDriver) SubscribeLifecycleEvents(context.Context) (<-chan transportipsec.VICIEvent, func(), error) {
+	return d.events, func() {}, nil
+}
+
+func mustNewRuntime(t *testing.T, options RuntimeOptions) *Runtime {
+	t.Helper()
+	runtime, err := NewRuntime(options)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	return runtime
+}
+
 func TestRuntimeOwnsIPsecCleanupDependencies(t *testing.T) {
 	driver := &transportipsec.DryRunDriver{}
-	runtime := NewRuntime(RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
 	remaining, cleaned, err := runtime.CleanupIPsecLinks(context.Background(), nil, []string{"already-missing"})
 	if err != nil {
 		t.Fatalf("CleanupIPsecLinks: %v", err)
@@ -21,7 +39,8 @@ func TestRuntimeOwnsIPsecCleanupDependencies(t *testing.T) {
 
 func TestRuntimeClosesOwnedDependenciesOnce(t *testing.T) {
 	closed := 0
-	runtime := NewRuntime(RuntimeOptions{Close: func() error {
+	driver := &transportipsec.DryRunDriver{}
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver, Close: func() error {
 		closed++
 		return nil
 	}})
@@ -33,5 +52,28 @@ func TestRuntimeClosesOwnedDependenciesOnce(t *testing.T) {
 	}
 	if closed != 1 {
 		t.Fatalf("close calls = %d, want 1", closed)
+	}
+}
+
+func TestRuntimeOwnsIPsecObservationAndLifecycleSubscription(t *testing.T) {
+	driver := &lifecycleDriver{events: make(chan transportipsec.VICIEvent, 1)}
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	if sas, err := runtime.ListIPsecSAs(context.Background()); err != nil || len(sas) != 0 {
+		t.Fatalf("ListIPsecSAs = (%v, %v), want empty observation", sas, err)
+	}
+	events, stop, supported, err := runtime.SubscribeIPsecLifecycle(context.Background())
+	if err != nil || !supported || events == nil || stop == nil {
+		t.Fatalf("SubscribeIPsecLifecycle = (events=%v stop=%v supported=%v err=%v)", events != nil, stop != nil, supported, err)
+	}
+	stop()
+}
+
+func TestNewRuntimeRequiresExplicitDrivers(t *testing.T) {
+	driver := &transportipsec.DryRunDriver{}
+	if _, err := NewRuntime(RuntimeOptions{XFRMDriver: driver}); err == nil {
+		t.Fatal("missing IPsec driver was accepted")
+	}
+	if _, err := NewRuntime(RuntimeOptions{IPsecDriver: driver}); err == nil {
+		t.Fatal("missing XFRM driver was accepted")
 	}
 }

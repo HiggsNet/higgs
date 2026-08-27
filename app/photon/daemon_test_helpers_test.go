@@ -31,19 +31,34 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 		store.common = corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil)
 		store.refreshView()
 	}
-	return newDaemonServiceWithStore(rt, store, config, interval)
+	service := newDaemonServiceWithStore(rt, store, config, interval)
+	dryRun := &ipsec.DryRunDriver{}
+	installTestIPsecDrivers(service, dryRun, dryRun)
+	return service
 }
 
 func installTestIPsecDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
 	if service == nil {
 		return
 	}
-	if err := service.installLinuxRuntime(photonlinux.NewRuntime(photonlinux.RuntimeOptions{
-		IPsecDriver: ipsecDriver,
-		XFRMDriver:  xfrmDriver,
-	})); err != nil {
+	if err := service.installLinuxRuntime(newTestLinuxRuntime(ipsecDriver, xfrmDriver)); err != nil {
 		panic(err)
 	}
+}
+
+func newTestLinuxRuntime(ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) *photonlinux.Runtime {
+	return newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+		IPsecDriver: ipsecDriver,
+		XFRMDriver:  xfrmDriver,
+	})
+}
+
+func newTestLinuxRuntimeWithOptions(options photonlinux.RuntimeOptions) *photonlinux.Runtime {
+	runtime, err := photonlinux.NewRuntime(options)
+	if err != nil {
+		panic(err)
+	}
+	return runtime
 }
 
 func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {

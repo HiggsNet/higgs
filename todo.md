@@ -192,7 +192,7 @@ authorization 和 transport records 作为可信事实来源。
   先执行 IPsec teardown 并以当前 VerifiedRevision 持久化 runtime cleanup，再由 common Store 删除 revoked zone
   与 checkpoint；dry-run 只读取两个 owner，不触发平台动作或写入。
 - [x] IPsec cleanup 的资源 owner 校验、指定 link teardown、缺失资源幂等处理和 StrongSwan orphan cleanup 已迁入
-  `internal/photonlinux/ipsec`；`cleanup-ipsec --direct` 也已改为唯一 BoltStore/Linux runtime candidate + revision
+  `internal/photonlinux/ipsec_cleanup.go`；`cleanup-ipsec --direct` 也已改为唯一 BoltStore/Linux runtime candidate + revision
   commit。新增 `internal/photonlinux.Runtime` 作为 Linux 平台组合根，daemon 启动时安装唯一实例，实际持有
   IPsec/XFRM driver 与关闭生命周期，配置 reload 先构造候选再替换并关闭旧实例，daemon 退出统一关闭；cleanup、
   IPsec reconcile、lifecycle watcher、在线 revoked purge 均复用该实例，direct purge/cleanup 才按离线命令生命周期
@@ -202,6 +202,12 @@ authorization 和 transport records 作为可信事实来源。
 - [ ] 配置重载保持管理员显式触发，不监听或轮询 `config.yaml`。后续补齐 `photon daemon reload`，通过 control API
   串行执行 parse/validate/runtime replacement；Linux systemd unit 可选增加 `ExecReload` 映射该 CLI，但配置文件
   变化本身不得自动重启或 reload。Windows 复用同一 CLI/control 语义，不依赖 Unix signal。
+- [x] LinuxRuntime 已接管 IPsec SA live observation、reconcile action apply 和 StrongSwan lifecycle subscription；
+  daemon reconcile/watcher/debug 不再取得 IPsec driver。XFRM batch observe、missing-link filter、diagnostic address 与
+  drift repair 已整组下沉到 `internal/photonlinux/xfrm.go`；这些是真正实现逻辑的 `photonlinux.Runtime` 方法，不是
+  对子 runtime 或同名函数的转发。IPsec/XFRM driver 在配置构造时明确选择并由唯一 Runtime 持有，不在运行中隐式
+  补 DryRun；Runtime 只接收一个 logger，并在内部选择 debug/warn 级别，不保存两套日志回调；迁移期
+  `XFRMDriver()` 访问口和嵌套 IPsec Runtime 均已删除。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制

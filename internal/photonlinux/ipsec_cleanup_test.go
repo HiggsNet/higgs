@@ -1,4 +1,4 @@
-package ipsec
+package photonlinux
 
 import (
 	"context"
@@ -15,9 +15,10 @@ func TestCleanupLinkInstancesTearsDownOwnedResourcesAndIgnoresMissing(t *testing
 	}
 	instance := transportipsec.NewLinkInstance(spec, transportipsec.LinkStateUp, time.Unix(1000, 0))
 	driver := &transportipsec.DryRunDriver{}
-	remaining, cleaned, err := CleanupLinkInstances(context.Background(), map[string]transportipsec.LinkInstance{
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	remaining, cleaned, err := runtime.CleanupIPsecLinks(context.Background(), map[string]transportipsec.LinkInstance{
 		instance.ID: instance,
-	}, []string{"already-missing", instance.ID}, driver, driver)
+	}, []string{"already-missing", instance.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,8 @@ func TestCleanupOrphanConnectionsKeepsReferencedAndForeignNames(t *testing.T) {
 		{Name: "ipsec-orphan"},
 		{Name: "foreign"},
 	}}
-	cleaned, err := CleanupOrphanConnections(context.Background(), map[string]bool{"ipsec-keep": true}, driver)
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	cleaned, err := runtime.CleanupIPsecOrphans(context.Background(), map[string]bool{"ipsec-keep": true})
 	if err != nil {
 		t.Fatal(err)
 	}

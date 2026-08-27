@@ -5,12 +5,13 @@ import (
 	"net/netip"
 	"testing"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDiagnosticAddressForPrefixUsesReservedSuffix(t *testing.T) {
 	prefix := netip.MustParsePrefix("fd00:1234:5678:9abc::/64")
-	addr, ok := diagnosticAddressForPrefix(prefix, 0xfff4)
+	addr, ok := photonlinux.DiagnosticAddressForPrefix(prefix, 0xfff4)
 	if !ok {
 		t.Fatal("diagnosticAddressForPrefix returned ok=false")
 	}
@@ -21,7 +22,7 @@ func TestDiagnosticAddressForPrefixUsesReservedSuffix(t *testing.T) {
 
 func TestDiagnosticAddressForPrefixRejectsNonNodePrefix(t *testing.T) {
 	for _, raw := range []string{"fd00:1234::/80", "10.0.0.0/24"} {
-		if addr, ok := diagnosticAddressForPrefix(netip.MustParsePrefix(raw), 0xfff4); ok {
+		if addr, ok := photonlinux.DiagnosticAddressForPrefix(netip.MustParsePrefix(raw), 0xfff4); ok {
 			t.Fatalf("diagnosticAddressForPrefix(%s) = %s, want rejected", raw, addr)
 		}
 	}
@@ -56,7 +57,7 @@ func TestIPsecDiagnosticSuffixFromPathKeyOrLocalAddress(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := ipsecDiagnosticSuffix(tt.spec)
+			got, ok := photonlinux.IPsecDiagnosticSuffix(tt.spec)
 			if !ok || got != tt.want {
 				t.Fatalf("ipsecDiagnosticSuffix = %#x/%v, want %#x/true", got, ok, tt.want)
 			}
@@ -65,8 +66,8 @@ func TestIPsecDiagnosticSuffixFromPathKeyOrLocalAddress(t *testing.T) {
 }
 
 func TestAssignIPsecDiagnosticAddressesAllowsSameFamilyAddressOnMultipleInterfaces(t *testing.T) {
-	service := &DaemonService{}
 	driver := &ipsec.DryRunDriver{}
+	platformRuntime := newTestLinuxRuntime(driver, driver)
 	prefixes := []netip.Prefix{netip.MustParsePrefix("fd00:1234:5678:9abc::/64")}
 
 	specs := []ipsec.TransportLinkSpec{
@@ -75,7 +76,7 @@ func TestAssignIPsecDiagnosticAddressesAllowsSameFamilyAddressOnMultipleInterfac
 		{InterfaceName: "phx6a", PathKey: "family:ipv6"},
 	}
 	for _, spec := range specs {
-		if err := service.assignIPsecDiagnosticAddresses(context.Background(), driver, spec, prefixes); err != nil {
+		if err := platformRuntime.AssignDiagnosticAddresses(context.Background(), spec, prefixes); err != nil {
 			t.Fatalf("assignIPsecDiagnosticAddresses(%s): %v", spec.InterfaceName, err)
 		}
 	}

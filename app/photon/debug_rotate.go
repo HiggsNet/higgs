@@ -89,14 +89,11 @@ func debugRotate(ctx context.Context, filter string) error {
 			liveErr = err
 		} else {
 			defer platformRuntime.Close()
-			ipsecDriver, _ := platformRuntime.IPsecDrivers()
-			if ipsecDriver != nil {
-				sas, err := ipsecDriver.ListSAs(ctx)
-				if err != nil {
-					liveErr = err
-				} else {
-					liveSAs = linkSAStatesFromIPsecSAs(sas)
-				}
+			sas, err := platformRuntime.ListIPsecSAs(ctx)
+			if err != nil {
+				liveErr = err
+			} else {
+				liveSAs = linkSAStatesFromIPsecSAs(sas)
 			}
 		}
 	}
