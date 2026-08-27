@@ -495,7 +495,6 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 }
 
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
-	udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 	sourceState, _ := buildTestNetworkState(t)
 	snapshot, err := corestate.Snapshot(sourceState.Network, "catofes.")
 	if err != nil {
@@ -607,7 +606,6 @@ drainEvents:
 }
 
 func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
-	udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2240, 0)
 	rt := &Runtime{

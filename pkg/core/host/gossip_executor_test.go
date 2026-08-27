@@ -57,6 +57,17 @@ func (controller *memoryGossipController) SendGossip(_ context.Context, outbound
 	return nil
 }
 
+func (controller *memoryGossipController) ObserveGossipCatalogSummary(string, *corestate.CatalogSummary) {
+}
+
+func (controller *memoryGossipController) ObserveGossipCatalogPage(string, *corestate.CatalogPage) {}
+
+func (controller *memoryGossipController) FilterGossipCatalogPage(_ context.Context, _ string, page *corestate.CatalogPage, _ time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
+	return nil, page
+}
+
+func (controller *memoryGossipController) ObserveGossipChunkRepair(string) {}
+
 func (controller *memoryGossipController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
 	controller.trace = append(controller.trace, "backoff")
 	return nil

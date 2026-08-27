@@ -17,6 +17,8 @@ func SyncEventName(event SyncEvent) string {
 		return "catalog_page_timeout"
 	case *RoundTimeoutEvent:
 		return "round_timeout"
+	case *ChunkRepairTimeoutEvent:
+		return "chunk_repair_timeout"
 	case *ObjectPullResultEvent:
 		return "object_pull_result"
 	case *ObjectChunkEvent:
@@ -44,6 +46,8 @@ func SyncEventPeerID(event SyncEvent) string {
 	case *CatalogPageTimeoutEvent:
 		return event.PeerID
 	case *RoundTimeoutEvent:
+		return event.PeerID
+	case *ChunkRepairTimeoutEvent:
 		return event.PeerID
 	case *ObjectPullResultEvent:
 		return event.PeerID

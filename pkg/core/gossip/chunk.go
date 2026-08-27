@@ -41,7 +41,6 @@ type chunkAssembly struct {
 	created      time.Time
 	updated      time.Time
 	repairRounds int
-	repairTimer  *time.Timer
 }
 
 // ChunkAssemblyStore verifies and assembles bounded out-of-order object
@@ -119,9 +118,6 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 	if entry.received != int(entry.total) {
 		return nil, false, nil
 	}
-	if entry.repairTimer != nil {
-		entry.repairTimer.Stop()
-	}
 	data := make([]byte, 0, entry.bytes)
 	for _, part := range entry.chunks {
 		if part == nil {
@@ -138,46 +134,45 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 	return data, true, nil
 }
 
-func (s *ChunkAssemblyStore) ScheduleRepair(peerID string, chunk *ObjectChunk, send func(*ObjectChunkNACK)) {
-	if s == nil || chunk == nil || send == nil {
-		return
+// RepairDeadline returns the quiet-period deadline for an incomplete transfer.
+// Scheduling resources are owned by HostRuntime.
+func (s *ChunkAssemblyStore) RepairDeadline(peerID string, chunk *ObjectChunk) (time.Time, bool) {
+	if s == nil || chunk == nil {
+		return time.Time{}, false
 	}
 	key := chunkAssemblyKey(peerID, chunk)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	entry := s.entries[key]
 	if entry == nil || entry.received == int(entry.total) || entry.repairRounds >= MaxChunkRepairRounds {
-		s.mu.Unlock()
-		return
+		return time.Time{}, false
 	}
-	if entry.repairTimer != nil {
-		entry.repairTimer.Stop()
+	return entry.updated.Add(ChunkRepairQuiet), true
+}
+
+// BuildRepairNACK consumes one repair round at a HostRuntime timer fire.
+func (s *ChunkAssemblyStore) BuildRepairNACK(peerID string, transferID []byte) *ObjectChunkNACK {
+	if s == nil || peerID == "" || len(transferID) == 0 {
+		return nil
 	}
-	entry.repairTimer = time.AfterFunc(ChunkRepairQuiet, func() {
-		s.mu.Lock()
-		current := s.entries[key]
-		if current == nil || current.received == int(current.total) || current.repairRounds >= MaxChunkRepairRounds {
-			s.mu.Unlock()
-			return
-		}
-		missing := MissingChunkIndexes(current.chunks, MaxChunkNACKIndexes)
-		if len(missing) == 0 {
-			s.mu.Unlock()
-			return
-		}
-		current.repairRounds++
-		transferID := append([]byte(nil), current.transferID...)
-		s.mu.Unlock()
-		send(&ObjectChunkNACK{TransferID: transferID, Missing: missing})
-	})
-	s.mu.Unlock()
+	key := peerID + "|" + hex.EncodeToString(transferID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.entries[key]
+	if entry == nil || entry.received == int(entry.total) || entry.repairRounds >= MaxChunkRepairRounds {
+		return nil
+	}
+	missing := MissingChunkIndexes(entry.chunks, MaxChunkNACKIndexes)
+	if len(missing) == 0 {
+		return nil
+	}
+	entry.repairRounds++
+	return &ObjectChunkNACK{TransferID: append([]byte(nil), entry.transferID...), Missing: missing}
 }
 
 func (s *ChunkAssemblyStore) pruneLocked(now time.Time) {
 	for key, entry := range s.entries {
 		if entry == nil || now.Sub(entry.updated) > ChunkAssemblyTTL && now.Sub(entry.created) > ChunkAssemblyTTL {
-			if entry != nil && entry.repairTimer != nil {
-				entry.repairTimer.Stop()
-			}
 			delete(s.entries, key)
 		}
 	}
@@ -191,11 +186,21 @@ func (s *ChunkAssemblyStore) DropPeer(peerID string) {
 	defer s.mu.Unlock()
 	for key, entry := range s.entries {
 		if entry != nil && entry.peerID == peerID {
-			if entry.repairTimer != nil {
-				entry.repairTimer.Stop()
-			}
 			delete(s.entries, key)
 		}
+	}
+}
+
+// Close discards every incomplete assembly. It is idempotent and is called by
+// the owning HostRuntime.
+func (s *ChunkAssemblyStore) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.entries {
+		delete(s.entries, key)
 	}
 }
 

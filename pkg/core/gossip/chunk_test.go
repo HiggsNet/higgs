@@ -69,22 +69,20 @@ func TestChunkAssemblyQuietNACKRepairsOutOfOrderLoss(t *testing.T) {
 		{TransferID: id, Object: ObjectPullZone, Zone: "catofes.", ObjectHash: hash[:], Index: 2, Total: 3, Data: []byte("two")},
 	}
 	store := NewChunkAssemblyStore()
-	nacks := make(chan *ObjectChunkNACK, 1)
+	now := time.Unix(100, 0)
 	for _, index := range []int{2, 0} {
-		if _, complete, err := store.Add("peer-a", chunks[index], time.Now()); err != nil || complete {
+		if _, complete, err := store.Add("peer-a", chunks[index], now); err != nil || complete {
 			t.Fatalf("add[%d]: complete=%t err=%v", index, complete, err)
 		}
-		store.ScheduleRepair("peer-a", chunks[index], func(nack *ObjectChunkNACK) { nacks <- nack })
 	}
-	select {
-	case nack := <-nacks:
-		if len(nack.Missing) != 1 || nack.Missing[0] != 1 {
-			t.Fatalf("nack = %#v", nack)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("repair NACK not emitted after quiet period")
+	if deadline, ok := store.RepairDeadline("peer-a", chunks[0]); !ok || !deadline.Equal(now.Add(ChunkRepairQuiet)) {
+		t.Fatalf("repair deadline = %v, %t", deadline, ok)
 	}
-	got, complete, err := store.Add("peer-a", chunks[1], time.Now())
+	nack := store.BuildRepairNACK("peer-a", id)
+	if nack == nil || len(nack.Missing) != 1 || nack.Missing[0] != 1 {
+		t.Fatalf("nack = %#v", nack)
+	}
+	got, complete, err := store.Add("peer-a", chunks[1], now)
 	if err != nil || !complete || string(got) != string(data) {
 		t.Fatalf("repair completion: data=%q complete=%t err=%v", got, complete, err)
 	}
@@ -102,6 +100,20 @@ func TestChunkAssemblyDropPeerEnforcesRoundDeadline(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.entries) != 0 {
 		t.Fatalf("assemblies after deadline = %d", len(store.entries))
+	}
+}
+
+func TestChunkAssemblyCloseDiscardsPendingRepair(t *testing.T) {
+	id := []byte("0123456789abcdef")
+	chunk := &ObjectChunk{TransferID: id, Object: ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 0, Total: 2, Data: []byte("partial")}
+	store := NewChunkAssemblyStore()
+	if _, _, err := store.Add("peer-a", chunk, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store.Close()
+	if nack := store.BuildRepairNACK("peer-a", id); nack != nil {
+		t.Fatalf("repair remains after close: %#v", nack)
 	}
 }
 

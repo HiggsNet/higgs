@@ -161,6 +161,13 @@ authorization 和 transport records 作为可信事实来源。
 - [x] object-pull 请求/响应 exchange 已归入公共 gossip，bounded worker、背压和 completion delivery 已归入
   公共 HostRuntime；Linux daemon 私有 pool、result channel 和三处额外 event-loop 分支已删除。Linux 只提供
   TCP dial/listen/deadline 与观测 adapter，Linux/Windows 不再各写一份 object-pull host loop。
+- [x] 单个 gossip event 的 `Engine.HandleEvent -> ordered action executor -> NetworkChanged accumulation` 已收进
+  公共 `HostRuntime.HandleGossipEvent`。Pong/catalog enrichment 与 round-timeout chunk cleanup 的类型解释也只有
+  公共 host 一份；chunk assembly 已从 Linux 包级全局变量变为每个 Runtime 独占的可丢失内存。Linux 只提供
+  当前 state 的 catalog filter、传输/观测 capability，以及日志和 session 完成后的平台收尾。
+- [x] chunk quiet-repair 已删除 `ChunkAssemblyStore` 内部 `time.AfterFunc`：gossip 只计算 repair deadline 和
+  缺失索引，HostRuntime Scheduler 以 peer/transfer generation 统一 replace/cancel/stale-fire，并把到期事件经
+  同一个 host queue 发送 NACK；`pkg/core/gossip` 已不再创建任何 timer/ticker/goroutine。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制

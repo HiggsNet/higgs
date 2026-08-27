@@ -5,6 +5,7 @@ package host
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,7 @@ type Runtime struct {
 	objectPullJobs    chan gossip.StartObjectPullAction
 	objectPullWG      sync.WaitGroup
 	objectPullPending atomic.Int64
+	gossipChunks      *gossip.ChunkAssemblyStore
 	stopped           bool
 }
 
@@ -57,8 +59,9 @@ func NewRuntime(clock Clock, eventBuffer int) *Runtime {
 		eventBuffer = DefaultEventBuffer
 	}
 	runtime := &Runtime{
-		Gossip: gossip.NewEngine(),
-		events: make(chan Event, eventBuffer),
+		Gossip:       gossip.NewEngine(),
+		events:       make(chan Event, eventBuffer),
+		gossipChunks: gossip.NewChunkAssemblyStore(),
 	}
 	runtime.scheduler = NewScheduler(clock, runtime.events)
 	return runtime
@@ -110,7 +113,20 @@ func (runtime *Runtime) GossipEventFor(event Event) (gossip.SyncEvent, bool) {
 	case GossipEvent:
 		return typed.Value, typed.Value != nil
 	case TimerFired:
-		if typed.ID.Namespace != GossipTimerNamespace || !runtime.schedulerForRead().Accept(typed) {
+		if typed.ID.Namespace != GossipTimerNamespace && typed.ID.Namespace != GossipChunkRepairNamespace {
+			return nil, false
+		}
+		if !runtime.schedulerForRead().Accept(typed) {
+			return nil, false
+		}
+		if typed.ID.Namespace == GossipChunkRepairNamespace {
+			transferID, err := hex.DecodeString(typed.ID.Key)
+			if err != nil {
+				return nil, false
+			}
+			return &gossip.ChunkRepairTimeoutEvent{PeerID: typed.ID.Owner, TransferID: transferID}, true
+		}
+		if typed.ID.Namespace != GossipTimerNamespace {
 			return nil, false
 		}
 		switch typed.ID.Key {
@@ -196,6 +212,9 @@ func (runtime *Runtime) Stop() {
 	scheduler.Stop()
 	runtime.objectPullWG.Wait()
 	runtime.objectPullPending.Store(0)
+	if runtime.gossipChunks != nil {
+		runtime.gossipChunks.Close()
+	}
 }
 
 func (runtime *Runtime) schedulerForRead() *Scheduler {

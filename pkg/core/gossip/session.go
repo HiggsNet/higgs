@@ -81,6 +81,15 @@ type CatalogPageTimeoutEvent struct {
 
 func (*CatalogPageTimeoutEvent) SyncEventMarker() {}
 
+// ChunkRepairTimeoutEvent is produced by HostRuntime's scheduler. It is a
+// protocol runtime event handled before SyncSession FSM advancement.
+type ChunkRepairTimeoutEvent struct {
+	PeerID     string
+	TransferID []byte
+}
+
+func (*ChunkRepairTimeoutEvent) SyncEventMarker() {}
+
 type RoundTimeoutEvent struct {
 	PeerID string
 }

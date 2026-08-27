@@ -310,70 +310,44 @@ func (d *DaemonService) respondAnnouncePlanTo(peerID string, plan gossip.Datagra
 
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
 	peerID := gossip.SyncEventPeerID(event)
-	if peerID == "" {
-		d.logDebug("sync", "event_dropped", map[string]any{"reason": "no_peer_id"})
+	eventNow := d.Sync.now()
+	mutations := newSyncPeerStateMutationBatch(peerID)
+	controller := &daemonGossipActionController{
+		daemon: d, mutations: mutations, now: eventNow, limits: syncLimits(d.Sync.Config),
+	}
+	result, err := d.hostRuntime.HandleGossipEvent(ctx, event, eventNow, controller)
+	if err != nil {
+		d.logDebug("sync", "event_dropped", map[string]any{"peer_id": peerID, "error": err})
 		return false
 	}
 	session := d.hostRuntime.Gossip.Session(peerID)
-	if session == nil {
-		d.logDebug("sync", "event_dropped", map[string]any{
-			"peer_id": peerID,
-			"reason":  "no_session",
-		})
-		return false
-	}
-	// Enrich packet-derived events with current-state derivations right before
-	// the FSM consumes them, so stale snapshots are not used after state changes
-	// (e.g. a record_put that arrived while the event was queued).
-	switch e := event.(type) {
-	case *gossip.PongReceivedEvent:
-		if e.Pong != nil {
-			if e.Pong.Summary != nil {
-				recordCatalogSummary(d.PeerObservability, peerID, e.Pong.Summary, d.Sync.now())
-			}
-		}
-	case *gossip.CatalogSummaryReceivedEvent:
-		recordCatalogSummary(d.PeerObservability, peerID, e.Summary, d.Sync.now())
-	case *gossip.CatalogPageReceivedEvent:
-		e.LocalEntries, e.Page = d.StateStore.filteredCatalogProjection(peerID, e.Page, d.Sync.now())
-		recordCatalogPage(d.PeerObservability, peerID, e.Page, d.Sync.now())
-	}
-	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
-		udpChunkAssemblies.DropPeer(peerID)
-	}
-	engineResult := d.hostRuntime.Gossip.HandleEvent(event, d.Sync.now())
-	if engineResult.Err != nil {
+	if result.ProtocolErr != nil {
 		d.logWarn("sync", "session_event_error", map[string]any{
 			"peer_id": peerID,
-			"error":   engineResult.Err,
+			"error":   result.ProtocolErr,
 		})
 	}
-	actions := engineResult.Actions
 	eventName := gossip.SyncEventName(event)
-	eventNow := d.Sync.now()
 	activeSession := &gossip.SyncSession{State: session.State}
-	mutations := newSyncPeerStateMutationBatch(peerID)
 	recordSyncActivePull(d.PeerObservability, peerID, eventName, activeSession, eventNow)
-	if session.State != engineResult.OldState {
+	if result.NewState != result.OldState {
 		d.logDebug("sync", "session_state_changed", map[string]any{
 			"peer_id":   peerID,
 			"event":     fmt.Sprintf("%T", event),
-			"old_state": engineResult.OldState,
-			"new_state": session.State,
-			"pending":   session.PendingCount(),
-			"inflight":  session.InflightCount(),
+			"old_state": result.OldState,
+			"new_state": result.NewState,
+			"pending":   result.Pending,
+			"inflight":  result.Inflight,
 		})
 	}
-	networkChanged := d.executeSyncActionsWithMutations(ctx, session, actions, mutations)
-	session.AccumulateNetworkChanged(networkChanged)
-	if session.Done() {
+	if result.Done {
 		mutations.addCompletion(session, eventNow)
 	}
 	mutations.commit(d)
-	if session.Done() {
+	if result.Done {
 		d.completeSyncSessionAfterPeerState(session, session.NetworkChanged())
 	}
-	return networkChanged
+	return result.NetworkChanged
 }
 
 func filterRemoteCatalogPage(state *stateFile, peerID string, page *corestate.CatalogPage, now time.Time) *corestate.CatalogPage {
@@ -646,6 +620,14 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogPage(peerID 
 	recordReadOnlyResponder(controller.daemon.PeerObservability, peerID, "catalog_page", "", controller.now)
 }
 
+func (controller *daemonGossipActionController) FilterGossipCatalogPage(_ context.Context, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
+	return controller.daemon.StateStore.filteredCatalogProjection(peerID, page, now)
+}
+
+func (controller *daemonGossipActionController) ObserveGossipChunkRepair(peerID string) {
+	recordDatagramRepairNACK(controller.daemon.PeerObservability, peerID, false, controller.now)
+}
+
 func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerID, cursor string, err error) {
 	budget := controller.GossipDatagramBudget()
 	recordDatagramTooLarge(controller.daemon.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, controller.now)
@@ -818,20 +800,6 @@ func (controller *daemonGossipActionController) ReportGossipIssue(issue corehost
 		"phase":   issue.Phase,
 		"error":   issue.Err,
 	})
-}
-
-func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction, mutations *syncPeerStateMutationBatch) bool {
-	if len(actions) == 0 || session == nil {
-		return false
-	}
-	controller := &daemonGossipActionController{
-		daemon:    d,
-		mutations: mutations,
-		now:       d.Sync.now(),
-		limits:    syncLimits(d.Sync.Config),
-	}
-	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, controller)
-	return result.NetworkChanged
 }
 
 func (d *DaemonService) syncDatagramBudget() int {

@@ -189,7 +189,13 @@ func publishSOCKS5ServiceWithRuntime(rt *Runtime, region, address string, port u
 }
 
 func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction) bool {
-	return d.executeSyncActionsWithMutations(ctx, session, actions, nil)
+	if d == nil || session == nil || len(actions) == 0 {
+		return false
+	}
+	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, &daemonGossipActionController{
+		daemon: d, now: d.Sync.now(), limits: syncLimits(d.Sync.Config),
+	})
+	return result.NetworkChanged
 }
 
 func recordPeerSync(state *stateFile, peerID string, err error) {

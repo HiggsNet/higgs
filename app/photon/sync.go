@@ -35,7 +35,6 @@ const observedPathMigrationGrace = time.Minute
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
-var udpChunkAssemblies = gossip.NewChunkAssemblyStore()
 var udpSentChunkCache = gossip.NewSentChunkCache()
 
 type SyncRuntime struct {

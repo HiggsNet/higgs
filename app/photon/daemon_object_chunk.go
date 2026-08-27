@@ -30,7 +30,7 @@ func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr
 
 	chunk := message.ObjectChunk
 	now := d.Sync.now()
-	data, complete, err := udpChunkAssemblies.Add(message.PeerID, chunk, now)
+	data, complete, err := d.hostRuntime.AddGossipObjectChunk(message.PeerID, chunk, now)
 	if err != nil {
 		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
 		_ = d.postSyncEvent(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err})
@@ -38,21 +38,7 @@ func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr
 	}
 	if !complete {
 		if d.Sync.Transport != nil {
-			udpChunkAssemblies.ScheduleRepair(message.PeerID, chunk, func(nack *gossip.ObjectChunkNACK) {
-				msg := &gossip.Message{
-					Type:            gossip.MessageObjectChunkNACK,
-					ObjectChunkNACK: nack,
-				}
-				var err error
-				if replyAddr != nil {
-					err = d.Sync.Transport.SendTo(message.PeerID, replyAddr, msg)
-				} else {
-					err = d.Sync.Transport.Send(message.PeerID, msg)
-				}
-				if err == nil {
-					recordDatagramRepairNACK(d.PeerObservability, message.PeerID, false, d.Sync.now())
-				}
-			})
+			return d.hostRuntime.ScheduleGossipChunkRepair(message.PeerID, chunk)
 		}
 		return nil
 	}
