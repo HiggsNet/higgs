@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -25,14 +26,89 @@ const (
 // the in-memory peer address book. Suppressed peers remain dialable but do not
 // regain a checkpoint until their platform cleanup marker is cleared.
 type GossipDiscoveryInput struct {
-	LocalPeerID   string
-	ManagedZone   zone.ZonePath
-	Network       *zone.NetworkState
-	Peers         map[string]corestate.PeerCheckpoint
-	Suppressed    map[string]bool
-	Bootstrap     map[string]*net.UDPAddr
-	EndpointGrace time.Duration
-	SourceOrder   []string
+	LocalPeerID    string
+	ManagedZone    zone.ZonePath
+	Network        *zone.NetworkState
+	Peers          map[string]corestate.PeerCheckpoint
+	Suppressed     map[string]bool
+	Bootstrap      map[string]*net.UDPAddr
+	BootstrapPeers []string
+	EndpointGrace  time.Duration
+	SourceOrder    []string
+}
+
+const GossipRelayMinInterval = time.Second
+
+// GossipOutboundPeers returns every peer that common gossip may actively
+// contact: configured bootstrap peers, verified signed endpoints and active
+// verified observed paths. The result is detached and de-duplicated.
+func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
+	seen := make(map[string]bool)
+	peers := make([]string, 0, len(input.Bootstrap)+len(input.Peers))
+	add := func(peerID string) {
+		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] {
+			return
+		}
+		seen[peerID] = true
+		peers = append(peers, peerID)
+	}
+	for _, peerID := range input.BootstrapPeers {
+		add(peerID)
+	}
+	bootstrap := make([]string, 0, len(input.Bootstrap))
+	for peerID := range input.Bootstrap {
+		bootstrap = append(bootstrap, peerID)
+	}
+	sort.Strings(bootstrap)
+	for _, peerID := range bootstrap {
+		add(peerID)
+	}
+	discovered := gossip.ExtractPeerEndpointsAt(input.Network, now)
+	discoveredIDs := make([]string, 0, len(discovered))
+	for peerID := range discovered {
+		discoveredIDs = append(discoveredIDs, peerID)
+	}
+	sort.Strings(discoveredIDs)
+	for _, peerID := range discoveredIDs {
+		add(peerID)
+	}
+	observed := make([]string, 0, len(input.Peers))
+	for peerID, checkpoint := range input.Peers {
+		if discoveryObservedActive(checkpoint, now) && discoveryPeerVerified(input, peerID, now) {
+			observed = append(observed, peerID)
+		}
+	}
+	sort.Strings(observed)
+	for _, peerID := range observed {
+		add(peerID)
+	}
+	return peers
+}
+
+func GossipBackoffRemaining(peer corestate.PeerCheckpoint, now time.Time) time.Duration {
+	until := time.Unix(peer.BackoffUntilUnix, 0)
+	if peer.BackoffUntilUnix == 0 || !until.After(now) {
+		return 0
+	}
+	return until.Sub(now)
+}
+
+// ShouldRelayGossipUpdate applies the common relay-loop and throttling policy.
+func ShouldRelayGossipUpdate(peer corestate.PeerCheckpoint, peerID, sourcePeerID, catalogRoot string, now time.Time) (bool, string) {
+	switch {
+	case peerID == "":
+		return false, "empty_peer_id"
+	case peerID == sourcePeerID:
+		return false, "source_peer"
+	case GossipBackoffRemaining(peer, now) > 0:
+		return false, "backoff"
+	case catalogRoot != "" && peer.LastRelayCatalogRootHex == catalogRoot:
+		return false, "relay_root_unchanged"
+	case peer.LastRelayUnix != 0 && now.Sub(time.Unix(peer.LastRelayUnix, 0)) < GossipRelayMinInterval:
+		return false, "relay_throttled"
+	default:
+		return true, ""
+	}
 }
 
 type GossipPeerAddressUpdate struct {
@@ -80,6 +156,81 @@ func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint
 		ObservedFailures:  corestate.PatchField[int]{Set: true, Value: failures},
 		ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: grace},
 	}, true
+}
+
+// FilterGossipCatalogPage removes the locally managed zone and temporarily
+// rejected remote roots using only common verified/checkpoint state.
+func FilterGossipCatalogPage(input GossipDiscoveryInput, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
+	local := corestate.ZoneDigests(input.Network)
+	if page == nil || len(page.Entries) == 0 {
+		return local, page
+	}
+	peer := input.Peers[peerID]
+	filtered := *page
+	filtered.Entries = make([]corestate.ZoneDigest, 0, len(page.Entries))
+	for _, entry := range page.Entries {
+		if entry.Zone == input.ManagedZone {
+			continue
+		}
+		rejected, ok := peer.RejectedObjects[entry.Zone]
+		if ok && bytes.Equal(rejected.RootHash, entry.RootHash) && rejected.UntilUnix != 0 && now.Before(time.Unix(rejected.UntilUnix, 0)) {
+			continue
+		}
+		filtered.Entries = append(filtered.Entries, entry)
+	}
+	return local, &filtered
+}
+
+// ResolveGossipObjectPullAddress selects the TCP object-pull destination from
+// the same verified/checkpoint/bootstrap inputs used by UDP discovery. TCP and
+// UDP intentionally share the numeric endpoint port.
+func ResolveGossipObjectPullAddress(input GossipDiscoveryInput, peerID string, now time.Time) string {
+	if peerID == "" {
+		return ""
+	}
+	peer := input.Peers[peerID]
+	if discoveryObservedActive(peer, now) && discoveryPeerVerified(input, peerID, now) {
+		if addr := discoveryTCPAddress(peer.ObservedEndpoint); addr != "" {
+			return addr
+		}
+	}
+	if addr := discoveryTCPAddressFromUDP(input.Bootstrap[peerID]); addr != "" {
+		return addr
+	}
+	var private string
+	for _, entry := range sortedDiscoveryEndpoints(gossip.ExtractPeerEndpointsAt(input.Network, now)[peerID]) {
+		udp, err := entry.UDPAddr()
+		if err != nil {
+			continue
+		}
+		addr := discoveryTCPAddressFromUDP(udp)
+		if addr == "" {
+			continue
+		}
+		if discoveryEndpointRank(entry) == 2 {
+			if private == "" {
+				private = addr
+			}
+			continue
+		}
+		return addr
+	}
+	return private
+}
+
+func discoveryTCPAddress(endpoint string) string {
+	udp, err := net.ResolveUDPAddr("udp", endpoint)
+	if err != nil {
+		return ""
+	}
+	return discoveryTCPAddressFromUDP(udp)
+}
+
+func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
+	if udp == nil {
+		return ""
+	}
+	return (&net.TCPAddr{IP: udp.IP, Port: udp.Port, Zone: udp.Zone}).String()
 }
 
 // RefreshGossipDiscovery persists checkpoint changes before publishing the

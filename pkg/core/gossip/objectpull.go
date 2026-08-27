@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -32,6 +33,37 @@ type ObjectPullResponse struct {
 	Snapshot *corestate.ZoneSnapshot   `msgpack:"s,omitempty"`
 	Record   *corestate.RecordSnapshot `msgpack:"r,omitempty"`
 	Error    string                    `msgpack:"e,omitempty"`
+}
+
+// BuildObjectPullResponse resolves a protocol request from detached verified
+// state. Live transport, checkpoint and platform runtime state are irrelevant
+// to serving the requested immutable object.
+func BuildObjectPullResponse(network *zone.NetworkState, req *ObjectPullRequest, now time.Time) *ObjectPullResponse {
+	if network == nil || req == nil || !req.Zone.Valid() {
+		return &ObjectPullResponse{Error: "invalid request"}
+	}
+	switch req.Type {
+	case ObjectPullZone:
+		if network.IsZoneRevoked(req.Zone, now) {
+			return &ObjectPullResponse{Error: "zone revoked"}
+		}
+		snapshot, err := corestate.Snapshot(network, req.Zone)
+		if err != nil {
+			return &ObjectPullResponse{Error: err.Error()}
+		}
+		return &ObjectPullResponse{OK: true, Snapshot: snapshot}
+	case ObjectPullRecord:
+		if req.Key == "" {
+			return &ObjectPullResponse{Error: "missing key"}
+		}
+		record, err := corestate.RecordSnapshotFor(network, req.Zone, req.Key, req.Version)
+		if err != nil {
+			return &ObjectPullResponse{Error: err.Error()}
+		}
+		return &ObjectPullResponse{OK: true, Record: record}
+	default:
+		return &ObjectPullResponse{Error: "unsupported request type"}
+	}
 }
 
 // ExchangeObjectPull performs the platform-neutral request/response exchange

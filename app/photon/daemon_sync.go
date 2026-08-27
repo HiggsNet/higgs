@@ -45,17 +45,18 @@ func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool
 		return nil
 	}
 	now := d.Sync.now()
-	projection := d.StateStore.syncTimerProjection(d.Sync.Config, now)
-	peers := projection.peers
+	input := d.currentGossipDiscoveryInput()
+	peers := corehost.GossipOutboundPeers(input, now)
 	if len(peers) == 0 {
 		return nil
 	}
+	summary := corestate.CatalogSummaryFor(input.Network)
 	d.logDebug("sync", "event_loop_timer", map[string]any{
 		"peer_count": len(peers),
 		"force":      force,
 	})
 	for _, peerID := range peers {
-		if !force && backoffRemaining(projection.peerStates[peerID], now) > 0 {
+		if !force && corehost.GossipBackoffRemaining(input.Peers[peerID], now) > 0 {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "backoff",
@@ -72,7 +73,7 @@ func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool
 		d.hostRuntime.Gossip.NewSession(peerID)
 		event := &gossip.SyncTimerEvent{
 			PeerID:       peerID,
-			LocalSummary: projection.summary,
+			LocalSummary: summary,
 		}
 		// This function already runs on the daemon event-loop goroutine. Execute
 		// the initial event directly so a saturated internal event queue cannot
@@ -175,16 +176,17 @@ func (d *DaemonService) respondFetchZoneTo(peerID string, path zone.ZonePath, re
 		return nil
 	}
 	budget := d.syncDatagramBudget()
-	plan, err := d.StateStore.fetchZonePlanProjection(path, budget, d.Sync.now())
-	if err != nil {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
 			"peer_id": peerID,
 			"zone":    path,
-			"error":   err,
+			"error":   zone.ErrZoneNotFound,
 			"via":     "responder",
 		})
 		return nil
 	}
+	plan := gossip.PlanSnapshotDatagrams(view.State.Network, []zone.ZonePath{path}, budget, d.Sync.now())
 	return d.respondAnnouncePlanTo(peerID, plan, budget, replyAddr)
 }
 
@@ -197,8 +199,17 @@ func (d *DaemonService) respondFetchZoneChunksTo(peerID string, path zone.ZonePa
 		return nil
 	}
 	now := d.Sync.now()
-	plan, snapshot, err := d.StateStore.fetchZoneChunkProjection(path, d.syncDatagramBudget(), now)
-	if err != nil || snapshot == nil {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil {
+		return nil
+	}
+	network := view.State.Network
+	plan := gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, d.syncDatagramBudget(), now)
+	if network.IsZoneRevoked(path, now) {
+		return nil
+	}
+	snapshot, err := corestate.Snapshot(network, path)
+	if err != nil {
 		return nil
 	}
 	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, d.Sync.Transport, peerID, replyAddr, now, d.Sync.logger())
@@ -555,7 +566,7 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogPage(peerID 
 }
 
 func (controller *daemonGossipActionController) FilterGossipCatalogPage(_ context.Context, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	return controller.daemon.StateStore.filteredCatalogProjection(peerID, page, now)
+	return corehost.FilterGossipCatalogPage(controller.daemon.currentGossipDiscoveryInput(), peerID, page, now)
 }
 
 func (controller *daemonGossipActionController) ObserveGossipChunkRepair(peerID string) {
@@ -868,16 +879,13 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 	now := d.Sync.now()
 	relayed := 0
-	projection := d.StateStore.relayProjection(d.Sync.Config, now, d.syncDatagramBudget())
-	if projection.err != nil {
-		d.logWarn("sync", "relay_catalog_summary_failed", map[string]any{"error": projection.err})
+	input := d.currentGossipDiscoveryInput()
+	summary := corestate.CatalogSummaryFor(input.Network)
+	if summary == nil {
 		return
 	}
-	if projection.summary == nil {
-		return
-	}
-	peers, peerStates := projection.peers, projection.peerStates
-	catalogRoot := hex.EncodeToString(projection.summary.CatalogRoot)
+	peers := corehost.GossipOutboundPeers(input, now)
+	catalogRoot := hex.EncodeToString(summary.CatalogRoot)
 	for _, peerID := range peers {
 		if peerID == sourcePeerID {
 			continue
@@ -886,7 +894,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			recordRelaySuppression(d.PeerObservability, peerID, "relay_fanout_limited", now)
 			continue
 		}
-		allowed, reason := shouldRelayToPeer(peerStates[peerID], peerID, sourcePeerID, catalogRoot, now)
+		allowed, reason := corehost.ShouldRelayGossipUpdate(input.Peers[peerID], peerID, sourcePeerID, catalogRoot, now)
 		if !allowed {
 			recordRelaySuppression(d.PeerObservability, peerID, reason, now)
 			continue
@@ -898,7 +906,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 		d.hostRuntime.Gossip.NewSession(peerID)
 		if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{
 			PeerID:       peerID,
-			LocalSummary: projection.summary,
+			LocalSummary: summary,
 		}); err != nil {
 			d.logWarn("sync", "relay_event_full", map[string]any{"peer_id": peerID, "source_peer": sourcePeerID})
 			d.hostRuntime.Gossip.RemoveSession(peerID)

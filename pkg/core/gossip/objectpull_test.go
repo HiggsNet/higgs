@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net"
 	"testing"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -78,6 +79,27 @@ func TestObjectPullResponseRoundTrip(t *testing.T) {
 	}
 	if !got.OK || got.Snapshot == nil || got.Snapshot.Zone != "catofes." {
 		t.Fatalf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestBuildObjectPullResponseUsesDetachedVerifiedObject(t *testing.T) {
+	network := zone.NewNetworkState()
+	path := zone.ZonePath("node-a.catofes.")
+	state := zone.NewZoneState(path, &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1})
+	state.Records["endpoint"] = &zone.Record{Zone: path, Key: "endpoint", Type: "test.endpoint", Value: []byte("value"), Version: 1}
+	network.Zones[path] = state
+
+	response := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
+	if !response.OK || response.Record == nil || response.Record.Record == nil {
+		t.Fatalf("response = %#v", response)
+	}
+	response.Record.Record.Value[0] = 'X'
+	again := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
+	if got := string(again.Record.Record.Value); got != "value" {
+		t.Fatalf("response mutation leaked into verified state: %q", got)
+	}
+	if invalid := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path}, time.Unix(100, 0)); invalid.OK || invalid.Error != "missing key" {
+		t.Fatalf("invalid response = %#v", invalid)
 	}
 }
 

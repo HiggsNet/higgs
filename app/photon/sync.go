@@ -25,7 +25,6 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-const relayMinInterval = time.Second
 const defaultSyncRoundTimeout = 5 * time.Second
 const syncOnceResponderQuiet = 500 * time.Millisecond
 const maxRelayFanoutPerUpdate = 8
@@ -474,23 +473,6 @@ func rejectedDigestKey(path zone.ZonePath) string {
 	return "zone:" + path.String()
 }
 
-func shouldRelayToPeer(peerState syncPeerState, peerID, sourcePeerID, catalogRoot string, now time.Time) (bool, string) {
-	switch {
-	case peerID == "":
-		return false, "empty_peer_id"
-	case peerID == sourcePeerID:
-		return false, "source_peer"
-	case backoffRemaining(peerState, now) > 0:
-		return false, "backoff"
-	case catalogRoot != "" && peerState.LastRelayCatalogRootHex == catalogRoot:
-		return false, "relay_root_unchanged"
-	case peerState.LastRelayUnix != 0 && now.Sub(time.Unix(peerState.LastRelayUnix, 0)) < relayMinInterval:
-		return false, "relay_throttled"
-	default:
-		return true, ""
-	}
-}
-
 // recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
 // lock on state.
 func recordRelaySuccess(state *stateFile, peerID, catalogRoot string, now time.Time) {
@@ -720,36 +702,6 @@ func (sr *SyncRuntime) seedTransportPeers(state *stateFile, deps *SyncTransportD
 			sr.Transport.SetPeerAddrs(peerID, addrs)
 		}
 	}
-}
-
-func outboundSyncPeersAt(state *stateFile, config *syncConfigFile, now time.Time) []string {
-	seen := make(map[string]bool)
-	var out []string
-	for _, peer := range config.Bootstrap {
-		if peer.ID == "" || seen[peer.ID] {
-			continue
-		}
-		seen[peer.ID] = true
-		out = append(out, peer.ID)
-	}
-	for peerID := range gossip.ExtractPeerEndpoints(state.Network) {
-		if peerID == config.PeerID || peerID == string(state.ManagedZone) || seen[peerID] {
-			continue
-		}
-		seen[peerID] = true
-		out = append(out, peerID)
-	}
-	for peerID, peerState := range state.SyncPeers {
-		if peerID == config.PeerID || peerID == string(state.ManagedZone) || seen[peerID] {
-			continue
-		}
-		if !observedPathActive(peerState, now) || !peerChainVerified(state, peerID, now) {
-			continue
-		}
-		seen[peerID] = true
-		out = append(out, peerID)
-	}
-	return out
 }
 
 func isBootstrapPeer(config *syncConfigFile, peerID string) bool {
@@ -1054,17 +1006,6 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 func isReceiveTimeout(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
-}
-
-func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
-	if peerState.BackoffUntilUnix == 0 {
-		return 0
-	}
-	until := time.Unix(peerState.BackoffUntilUnix, 0)
-	if !until.After(now) {
-		return 0
-	}
-	return until.Sub(now)
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {

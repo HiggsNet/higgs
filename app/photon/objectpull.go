@@ -204,42 +204,16 @@ func objectPullClientDeadlineUntil(deadline time.Time, maxTimeout time.Duration)
 	return time.Now().Add(timeout), nil
 }
 
-func objectPullResponseFromState(state *stateFile, req *gossip.ObjectPullRequest, now time.Time) *gossip.ObjectPullResponse {
-	if state == nil || state.Network == nil || req == nil || !req.Zone.Valid() {
-		return &gossip.ObjectPullResponse{Error: "invalid request"}
-	}
-	switch req.Type {
-	case gossip.ObjectPullZone:
-		if state.Network.IsZoneRevoked(req.Zone, now) {
-			return &gossip.ObjectPullResponse{Error: "zone revoked"}
-		}
-		snapshot, err := corestate.Snapshot(state.Network, req.Zone)
-		if err != nil {
-			return &gossip.ObjectPullResponse{Error: err.Error()}
-		}
-		return &gossip.ObjectPullResponse{OK: true, Snapshot: snapshot}
-	case gossip.ObjectPullRecord:
-		if req.Key == "" {
-			return &gossip.ObjectPullResponse{Error: "missing key"}
-		}
-		record, err := corestate.RecordSnapshotFor(state.Network, req.Zone, req.Key, req.Version)
-		if err != nil {
-			return &gossip.ObjectPullResponse{Error: err.Error()}
-		}
-		return &gossip.ObjectPullResponse{OK: true, Record: record}
-	default:
-		return &gossip.ObjectPullResponse{Error: "unsupported request type"}
-	}
-}
-
 func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	if d == nil || d.StateStore == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	response := d.StateStore.objectPullProjection(req, time.Now())
-	if response == nil {
-		return &gossip.ObjectPullResponse{Error: "invalid request"}
+	view := d.StateStore.common.ReadView()
+	var network *zone.NetworkState
+	if view.State != nil {
+		network = view.State.Network
 	}
+	response := gossip.BuildObjectPullResponse(network, req, time.Now())
 	logObjectPullSnapshot(req, response)
 	return response
 }
@@ -480,12 +454,13 @@ func (worker daemonObjectPullWorker) pull(ctx context.Context, action gossip.Sta
 		result.Unreachable = true
 		return result
 	}
-	addr, stateAvailable := worker.daemon.StateStore.peerTCPAddrProjection(worker.daemon.Sync.Config, action.PeerID)
-	if !stateAvailable {
+	input := worker.daemon.currentGossipDiscoveryInput()
+	if input.Network == nil {
 		result.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)
 		result.Unreachable = true
 		return result
 	}
+	addr := corehost.ResolveGossipObjectPullAddress(input, action.PeerID, worker.daemon.Sync.now())
 	if addr == "" {
 		result.Err = fmt.Errorf("no TCP address for peer %s", action.PeerID)
 		result.Unreachable = true

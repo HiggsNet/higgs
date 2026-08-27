@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"net"
 	"testing"
 	"time"
@@ -125,7 +126,8 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 		},
 	}
 
-	peers := outboundSyncPeersAt(state, config, now)
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	peers := corehost.GossipOutboundPeers(service.currentGossipDiscoveryInput(), now)
 	if len(peers) != 1 || peers[0] != "node-b.catofes." {
 		t.Fatalf("outboundSyncPeers = %v, want node-b.catofes.", peers)
 	}
@@ -140,7 +142,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	}
 
 	now = now.Add(2 * time.Minute)
-	if peers := outboundSyncPeersAt(state, config, now); len(peers) != 0 {
+	if peers := corehost.GossipOutboundPeers(service.currentGossipDiscoveryInput(), now); len(peers) != 0 {
 		t.Fatalf("outboundSyncPeers after observed expiry = %v, want empty", peers)
 	}
 	sr.seedObservedPeerPathAt(state, "node-b.catofes.", sr.now())

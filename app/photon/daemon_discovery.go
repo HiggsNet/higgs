@@ -54,6 +54,10 @@ func daemonGossipDiscoveryInput(common corestate.View, cleanups map[string]peerL
 		input.Peers = common.Gossip.Peers
 	}
 	input.Bootstrap = configuredKnownPeers(config)
+	input.BootstrapPeers = make([]string, 0, len(config.Bootstrap))
+	for _, peer := range config.Bootstrap {
+		input.BootstrapPeers = append(input.BootstrapPeers, peer.ID)
+	}
 	input.EndpointGrace = config.EndpointGrace
 	input.SourceOrder = append([]string(nil), config.EndpointSourceOrder...)
 	input.Suppressed = make(map[string]bool, len(cleanups))

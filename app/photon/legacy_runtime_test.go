@@ -138,7 +138,12 @@ func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*
 
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-		response := objectPullResponseFromState(getState(), req, time.Now())
+		state := getState()
+		var network *zone.NetworkState
+		if state != nil {
+			network = state.Network
+		}
+		response := gossip.BuildObjectPullResponse(network, req, time.Now())
 		logObjectPullSnapshot(req, response)
 		return response
 	}

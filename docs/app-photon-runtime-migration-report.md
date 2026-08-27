@@ -121,7 +121,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | chunk/NACK transport 与 checkpoint/观测 adapter | assembly 已由每个 host Runtime 独占；repair deadline/缺失索引在 gossip，timer/action 已进 host Scheduler |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
-| `daemon_state_projection.go` | 聚合 stateFile 的 protocol/controller/inspect 投影 | 仅为迁移期拆分清单；protocol 读取进 state/host、展示进 inspect、controller 使用 typed input 后逐项删除，最终不保留该文件或通用 projection 层 |
+| `daemon_state_projection.go` | 聚合 stateFile 的 controller/inspect 迁移期投影 | catalog、fetch-zone、object-pull、周期同步、relay 等 protocol projection 已全部删除；剩余展示进 inspect、controller 使用 typed input 后继续逐项删除，最终不保留该文件或通用 projection 层 |
 | `daemon_state_store.go` | E1 唯一 writer 协调器和聚合读视图 | owner/排序进入 host；Linux persistence 进入 capability；聚合 view 消失后删除 |
 | `daemon_sync.go` | Linux gossip event 预处理、snapshot capability、checkpoint、发送、relay、session 收尾 | 已退出完整 `stateFile` 读取，catalog/action/managed-zone/observed checkpoint 直接走 common Store/HostRuntime；继续迁走剩余 capability，FSM 保持在 `pkg/core/gossip` |
 
@@ -176,7 +176,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `linux_state_view.go` | 公共 view + Linux runtime 合成 stateFile | 迁移期读桥；consumer 改用 typed view 后删除 |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
-| `objectpull.go` | TCP object-pull transport、quota、lookup、统计 | request/response exchange 已进 gossip，worker/completion 已进 host；继续只保留 Linux dial/listen/deadline capability，统计进 observability |
+| `objectpull.go` | TCP object-pull transport、quota、旧 recovery lookup、统计 | request/response 构造已进 gossip，在线 worker/completion 和 peer 地址选择已进 host；旧 recovery 入口迁走后只保留 Linux dial/listen/deadline capability，统计进 observability |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |
 | `observer_server.go` | HTTP/OpenMetrics/SSE provider wiring | server/read model 进 observer；Linux app 只注入 provider |
 | `peer_lifecycle_cleanup.go` | peer 过期、checkpoint/observability/platform cleanup | policy/调度进 host；checkpoint 由 state 删除；平台资源通过 action 清理 |

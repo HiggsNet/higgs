@@ -11,70 +11,6 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func TestShouldRelayToPeer(t *testing.T) {
-	now := time.Unix(100, 0)
-	tests := []struct {
-		name    string
-		state   syncPeerState
-		peerID  string
-		source  string
-		root    string
-		allowed bool
-		reason  string
-	}{
-		{
-			name:   "empty peer",
-			peerID: "",
-			source: "node-a",
-			reason: "empty_peer_id",
-		},
-		{
-			name:   "source peer",
-			peerID: "node-a",
-			source: "node-a",
-			reason: "source_peer",
-		},
-		{
-			name:   "backoff",
-			state:  syncPeerState{BackoffUntilUnix: now.Add(time.Second).Unix()},
-			peerID: "node-b",
-			source: "node-a",
-			reason: "backoff",
-		},
-		{
-			name:   "same catalog root",
-			state:  syncPeerState{LastRelayCatalogRootHex: "root-a"},
-			peerID: "node-b",
-			source: "node-a",
-			root:   "root-a",
-			reason: "relay_root_unchanged",
-		},
-		{
-			name:   "throttled",
-			state:  syncPeerState{LastRelayUnix: now.Unix()},
-			peerID: "node-b",
-			source: "node-a",
-			reason: "relay_throttled",
-		},
-		{
-			name:    "allowed",
-			state:   syncPeerState{LastRelayUnix: now.Add(-relayMinInterval).Unix()},
-			peerID:  "node-b",
-			source:  "node-a",
-			allowed: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason := shouldRelayToPeer(tt.state, tt.peerID, tt.source, tt.root, now)
-			if allowed != tt.allowed || reason != tt.reason {
-				t.Fatalf("shouldRelayToPeer() = %v, %q; want %v, %q", allowed, reason, tt.allowed, tt.reason)
-			}
-		})
-	}
-}
-
 func TestRecordRelaySuppression(t *testing.T) {
 	store := observability.NewPeerObservabilityStore(8, time.Hour)
 	now := time.Unix(100, 0)
@@ -147,21 +83,6 @@ func TestRecordPeerSyncBackoffAndRecovery(t *testing.T) {
 	}
 	if got := formatLastSuccess(failedAgain); got == "never" {
 		t.Fatalf("formatLastSuccess after later failure = %q, want previous success timestamp", got)
-	}
-}
-
-func TestRelayRejectsSourceAndBackoffToLimitStorm(t *testing.T) {
-	now := time.Unix(1000, 0)
-	state := &stateFile{SyncPeers: map[string]syncPeerState{
-		"node-b.catofes.": {},
-		"node-c.catofes.": {BackoffUntilUnix: now.Add(time.Minute).Unix()},
-	}}
-
-	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-b.catofes."], "node-b.catofes.", "node-b.catofes.", "root-a", now); allowed || reason != "source_peer" {
-		t.Fatalf("source relay decision = %v %q, want source_peer suppression", allowed, reason)
-	}
-	if allowed, reason := shouldRelayToPeer(state.SyncPeers["node-c.catofes."], "node-c.catofes.", "node-b.catofes.", "root-a", now); allowed || reason != "backoff" {
-		t.Fatalf("backoff relay decision = %v %q, want backoff suppression", allowed, reason)
 	}
 }
 

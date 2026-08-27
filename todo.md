@@ -175,6 +175,15 @@ authorization 和 transport records 作为可信事实来源。
 - [x] `daemon_sync.go` 已不再读取完整 `stateFile`：catalog summary、action state view、managed-zone snapshot
   apply guard 和 observed checkpoint 规划均直接使用 common Store/HostRuntime；删除 catalog summary、sync state
   两个 daemon projection，observed 地址迁移与 grace patch 也由公共 discovery policy 生成。
+- [x] fetch-zone datagram/chunk 响应已直接从 common Store detached view 生成，删除对应两个 projection 与
+  Linux 私有 not-found wrapper；catalog-page 的 managed-zone/rejected-root 过滤进入公共 host policy，并删除
+  无生产调用的 catalog-page projection 和 Linux filtered-catalog projection。
+- [x] object-pull 响应改为由公共 gossip 直接读取 detached verified Network；在线 worker 的 TCP 目标选择改为
+  公共 host discovery policy，统一使用 verified observed path、bootstrap 和签名 endpoint，删除 daemon 中对应的
+  response/address projection。旧 recovery 文件入口仍待迁到公共 Runtime 后删除其 `stateFile` 参数。
+- [x] 周期同步和 relay 不再读取 daemon 聚合 projection：公共 host policy 直接从 verified Network、gossip
+  checkpoint 与 bootstrap 输入生成 outbound peers，并统一 backoff、source-loop、catalog-root no-op 和 relay
+  throttle 判断；删除 timer/relay projection 及 Linux 重复 policy。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制
