@@ -659,12 +659,3 @@ func (s *DaemonStateStore) stateGCPlanProjection(config *appConfig) *stateGCPlan
 	defer s.mu.RUnlock()
 	return buildStateGCPlan(config, s.committed)
 }
-
-func (s *DaemonStateStore) purgePlanProjection(now time.Time, target zone.ZonePath) (*purgePlan, error) {
-	if s == nil {
-		return nil, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return planPurgeRevokedZones(s.committed, now, target)
-}

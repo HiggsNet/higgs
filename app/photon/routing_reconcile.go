@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -33,8 +32,6 @@ const (
 	birdInstanceStateError          = "error"
 	maxRoutingCrashBackoff          = time.Minute
 )
-
-var errAutoAnnounceNoChanges = errors.New("auto announce has no changes")
 
 // birdProcessManager is the subset of bird.ProcessManager used by the daemon.
 type birdProcessManager interface {
@@ -1228,55 +1225,6 @@ func (d *DaemonService) autoAnnounceAssignedIPsPlanForState(state *stateFile, ar
 		plan.withdraw = append(plan.withdraw, prefix)
 	}
 	return plan, nil
-}
-
-func (d *DaemonService) autoAnnounceAssignedIPsForState(state *stateFile, ars *routing.AuthorizedRouteSet) (bool, error) {
-	plan, err := d.autoAnnounceAssignedIPsPlanForState(state, ars)
-	if err != nil || !plan.changed() {
-		return false, err
-	}
-	managedZone := state.ManagedZone
-	for _, prefix := range plan.announce {
-		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, true); err != nil {
-			return false, fmt.Errorf("auto-announce %s: %w", prefix, err)
-		}
-		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{
-			"zone":   managedZone,
-			"prefix": prefix.String(),
-		})
-	}
-	for _, prefix := range plan.withdraw {
-		if err := d.putRouteAnnouncementForState(state, managedZone, prefix, false); err != nil {
-			return true, fmt.Errorf("auto-withdraw %s: %w", prefix, err)
-		}
-		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{
-			"zone":   managedZone,
-			"prefix": prefix.String(),
-		})
-	}
-
-	return true, nil
-}
-
-func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone.ZonePath, prefix netip.Prefix, active bool) error {
-	canonical := prefix.Masked().String()
-	key, err := routing.NormalizeRouteAnnouncementKey(canonical)
-	if err != nil {
-		return err
-	}
-	record := routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active, Controller: routing.RouteControllerAuto}
-	value, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("marshal route announcement: %w", err)
-	}
-	rec, err := buildSignedRecordAt(state, path, key, value, routing.RecordTypeRouteAnnouncement, d.Sync.now())
-	if err != nil {
-		return fmt.Errorf("build signed route record: %w", err)
-	}
-	if err := state.Network.Put(rec); err != nil {
-		return fmt.Errorf("put route record: %w", err)
-	}
-	return nil
 }
 
 func (d *DaemonService) routingNetnsProtocolIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {

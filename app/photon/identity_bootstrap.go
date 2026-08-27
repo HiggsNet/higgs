@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -235,85 +234,6 @@ func tryAdoptAutoJoinDelegation(state *stateFile, now time.Time) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// tryRefreshManagedZoneAuthority applies a newer, parent-signed delegation to
-// the local managed Zone without accepting a peer snapshot for that Zone. The
-// parent owns the authority envelope; the local node continues to own its Zone
-// contents (records, child delegations, revocations, and history).
-func tryRefreshManagedZoneAuthority(state *stateFile, now time.Time) (bool, error) {
-	if state == nil || state.Network == nil || state.ManagedZone == "" || state.ManagedZone == zone.RootZone {
-		return false, nil
-	}
-	zs := state.Network.Zones[state.ManagedZone]
-	if zs == nil || zs.Authority == nil {
-		// First admission is handled by tryAdoptAutoJoinDelegation.
-		return false, nil
-	}
-
-	parent := state.ManagedZone.Parent()
-	parentState := state.Network.Zones[parent]
-	if parentState == nil || parentState.Authority == nil {
-		return false, nil
-	}
-	delegation := parentState.Delegations[state.ManagedZone]
-	if delegation == nil {
-		return false, nil
-	}
-	if delegation.ZoneName != state.ManagedZone || delegation.Authority.Zone != state.ManagedZone {
-		return false, fmt.Errorf("managed zone delegation target mismatch: %s", state.ManagedZone)
-	}
-	if err := photoncrypto.VerifyChain(state.Network, parent, now); err != nil {
-		return false, fmt.Errorf("verify managed zone parent %s: %w", parent, err)
-	}
-	if err := photoncrypto.VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
-		return false, err
-	}
-
-	currentEpoch := zs.Authority.Epoch
-	nextEpoch := delegation.Authority.Epoch
-	currentHash := photoncrypto.AuthorityHash(zs.Authority)
-	nextHash := delegation.AuthorityHash
-	switch {
-	case nextEpoch < currentEpoch:
-		return false, fmt.Errorf("managed zone delegation epoch %d is older than local authority epoch %d", nextEpoch, currentEpoch)
-	case nextEpoch == currentEpoch && !bytes.Equal(nextHash, currentHash):
-		return false, fmt.Errorf("managed zone authority conflicts at epoch %d", currentEpoch)
-	case nextEpoch == currentEpoch:
-		return false, nil
-	}
-
-	if len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
-		return false, errors.New("managed zone authority refresh requires a local zone private key")
-	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
-	if !authorityHasKey(&delegation.Authority, pub) {
-		return false, errors.New("managed zone authority refresh does not authorize the local identity key")
-	}
-
-	previousAuthority := zs.Authority
-	previousProof := zs.ParentProof
-	zs.Authority = cloneAuthorityForJoinBundle(&delegation.Authority)
-	zs.ParentProof = replaceDirectParentProof(previousProof, state.ManagedZone, delegation)
-	configureValidation(state.Network)
-	if err := photoncrypto.VerifyChain(state.Network, state.ManagedZone, now); err != nil {
-		zs.Authority = previousAuthority
-		zs.ParentProof = previousProof
-		return false, err
-	}
-	return true, nil
-}
-
-func replaceDirectParentProof(existing []*zone.Delegation, managed zone.ZonePath, delegation *zone.Delegation) []*zone.Delegation {
-	out := make([]*zone.Delegation, 0, len(existing)+1)
-	out = append(out, cloneDelegationForJoinBundle(delegation))
-	for _, proof := range existing {
-		if proof == nil || proof.ZoneName == managed {
-			continue
-		}
-		out = append(out, cloneDelegationForJoinBundle(proof))
-	}
-	return out
 }
 
 func logAutoJoinPendingProjection(logger *appLogger, projection autoJoinLogProjection) {

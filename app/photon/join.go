@@ -399,28 +399,6 @@ func prepareJoinAcceptedState(rt *Runtime, existing *stateFile, bundle *joinBund
 	return state, &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-func installPreparedState(dst, src *stateFile) {
-	if dst == nil || src == nil {
-		return
-	}
-	dst.ManagedZone = src.ManagedZone
-	dst.IdentityKeyPath = src.IdentityKeyPath
-	dst.RootPrivateKey = src.RootPrivateKey
-	dst.ZonePrivateKey = src.ZonePrivateKey
-	dst.Network = src.Network
-	dst.SyncPeers = src.SyncPeers
-	dst.PeerCleanups = src.PeerCleanups
-	dst.IPsecTransportKey = src.IPsecTransportKey
-	dst.IPsecPortRecord = src.IPsecPortRecord
-	dst.LinkInstances = src.LinkInstances
-	dst.IPsecReconcile = src.IPsecReconcile
-	dst.RoutingReconcile = src.RoutingReconcile
-	dst.FirewallReconcile = src.FirewallReconcile
-	dst.EndpointACLs = src.EndpointACLs
-	dst.BirdInstances = src.BirdInstances
-	dst.Admission = src.Admission
-}
-
 func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) {
 	if keyPath != "" {
 		return readPrivateKeyFile(keyPath)

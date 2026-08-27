@@ -316,23 +316,6 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 	return &state, nil
 }
 
-func saveState(state *stateFile) error {
-	rt, err := NewRuntime()
-	if err != nil {
-		return err
-	}
-	return rt.SaveState(state)
-}
-
-func saveStateMeta(state *stateFile) error {
-	rt, err := NewRuntime()
-	if err != nil {
-		return err
-	}
-	_, err = saveStateMetaAtWithFileInfo(rt.StatePath, state)
-	return err
-}
-
 func saveStateAt(path string, state *stateFile) error {
 	_, err := saveStateAtWithFileInfo(path, state)
 	return err

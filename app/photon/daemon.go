@@ -1443,13 +1443,6 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
-func (d *DaemonService) zoneDigests() []corestate.ZoneDigest {
-	if d == nil || d.StateStore == nil {
-		return nil
-	}
-	return d.StateStore.ZoneDigests()
-}
-
 func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
 	changed, err := d.publishLocalProtocols(false)

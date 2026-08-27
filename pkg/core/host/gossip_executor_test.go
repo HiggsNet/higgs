@@ -3,7 +3,7 @@ package host
 import (
 	"context"
 	"errors"
-	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -115,7 +115,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	wantTrace := []string{"read", "apply", "read", "send:ping", "backoff", "persist"}
-	if !reflect.DeepEqual(controller.trace, wantTrace) {
+	if !slices.Equal(controller.trace, wantTrace) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, wantTrace)
 	}
 	if !controller.persisted.Requested || controller.persisted.Scope != gossip.SyncPersistenceNetwork || controller.persisted.Reason != "complete" {
@@ -155,7 +155,7 @@ func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	if !result.Aborted || result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	if want := []string{"read", "apply"}; !reflect.DeepEqual(controller.trace, want) {
+	if want := []string{"read", "apply"}; !slices.Equal(controller.trace, want) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, want)
 	}
 	if len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhaseApply || !errors.Is(controller.issues[0].Err, applyErr) {
@@ -195,6 +195,7 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 		},
 	}
 	var outcomes []outcome
+	commitErr := errors.New("commit failed")
 	for _, adapter := range adapters {
 		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
 		if err := runtime.StartGossipObjectPullWorkers(t.Context(), &memoryGossipObjectPullWorker{pulls: make(chan gossip.StartObjectPullAction, 1)}, 1, 1); err != nil {
@@ -206,7 +207,7 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 
 		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
 		failureController, failureMemory := adapter.new()
-		failureMemory.applyErr = errors.New("commit failed")
+		failureMemory.applyErr = commitErr
 		failureRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 			gossip.SendPingAction{PeerID: "peer-a"},
@@ -223,16 +224,22 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 			issue:     failureMemory.issues[0],
 		})
 	}
-	if !reflect.DeepEqual(outcomes[0], outcomes[1]) {
+	left, right := outcomes[0], outcomes[1]
+	if !slices.Equal(left.trace, right.trace) ||
+		left.persisted != right.persisted ||
+		!slices.Equal(left.failure, right.failure) ||
+		left.issue.Phase != right.issue.Phase ||
+		left.issue.PeerID != right.issue.PeerID ||
+		!errors.Is(left.issue.Err, right.issue.Err) {
 		t.Fatalf("adapter outcomes differ: %#v", outcomes)
 	}
-	if want := []string{"read", "send:fetch_catalog_page", "persist"}; !reflect.DeepEqual(outcomes[0].trace, want) {
+	if want := []string{"read", "send:fetch_catalog_page", "persist"}; !slices.Equal(outcomes[0].trace, want) {
 		t.Fatalf("trace = %#v, want %#v", outcomes[0].trace, want)
 	}
 	if !outcomes[0].persisted.Requested || outcomes[0].persisted.Scope != gossip.SyncPersistenceMeta || outcomes[0].persisted.Reason != "metadata" {
 		t.Fatalf("persistence = %#v", outcomes[0].persisted)
 	}
-	if want := []string{"read", "apply"}; !reflect.DeepEqual(outcomes[0].failure, want) || outcomes[0].issue.Phase != GossipPhaseApply {
+	if want := []string{"read", "apply"}; !slices.Equal(outcomes[0].failure, want) || outcomes[0].issue.Phase != GossipPhaseApply {
 		t.Fatalf("failure outcome = %#v", outcomes[0])
 	}
 }

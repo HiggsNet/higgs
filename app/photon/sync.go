@@ -470,21 +470,6 @@ func recordRejectedDigest(state *stateFile, peerID string, digest corestate.Zone
 	state.SyncPeers[peerID] = peerState
 }
 
-// clearRejectedDigest mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func clearRejectedDigest(state *stateFile, peerID string, path zone.ZonePath) {
-	if state == nil || peerID == "" || !path.Valid() {
-		return
-	}
-	peerState := state.SyncPeers[peerID]
-	if len(peerState.RejectedDigests) == 0 {
-		return
-	}
-	delete(peerState.RejectedDigests, rejectedDigestKey(path))
-	delete(peerState.RejectedDigests, path.String())
-	state.SyncPeers[peerID] = peerState
-}
-
 func rejectedDigestKey(path zone.ZonePath) string {
 	return "zone:" + path.String()
 }
@@ -1082,10 +1067,6 @@ func backoffRemaining(peerState syncPeerState, now time.Time) time.Duration {
 	return until.Sub(now)
 }
 
-func (sr *SyncRuntime) handleObjectChunkNACK(message *gossip.Message) error {
-	return sr.handleObjectChunkNACKFrom(message, nil)
-}
-
 func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {
 	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
 		return nil
@@ -1145,10 +1126,6 @@ func sendDetachedSnapshotWithDiagnosticsTo(snapshot *corestate.ZoneSnapshot, pla
 	chunks, err := sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, replyAddr, now)
 	diag.ChunkFallbacks = chunks
 	return diag, err
-}
-
-func sendDetachedZoneSnapshotChunks(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, now time.Time) (int, error) {
-	return sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, nil, now)
 }
 
 func sendDetachedZoneSnapshotChunksTo(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time) (int, error) {

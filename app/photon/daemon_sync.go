@@ -189,48 +189,6 @@ func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
 	return d.hostRuntime.PostGossip(event)
 }
 
-func (d *DaemonService) respondFetchCatalogPage(peerID, cursor string) error {
-	return d.respondFetchCatalogPageTo(peerID, cursor, nil)
-}
-
-func (d *DaemonService) respondFetchCatalogPageTo(peerID, cursor string, replyAddr *net.UDPAddr) error {
-	if d == nil || d.Sync == nil {
-		return nil
-	}
-	budget := d.syncDatagramBudget()
-	page, err := d.StateStore.catalogPageProjection(cursor, budget, d.Sync.Config.PeerID)
-	if err != nil {
-		now := d.Sync.now()
-		recordDatagramTooLarge(d.PeerObservability, peerID, "send", "catalog_page", "", "", 0, budget, now)
-		recordCatalogReject(d.PeerObservability, peerID, cursor, gossip.RejectReason(err), now)
-		d.logWarn("sync", "catalog_page_failed", map[string]any{
-			"peer_id": peerID,
-			"cursor":  cursor,
-			"error":   err,
-			"via":     "responder",
-		})
-		return nil
-	}
-	if page == nil {
-		return nil
-	}
-	recordCatalogPage(d.PeerObservability, peerID, page, d.Sync.now())
-	if err := d.sendSyncMessageTo(peerID, replyAddr, &gossip.Message{
-		Type:        gossip.MessageCatalogPage,
-		CatalogPage: page,
-	}); err != nil {
-		now := d.Sync.now()
-		recordCatalogReject(d.PeerObservability, peerID, cursor, gossip.RejectReason(err), now)
-		d.logWarn("sync", "catalog_page_send_failed", map[string]any{
-			"peer_id": peerID,
-			"cursor":  cursor,
-			"error":   err,
-			"via":     "responder",
-		})
-	}
-	return nil
-}
-
 func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
 	return d.respondFetchZoneTo(peerID, path, nil)
 }
@@ -269,10 +227,6 @@ func (d *DaemonService) respondFetchZoneChunksTo(peerID string, path zone.ZonePa
 	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, d.Sync.Transport, peerID, replyAddr, now, d.Sync.logger())
 	recordDatagramSendDiagnostics(d.PeerObservability, peerID, diag, d.syncDatagramBudget(), now)
 	return err
-}
-
-func (d *DaemonService) respondAnnouncePlan(peerID string, plan gossip.DatagramPlan, budget int) error {
-	return d.respondAnnouncePlanTo(peerID, plan, budget, nil)
 }
 
 func (d *DaemonService) respondAnnouncePlanTo(peerID string, plan gossip.DatagramPlan, budget int, replyAddr *net.UDPAddr) error {
@@ -512,10 +466,6 @@ type syncSnapshotCommit struct {
 	StateCommitted bool
 	NetworkChanged bool
 }
-
-var errSnapshotRootMismatch = errors.New("snapshot root does not match advertised catalog digest")
-
-const verifiedPacketMetadataCheckpointMaxDelay = 250 * time.Millisecond
 
 func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, syncSnapshotCommit, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil {
@@ -844,10 +794,6 @@ func (d *DaemonService) clearSyncIngressRoute(peerID string) {
 		return
 	}
 	delete(d.syncIngressRoutes, peerID)
-}
-
-func (d *DaemonService) sendSyncMessage(peerID string, msg *gossip.Message) error {
-	return d.sendSyncMessageTo(peerID, nil, msg)
 }
 
 func (d *DaemonService) sendSyncSessionMessage(peerID string, msg *gossip.Message) error {
