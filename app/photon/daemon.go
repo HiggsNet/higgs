@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1330,17 +1329,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		return nil, err
 	}
 	state, revision := d.StateStore.Snapshot()
-	plan := &purgePlan{Zones: append([]zone.ZonePath(nil), commonPlan.Zones...), SyncPeers: append([]string(nil), commonPlan.CheckpointPeers...), ManagedZoneSkipped: append([]zone.ZonePath(nil), commonPlan.ManagedZoneSkipped...)}
-	zoneSet := make(map[zone.ZonePath]bool, len(plan.Zones))
-	for _, path := range plan.Zones {
-		zoneSet[path] = true
-	}
-	for id, instance := range state.LinkInstances {
-		if zoneSet[instance.PeerZone] {
-			plan.LinkInstances = append(plan.LinkInstances, id)
-		}
-	}
-	slices.Sort(plan.LinkInstances)
+	plan := purgePlanFromOwners(commonPlan, linuxRuntimeStateFromLegacy(state))
 	if !apply {
 		return plan, nil
 	}

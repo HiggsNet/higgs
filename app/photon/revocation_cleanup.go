@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -238,6 +239,27 @@ type purgePlan struct {
 	// local node's ManagedZone or one of its ancestors.
 	// Reported for transparency; never deleted.
 	ManagedZoneSkipped []zone.ZonePath `json:"managed_zone_skipped,omitempty"`
+}
+
+func purgePlanFromOwners(common corestate.PurgeRevokedPlan, runtime *linuxRuntimeState) *purgePlan {
+	plan := &purgePlan{
+		Zones:              append([]zone.ZonePath(nil), common.Zones...),
+		SyncPeers:          append([]string(nil), common.CheckpointPeers...),
+		ManagedZoneSkipped: append([]zone.ZonePath(nil), common.ManagedZoneSkipped...),
+	}
+	zoneSet := make(map[zone.ZonePath]bool, len(plan.Zones))
+	for _, path := range plan.Zones {
+		zoneSet[path] = true
+	}
+	if runtime != nil {
+		for id, instance := range runtime.LinkInstances {
+			if zoneSet[instance.PeerZone] {
+				plan.LinkInstances = append(plan.LinkInstances, id)
+			}
+		}
+	}
+	slices.Sort(plan.LinkInstances)
+	return plan
 }
 
 // overlapsLocalIdentity reports whether z is the local node's managed zone or

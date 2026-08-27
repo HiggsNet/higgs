@@ -111,7 +111,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 |---|---|---|
 | `admission_diagnostics.go` | auto-join 诊断和 admission 标记 | 诊断进 `internal/inspect`；状态转换进 `pkg/core/host` 的 admission runtime；CLI wrapper 进 `internal/photoncli` |
 | `authority.go` | 权限解析、delegate grant、旧 direct 修改 | CLI 进 `internal/photoncli`；权限合并/epoch/父子 authority 更新成为 `pkg/core/state` intent；旧 direct writer 删除 |
-| `bolt_state_store.go` | 组合公共 state 与 Linux runtime 的启动/提交 | `internal/photonlinux/persistence`；app 只负责构造和注入 |
+| `bolt_state_store.go` | 组合公共 state 与 Linux runtime 的启动/提交 | 启动已优先读取新 schema，仅未初始化时进入旧 bootstrap/migration；最终迁入 `internal/photonlinux/persistence`，app 只负责构造和注入 |
 | `cmd.go` | Linux CLI 命令树 | 留 `app/photon` 但缩成注册；handler 进 `internal/photoncli` |
 | `config.go` | 混合解析 gossip、identity 和全部 Linux subsystem | 顶层 YAML 进 `internal/photonlinux/config`；公共参数转换为 host/gossip config；各 Linux 配置归各 controller |
 | `control.go` | 私有 DTO、Unix socket client、命令 wrapper 和部分 view | DTO 进 `internal/controlapi`；Unix transport 进 `internal/photonlinux/control`；CLI/view 分别进 photoncli/inspect |
@@ -176,7 +176,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `linux_state_view.go` | 公共 view + Linux runtime 合成 stateFile | 迁移期读桥；consumer 改用 typed view 后删除 |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
-| `objectpull.go` | TCP object-pull transport、quota、旧 recovery lookup、统计 | request/response 构造已进 gossip，在线 worker/completion 和 peer 地址选择已进 host；旧 recovery 入口迁走后只保留 Linux dial/listen/deadline capability，统计进 observability |
+| `objectpull.go` | TCP object-pull transport、quota、统计 | request/response 构造已进 gossip，在线 worker/completion、recovery lookup 和 peer 地址选择已进 host；继续把跨平台 dial/listen/deadline capability 迁入公共 transport，统计进 observability |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |
 | `observer_server.go` | HTTP/OpenMetrics/SSE provider wiring | server/read model 进 observer；Linux app 只注入 provider |
 | `peer_lifecycle_cleanup.go` | peer 过期、checkpoint/observability/platform cleanup | policy/调度进 host；checkpoint 由 state 删除；平台资源通过 action 清理 |
@@ -187,7 +187,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
 | `record.go` | record CLI、旧 direct 签名和查询 | mutation 只调 state intent；查询进 inspect；CLI 进 photoncli；本地签名 helper 删除 |
-| `recovery.go` | export/import/pull/purge 和 Linux cleanup | state 处理 snapshot/purge；host/gossip 处理 pull；平台 cleanup 交 controller；CLI 进 photoncli |
+| `recovery.go` | export/import/pull/purge 和 Linux cleanup | export/import/pull/purge 已通过唯一 BoltStore、common Store typed API 与 Linux runtime candidate 完成，不再读写旧 Network；继续把平台 cleanup 交 controller，CLI 进 photoncli |
 | `revocation_cleanup.go` | impact、peer cache cleanup、purge plan | verified/checkpoint purge 留 state；平台 cleanup 变成 host action；view 进 inspect |
 | `root.go` | root public key CLI | Store read API + photoncli |
 | `route.go` | route CLI、旧 direct mutation、报告 | mutation进 state intent；授权计算留 routing；报告进 inspect；CLI 进 photoncli |
@@ -208,7 +208,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 ## 4. 推荐迁移顺序
 
-1. **删除剩余旧 direct writer**：`authority.go`、`join.go`、`record.go`、`ipam.go`、`route.go`、`service.go`、`recovery.go`、`state_gc.go` 的 `--direct` 路径统一改为打开 BoltStore 后调用同一个 typed Store/controller API。
+1. **删除剩余旧 direct writer**：`recovery.go` 已完成；`authority.go`、`join.go`、`record.go`、`ipam.go`、`route.go`、`service.go`、`state_gc.go` 的 `--direct` 路径继续统一改为打开 BoltStore 后调用同一个 typed Store/controller API。
 2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **抽 Linux controllers**：IPsec、routing、firewall 三条独立迁移线，各自接收 detached input，返回 typed completion。
 4. **删除聚合 stateFile**：先替换 protocol projection，再替换 controller input、inspect/observer 和离线 CLI read path；随后删除 `linux_state_view.go`、`daemon_state_store.go`、aggregate clone 和旧 state loader。

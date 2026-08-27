@@ -180,10 +180,17 @@ authorization 和 transport records 作为可信事实来源。
   无生产调用的 catalog-page projection 和 Linux filtered-catalog projection。
 - [x] object-pull 响应改为由公共 gossip 直接读取 detached verified Network；在线 worker 的 TCP 目标选择改为
   公共 host discovery policy，统一使用 verified observed path、bootstrap 和签名 endpoint，删除 daemon 中对应的
-  response/address projection。旧 recovery 文件入口仍待迁到公共 Runtime 后删除其 `stateFile` 参数。
+  response/address projection。recovery pull 也已改为使用同一 discovery input，并通过唯一 BoltStore 恢复 common
+  Store、逐个调用 typed recovery import；删除旧 `stateFile` 地址选择和 pull 参数，不再反向写旧 Network。
 - [x] 周期同步和 relay 不再读取 daemon 聚合 projection：公共 host policy 直接从 verified Network、gossip
   checkpoint 与 bootstrap 输入生成 outbound peers，并统一 backoff、source-loop、catalog-root no-op 和 relay
   throttle 判断；删除 timer/relay projection 及 Linux 重复 policy。
+- [x] recovery export、direct import 和 object-pull 已切到唯一 BoltStore/common Store：export 读取 common view，
+  import/pull 调用 typed recovery API，删除 Linux 私有 snapshot apply/root-pin 复刻。启动恢复先读取新 schema，
+  仅在 common state 确实不存在时进入一次旧 bootstrap/migration，common 独立写入后不再依赖旧 Network reader。
+- [x] `purge-revoked --direct` 删除旧 `LoadState/SaveState`：公共 purge policy 与 Linux runtime 组合 typed plan，
+  先执行 IPsec teardown 并以当前 VerifiedRevision 持久化 runtime cleanup，再由 common Store 删除 revoked zone
+  与 checkpoint；dry-run 只读取两个 owner，不触发平台动作或写入。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制

@@ -149,10 +149,6 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 	}
 }
 
-func tryObjectPullTCP(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath) (*corestate.ZoneSnapshot, error) {
-	return tryObjectPullTCPUntil(state, config, peerID, path, time.Time{})
-}
-
 func derivePeerStatus(state *stateFile, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig) inspect.PeerStatusInfo {
 	if state == nil {
 		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{PeerID: peerID, PeerZone: peerZone, StateAvailable: false, Now: now, Config: cfg})

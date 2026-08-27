@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/urfave/cli/v3"
 )
 
@@ -136,11 +134,17 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	snapshot, err := corestate.Snapshot(state.Network, path)
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	if view.State == nil {
+		return errors.New("common state is not initialized")
+	}
+	snapshot, err := corestate.Snapshot(view.State.Network, path)
 	if err != nil {
 		return err
 	}
@@ -178,26 +182,37 @@ func recoveryImportZone(input string, direct bool) error {
 	if !direct {
 		logControlFallback("recovery_import_zone")
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	state.Lock()
-	defer state.Unlock()
-	result, err := applyRecoveryZoneSnapshot(rt, state, &snapshot)
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	if view.State == nil {
+		return errors.New("common state is not initialized")
+	}
+	config := syncConfigFromAppConfig(rt.Config, &stateFile{ManagedZone: view.State.ManagedZone})
+	limits := syncLimits(config)
+	limits.MaxBytes = 8 << 20
+	imported, err := startup.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
+		Snapshot: &snapshot,
+		Limits:   limits,
+	}, rt.Now())
 	if err != nil {
 		return err
 	}
-	if result.NetworkChanged {
-		if err := rt.SaveState(state); err != nil {
-			return err
+	if imported.Apply == nil {
+		return errors.New("recovery import returned no result")
+	}
+	view = startup.Common.ReadView()
+	revocations := 0
+	if view.State != nil && view.State.Network != nil {
+		if zs := view.State.Network.Zones[imported.Apply.Zone]; zs != nil {
+			revocations = len(zs.Revocations)
 		}
 	}
-	revocations := 0
-	if zs := state.Network.Zones[result.Zone]; zs != nil {
-		revocations = len(zs.Revocations)
-	}
-	printRecoveryImportResult(result, revocations, "")
+	printRecoveryImportResult(imported.Apply, revocations, "")
 	return nil
 }
 
@@ -240,49 +255,52 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	if view.State == nil {
+		return errors.New("common state is not initialized")
 	}
-
-	state.Lock()
-	defer state.Unlock()
+	config := syncConfigFromAppConfig(rt.Config, &stateFile{ManagedZone: view.State.ManagedZone})
+	limits := syncLimits(config)
+	limits.MaxBytes = 8 << 20
 
 	deadline := time.Now().Add(timeout)
 	results := make([]*corestate.ApplyResult, 0, len(paths))
+	// Commit each ancestor before validating its child. An interrupted chain
+	// recovery may leave a valid recovered prefix, never an unverified child.
 	for _, path := range paths {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
-		snapshot, err := tryObjectPullTCPUntil(state, config, peerID, path, deadline)
+		view = startup.Common.ReadView()
+		input := gossipDiscoveryInputFromOwners(view, startup.Runtime.PeerCleanups, config)
+		snapshot, err := tryObjectPullTCPUntil(input, peerID, path, deadline)
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}
-		result, err := applyRecoveryZoneSnapshot(rt, state, snapshot)
+		imported, err := startup.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: snapshot, Limits: limits}, rt.Now())
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}
-		results = append(results, result)
-	}
-	networkChanged := false
-	for _, result := range results {
-		networkChanged = networkChanged || result.NetworkChanged
-	}
-	if networkChanged {
-		if err := rt.SaveState(state); err != nil {
-			return err
+		if imported.Apply == nil {
+			return fmt.Errorf("recover %s from %s: recovery import returned no result", path, peerID)
 		}
+		results = append(results, imported.Apply)
 	}
+	view = startup.Common.ReadView()
 	for _, result := range results {
 		revocations := 0
-		if zs := state.Network.Zones[result.Zone]; zs != nil {
-			revocations = len(zs.Revocations)
+		if view.State != nil && view.State.Network != nil {
+			if zs := view.State.Network.Zones[result.Zone]; zs != nil {
+				revocations = len(zs.Revocations)
+			}
 		}
 		fmt.Printf("recovered zone %s from %s: network_changed=%t records_applied=%d delegations=%d revocations=%d\n",
 			result.Zone, peerID, result.NetworkChanged, result.Records, result.Delegation, revocations)
@@ -297,69 +315,6 @@ func recoveryChainZones(path zone.ZonePath) []zone.ZonePath {
 		out = append(out, ancestor)
 	}
 	return out
-}
-
-func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, error) {
-	if rt == nil {
-		return nil, errors.New("runtime is nil")
-	}
-	if state == nil || state.Network == nil {
-		return nil, errors.New("state has no network")
-	}
-	if snapshot == nil {
-		return nil, errors.New("zone snapshot is nil")
-	}
-	if !snapshot.Zone.Valid() {
-		return nil, zone.ErrInvalidZonePath
-	}
-	if err := validateRecoveryRootSnapshot(rt, state, snapshot); err != nil {
-		return nil, err
-	}
-
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return nil, err
-	}
-	limits := syncLimits(config)
-	limits.MaxBytes = 8 << 20
-	nextNetwork, result, err := corestate.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
-	if err != nil {
-		return nil, err
-	}
-	var trustedRoot []byte
-	if rt.Config != nil {
-		trustedRoot = rt.Config.TrustedRootPublicKey
-	}
-	if err := verifyConfiguredRootTrustAt(nextNetwork, trustedRoot); err != nil {
-		return nil, err
-	}
-	state.Network = nextNetwork
-	return result, nil
-}
-
-func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *corestate.ZoneSnapshot) error {
-	if snapshot.Zone != zone.RootZone {
-		return nil
-	}
-	if snapshot.Authority == nil {
-		return errors.New("root recovery snapshot has no authority")
-	}
-	if rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {
-		for _, key := range snapshot.Authority.Keys {
-			if equalPublicKey(key.Key, rt.Config.TrustedRootPublicKey) {
-				return nil
-			}
-		}
-		return errors.New("root recovery snapshot does not match trusted_root_public_key")
-	}
-	root := state.Network.Zones[zone.RootZone]
-	if root == nil || root.Authority == nil {
-		return errors.New("root recovery without trusted_root_public_key requires an existing local root authority")
-	}
-	if !bytes.Equal(photoncrypto.AuthorityHash(root.Authority), photoncrypto.AuthorityHash(snapshot.Authority)) {
-		return errors.New("root recovery snapshot changes local root authority without trusted_root_public_key")
-	}
-	return nil
 }
 
 func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath, direct bool) error {
@@ -384,22 +339,31 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 			logControlFallback("recovery_purge_revoked")
 		}
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	state.Lock()
-	defer state.Unlock()
-	plan, err := planPurgeRevokedZones(state, rt.Now(), target)
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	now := rt.Now()
+	commonPlan, err := startup.Common.PlanPurgeRevoked(now, target)
 	if err != nil {
 		return err
 	}
+	plan := purgePlanFromOwners(commonPlan, startup.Runtime)
 	if apply {
-		if err := cleanupPurgePlanIPsecLinks(ctx, rt, state, plan); err != nil {
+		view := startup.Common.ReadView()
+		runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+		if err := cleanupPurgePlanIPsecLinks(ctx, rt, runtimeCandidate, plan); err != nil {
 			return err
 		}
-		executePurgePlan(state, plan)
-		if err := rt.SaveState(state); err != nil {
+		for _, peerID := range plan.SyncPeers {
+			delete(runtimeCandidate.PeerCleanups, peerID)
+		}
+		if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
+			return err
+		}
+		if _, err := startup.Common.PurgeRevoked(ctx, now, target); err != nil {
 			return err
 		}
 	}
@@ -410,7 +374,7 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	return nil
 }
 
-func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, state *stateFile, plan *purgePlan) error {
+func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, runtime *linuxRuntimeState, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
@@ -424,7 +388,7 @@ func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, state *stateFi
 	if drivers.close != nil {
 		defer func() { _ = drivers.close() }()
 	}
-	_, err = cleanupIPsecLinkInstancesByID(ctx, state, plan.LinkInstances, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
+	_, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, drivers.ipsecDriver, drivers.xfrmDriver, rt.Now())
 	return err
 }
 

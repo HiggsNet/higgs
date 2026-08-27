@@ -43,14 +43,32 @@ func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState,
 	if rt == nil || rt.Config == nil || rt.StatePath == "" {
 		return nil, startup, errors.New("daemon runtime state path is not configured")
 	}
-	if _, err := rt.LoadState(); err != nil {
-		return nil, startup, err
-	}
 	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return nil, startup, err
 	}
 	startup, found, err := loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
+	if err != nil {
+		_ = store.Close()
+		return nil, linuxStartupState{}, err
+	}
+	if found {
+		return store, startup, nil
+	}
+	// Only an uninitialized database may enter the legacy bootstrap path. Once
+	// common state exists, every reopen above is independent of the old Network
+	// and meta representation.
+	if err := store.Close(); err != nil {
+		return nil, linuxStartupState{}, err
+	}
+	if _, err := rt.LoadState(); err != nil {
+		return nil, linuxStartupState{}, err
+	}
+	store, err = corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		return nil, linuxStartupState{}, err
+	}
+	startup, found, err = loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
 	if err != nil || !found {
 		_ = store.Close()
 		if err != nil {

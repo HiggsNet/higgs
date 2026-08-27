@@ -230,8 +230,8 @@ func logObjectPullSnapshot(req *gossip.ObjectPullRequest, response *gossip.Objec
 	})
 }
 
-func tryObjectPullTCPUntil(state *stateFile, config *syncConfigFile, peerID string, path zone.ZonePath, deadline time.Time) (*corestate.ZoneSnapshot, error) {
-	addr := resolvePeerTCPAddr(state, config, peerID)
+func tryObjectPullTCPUntil(input corehost.GossipDiscoveryInput, peerID string, path zone.ZonePath, deadline time.Time) (*corestate.ZoneSnapshot, error) {
+	addr := corehost.ResolveGossipObjectPullAddress(input, peerID, time.Now())
 	if addr == "" {
 		return nil, fmt.Errorf("no TCP address for peer %s", peerID)
 	}
@@ -343,60 +343,6 @@ func (d *DaemonService) observeObjectPullResult(result objectPullTransportResult
 		return
 	}
 	recordObjectPullResult(d.PeerObservability, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, d.Sync.now())
-}
-
-// resolvePeerTCPAddr returns the best-effort TCP object-pull address for a peer.
-func resolvePeerTCPAddr(state *stateFile, config *syncConfigFile, targetPeerID string) string {
-	if config == nil || targetPeerID == "" {
-		return ""
-	}
-	// Prefer the currently verified observed path. UDP reachability can learn a
-	// better public/NAT path than a stale signed or bootstrap endpoint, and TCP
-	// object pull uses the same numeric port on that path.
-	if state != nil {
-		peerState := state.SyncPeers[targetPeerID]
-		now := time.Now()
-		if observedPathActive(peerState, now) && peerChainVerified(state, targetPeerID, now) {
-			if tcp := objectPullTCPAddr(peerState.ObservedAddr); tcp != "" {
-				return tcp
-			}
-		}
-	}
-	// Prefer bootstrap address with the same numeric TCP port.
-	for _, peer := range config.Bootstrap {
-		if peer.ID == targetPeerID && peer.Addr != "" {
-			if tcp := objectPullTCPAddr(peer.Addr); tcp != "" {
-				return tcp
-			}
-		}
-	}
-	// Fall back to discovered endpoint with the same numeric TCP port.
-	var privateTCP string
-	if state != nil && state.Network != nil {
-		for discoveredID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
-			if discoveredID != targetPeerID || len(entries) == 0 {
-				continue
-			}
-			for _, entry := range sortedEndpointEntriesForDial(entries) {
-				udp := net.JoinHostPort(entry.Address, fmt.Sprintf("%d", entry.Port))
-				tcp := objectPullTCPAddr(udp)
-				if tcp == "" {
-					continue
-				}
-				if endpointEntryIsPrivate(entry) {
-					if privateTCP == "" {
-						privateTCP = tcp
-					}
-					continue
-				}
-				return tcp
-			}
-		}
-	}
-	if privateTCP != "" {
-		return privateTCP
-	}
-	return ""
 }
 
 // objectPullListenAddr derives the TCP listen address from the UDP listen addr.

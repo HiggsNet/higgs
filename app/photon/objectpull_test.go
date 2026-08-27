@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -97,135 +98,47 @@ func TestObjectPullLookupRejectsRevokedZone(t *testing.T) {
 	t.Skip("revocation tested in pkg/core/gossip")
 }
 
-func TestResolvePeerTCPAddrPrefersBootstrap(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{
-			{ID: "node-b", Addr: "192.0.2.10:33434"},
-		},
+func TestCommonObjectPullAddressPrefersVerifiedObservedPath(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Now()
+	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {
+		ObservedAddr: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+	}}
+	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	input := testDaemonGossipDiscoveryInput(state, config)
+	if got := corehost.ResolveGossipObjectPullAddress(input, "node-b.catofes.", now); got != "198.51.100.10:33434" {
+		t.Fatalf("object-pull address = %q, want verified observed path", got)
 	}
-	if got := resolvePeerTCPAddr(state, config, "node-b"); got != "192.0.2.10:33434" {
-		t.Fatalf("resolvePeerTCPAddr = %q, want 192.0.2.10:33434", got)
-	}
-	if got := resolvePeerTCPAddr(state, config, "unknown"); got != "" {
-		t.Fatalf("resolvePeerTCPAddr unknown = %q, want empty", got)
+	input.Peers["unknown.catofes."] = input.Peers["node-b.catofes."]
+	if got := corehost.ResolveGossipObjectPullAddress(input, "unknown.catofes.", now); got != "" {
+		t.Fatalf("unverified observed address = %q, want empty", got)
 	}
 }
 
-func TestResolvePeerTCPAddrPrefersObservedOverBootstrap(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+func TestCommonObjectPullAddressUsesSignedEndpoint(t *testing.T) {
+	state, config := buildTestNetworkState(t)
 	now := time.Now()
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {
-			ObservedAddr:          "115.171.85.64:33400",
-			ObservedFirstSeenUnix: now.Unix(),
-			ObservedLastSeenUnix:  now.Unix(),
-			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-		},
-	}
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{
-			{ID: "node-b.catofes.", Addr: "[240e:305:1e8f:2900::1]:33400"},
-		},
-	}
-
-	if got := resolvePeerTCPAddr(state, config, "node-b.catofes."); got != "115.171.85.64:33400" {
-		t.Fatalf("resolvePeerTCPAddr = %q, want observed public path", got)
-	}
-}
-
-func TestResolvePeerTCPAddrUsesSignedEndpoint(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
-	now := time.Now()
-	endpoints := []gossip.LocalEndpoint{
-		{IP: net.ParseIP("203.0.113.10"), Port: 33434, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise},
-	}
 	record := &zone.Record{
-		Zone:      "node-b.catofes.",
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     endpointRecordBytes(endpoints, now),
-		Version:   1,
-		Timestamp: now.Unix(),
+		Zone: "node-b.catofes.", Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint",
+		Value: endpointRecordBytes([]gossip.LocalEndpoint{{
+			IP: net.ParseIP("203.0.113.10"), Port: 33434, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise,
+		}}, now),
+		Version: 1, Timestamp: now.Unix(),
 	}
 	if err := photoncrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		t.Fatalf("SignRecord(endpoint): %v", err)
+		t.Fatal(err)
 	}
 	if err := state.Network.PutAt(record, now); err != nil {
-		t.Fatalf("PutAt(endpoint): %v", err)
+		t.Fatal(err)
 	}
-
-	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "203.0.113.10:33434" {
-		t.Fatalf("resolvePeerTCPAddr signed endpoint = %q, want 203.0.113.10:33434", got)
-	}
-}
-
-func TestResolvePeerTCPAddrUsesVerifiedObservedPath(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	now := time.Now()
-	state.SyncPeers = make(map[string]syncPeerState)
-	state.SyncPeers["node-b.catofes."] = syncPeerState{
-		ObservedAddr:          "127.0.0.1:33434",
-		ObservedFirstSeenUnix: now.Unix(),
-		ObservedLastSeenUnix:  now.Unix(),
-		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-	}
-
-	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "127.0.0.1:33434" {
-		t.Fatalf("resolvePeerTCPAddr observed = %q, want 127.0.0.1:33434", got)
-	}
-
-	state.SyncPeers["unknown.catofes."] = syncPeerState{
-		ObservedAddr:          "127.0.0.1:33435",
-		ObservedFirstSeenUnix: now.Unix(),
-		ObservedLastSeenUnix:  now.Unix(),
-		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-	}
-	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "unknown.catofes."); got != "" {
-		t.Fatalf("resolvePeerTCPAddr unverified observed = %q, want empty", got)
-	}
-}
-
-func TestResolvePeerTCPAddrPrefersObservedOverPrivateSignedEndpoint(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	now := time.Now()
-	endpoints := []gossip.LocalEndpoint{
-		{IP: net.ParseIP("10.16.255.8"), Port: 33435, Scope: "global", Priority: 100, Source: gossip.SourceInterface},
-	}
-	record := &zone.Record{
-		Zone:      "node-b.catofes.",
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     endpointRecordBytes(endpoints, now),
-		Version:   1,
-		Timestamp: now.Unix(),
-	}
-	if err := photoncrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		t.Fatalf("SignRecord(endpoint): %v", err)
-	}
-	if err := state.Network.PutAt(record, now); err != nil {
-		t.Fatalf("PutAt(endpoint): %v", err)
-	}
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {
-			ObservedAddr:          "114.246.101.91:33435",
-			ObservedFirstSeenUnix: now.Unix(),
-			ObservedLastSeenUnix:  now.Unix(),
-			ObservedUntilUnix:     now.Add(time.Minute).Unix(),
-		},
-	}
-
-	if got := resolvePeerTCPAddr(state, &syncConfigFile{}, "node-b.catofes."); got != "114.246.101.91:33435" {
-		t.Fatalf("resolvePeerTCPAddr = %q, want observed public path", got)
+	if got := corehost.ResolveGossipObjectPullAddress(testDaemonGossipDiscoveryInput(state, config), "node-b.catofes.", now); got != "203.0.113.10:33434" {
+		t.Fatalf("object-pull address = %q, want signed endpoint", got)
 	}
 }
 
 func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
-	state.Lock()
-	defer state.Unlock()
-	_, err := tryObjectPullTCP(state, &syncConfigFile{}, "node-b.catofes.", "node-b.catofes.")
+	_, err := tryObjectPullTCPUntil(corehost.GossipDiscoveryInput{Network: state.Network}, "node-b.catofes.", "node-b.catofes.", time.Time{})
 	if err == nil {
 		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
 	}
@@ -324,16 +237,10 @@ func TestObjectPullClientTimeoutHonorsOuterDeadline(t *testing.T) {
 }
 
 func TestOfflineObjectPullExpiredDeadlineDoesNotPersistDiagnostics(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{
-			{ID: "node-b.catofes.", Addr: "127.0.0.1:1"},
-		},
-	}
-
-	state.Lock()
-	defer state.Unlock()
-	_, err := tryObjectPullTCPUntil(state, config, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
+	input := corehost.GossipDiscoveryInput{Bootstrap: map[string]*net.UDPAddr{
+		"node-b.catofes.": {IP: net.ParseIP("127.0.0.1"), Port: 1},
+	}}
+	_, err := tryObjectPullTCPUntil(input, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)
 	}

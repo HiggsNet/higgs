@@ -86,7 +86,7 @@ func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
 
 func testDaemonGossipDiscoveryInput(state *stateFile, config *syncConfigFile) corehost.GossipDiscoveryInput {
 	checkpoint, _ := projectLegacyGossipCheckpoint(state.SyncPeers)
-	return daemonGossipDiscoveryInput(corestate.View{State: &corestate.VerifiedState{
+	return gossipDiscoveryInputFromOwners(corestate.View{State: &corestate.VerifiedState{
 		ManagedZone: state.ManagedZone,
 		Network:     state.Network,
 	}, Gossip: checkpoint}, state.PeerCleanups, config)
