@@ -216,7 +216,16 @@ authorization 和 transport records 作为可信事实来源。
     book 已归公共 HostRuntime/transport runtime，平台 adapter 只负责 socket I/O；待公共 Runtime 直接持有
     common/Linux owner 后删除 `daemon_discovery.go` 中剩余的输入组装与触发。
   - `daemon_state_projection.go` 不是目标架构层；每个调用方改用其 owner 的 typed input 后立即删除对应
-    projection，最终删除整个文件。
+    projection，最终删除整个文件。observer 的 zone/peer 读取已完成首个切口：zone 直接使用 common verified
+    Network，peer 直接组合 common verified Network、gossip checkpoint 与独立 observability snapshot，control
+    `record_get` 也直接查询 common verified Network；已删除 `zonesProjection`/`peersProjection`/
+    `recordDetailProjection`。observer 事件中的 link ID 直接读取 Linux runtime，peer ID 直接读取 common gossip
+    checkpoint；reload 的 identity key path 与 IPsec interval 的 link 存在性也直接读取 Linux runtime。对应删除
+    `linkIDsProjection`/`peerIDsProjection`/`identityKeyPathProjection`/`hasLinkInstancesProjection`，不再为这些只读
+    视图构造聚合 `stateFile`。`endpoint_acl_list` 直接从 Linux runtime 复制并排序 ACL，删除
+    `endpointACLProjection`；BIRD HTTP/control status 也直接复制 Linux runtime 的 instance/reconcile 数据，删除
+    `birdStatusProjection`；firewall control status 直接复制 Linux runtime reconcile，删除
+    `firewallStatusProjection`。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

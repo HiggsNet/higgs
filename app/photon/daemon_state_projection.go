@@ -2,12 +2,10 @@ package main
 
 import (
 	"crypto/ed25519"
-	"sort"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -74,59 +72,6 @@ func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	}
 }
 
-func (s *DaemonStateStore) recordDetailProjection(path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, daemonStateStoreMeta, error) {
-	if s == nil {
-		return nil, daemonStateStoreMeta{}, nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	view, err := lookupRecordDetail(s.committed, path, key, history)
-	return view, s.metaLocked(), err
-}
-
-func (s *DaemonStateStore) endpointACLProjection() ([]endpointACL, daemonStateStoreMeta) {
-	if s == nil {
-		return nil, daemonStateStoreMeta{}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var acls []endpointACL
-	if s.committed != nil {
-		for _, acl := range s.committed.EndpointACLs {
-			acl.Selectors = append([]string(nil), acl.Selectors...)
-			acls = append(acls, acl)
-		}
-		sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
-	}
-	return acls, s.metaLocked()
-}
-
-type birdStatusProjection struct {
-	loaded           bool
-	instances        map[string]*BirdInstanceState
-	lastRoutingError string
-	meta             daemonStateStoreMeta
-}
-
-func (s *DaemonStateStore) birdStatusProjection() birdStatusProjection {
-	var out birdStatusProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out.meta = s.metaLocked()
-	if s.committed == nil {
-		return out
-	}
-	out.loaded = true
-	out.instances = cloneBirdInstances(s.committed.BirdInstances)
-	if s.committed.RoutingReconcile != nil {
-		out.lastRoutingError = s.committed.RoutingReconcile.LastError
-	}
-	return out
-}
-
 type routesProjection struct {
 	loaded bool
 	routes *inspecthttp.RoutesResponse
@@ -168,18 +113,6 @@ func (s *DaemonStateStore) admissionProjection(now time.Time) (inspect.Admission
 		return inspect.AdmissionDiagnosis{}, s.metaLocked(), false
 	}
 	return diagnoseAutoJoinAdmission(s.committed, now), s.metaLocked(), true
-}
-
-func (s *DaemonStateStore) firewallStatusProjection() (*firewallReconcileState, daemonStateStoreMeta, bool) {
-	if s == nil {
-		return nil, daemonStateStoreMeta{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, s.metaLocked(), false
-	}
-	return cloneFirewallReconcileState(s.committed.FirewallReconcile), s.metaLocked(), true
 }
 
 type linksStatusProjection struct {
@@ -241,82 +174,6 @@ func (s *DaemonStateStore) revocationImpactProjection(config *syncConfigFile, no
 	return AllRevocationImpact(s.committed, config, now), s.metaLocked(), true
 }
 
-type zonesProjection struct {
-	loaded bool
-	found  bool
-	detail inspect.ZoneDetail
-	list   inspecthttp.ZonesResponse
-}
-
-func (s *DaemonStateStore) zonesProjection(path zone.ZonePath, now time.Time) zonesProjection {
-	var out zonesProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	state := s.committed
-	if state == nil || state.Network == nil {
-		return out
-	}
-	out.loaded = true
-	if path == "" {
-		out.list = inspecthttp.ZonesFromNetwork(state.Network, now.Unix())
-		return out
-	}
-	zs := state.Network.Zones[path]
-	if zs == nil {
-		return out
-	}
-	out.found = true
-	out.detail = inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-		Path: path, State: zs, Network: state.Network, Now: now, IncludeHistory: true,
-	})
-	return out
-}
-
-type peersProjection struct {
-	loaded bool
-	known  map[string]bool
-	order  []string
-	peers  map[string]inspecthttp.PeerJSON
-}
-
-func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time, observations map[string]observability.PeerDiagnostics) peersProjection {
-	out := peersProjection{known: make(map[string]bool), peers: make(map[string]inspecthttp.PeerJSON)}
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	state := s.committed
-	if state == nil {
-		return out
-	}
-	out.loaded = true
-	peerSet := inspectPeerSetInput(state, config, now)
-	for peerID := range observations {
-		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
-	}
-	for _, id := range inspect.BuildPeerIDs(peerSet) {
-		if out.known[id] {
-			continue
-		}
-		out.known[id] = true
-		out.order = append(out.order, id)
-		ps := cloneSyncPeerState(state.SyncPeers[id])
-		observed := observations[id]
-		out.peers[id] = inspecthttp.PeerFromInputs(
-			id,
-			bootstrapAddrForPeer(config, id),
-			inspectPeerEndpoints(id, ps, observed, config, state.Network, now),
-			ps,
-			observed,
-		)
-	}
-	return out
-}
-
 // committedStateLease is the only read API allowed to retain a committed root.
 // Published roots are immutable, so the persistence adapter can encode this
 // revision after releasing the store lock. The lease must never be used as a
@@ -359,18 +216,6 @@ func (s *DaemonStateStore) revocationCleanupProjection(now time.Time) revocation
 	return projection
 }
 
-func (s *DaemonStateStore) identityKeyPathProjection() string {
-	if s == nil {
-		return ""
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return ""
-	}
-	return s.committed.IdentityKeyPath
-}
-
 type autoJoinLogProjection struct {
 	pending     bool
 	managedZone zone.ZonePath
@@ -406,47 +251,6 @@ func (s *DaemonStateStore) autoAnnouncePlanProjection(d *DaemonService, ars *rou
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return d.autoAnnounceAssignedIPsPlanForState(s.committed, ars)
-}
-
-func (s *DaemonStateStore) hasLinkInstancesProjection() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.committed != nil && len(s.committed.LinkInstances) > 0
-}
-
-func (s *DaemonStateStore) linkIDsProjection() []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(s.committed.LinkInstances))
-	for id := range s.committed.LinkInstances {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-func (s *DaemonStateStore) peerIDsProjection() []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(s.committed.SyncPeers))
-	for id := range s.committed.SyncPeers {
-		ids = append(ids, id)
-	}
-	return ids
 }
 
 func (s *DaemonStateStore) healthContextProjection(links []healthLinkJSON) []inspecthttp.HealthContextItem {

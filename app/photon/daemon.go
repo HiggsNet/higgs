@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -636,11 +637,18 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		record, meta, err := d.StateStore.recordDetailProjection(zone.ZonePath(request.Zone), request.Key, request.History)
+		view := d.StateStore.common.ReadView()
+		var network *zone.NetworkState
+		if view.State != nil {
+			network = view.State.Network
+		}
+		record, err := lookupRecordDetailFromNetwork(network, zone.ZonePath(request.Zone), request.Key, request.History)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
+		meta := d.StateStore.metadata()
+		meta.Revision = uint64(view.Revision)
 		response := controlResponse{OK: true, Record: record}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
@@ -663,9 +671,16 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "endpoint ACL removed"})
 	case "endpoint_acl_list":
-		acls, meta := d.StateStore.endpointACLProjection()
+		d.StateStore.mu.RLock()
+		acls := make([]endpointACL, 0, len(d.StateStore.runtime.EndpointACLs))
+		for _, acl := range d.StateStore.runtime.EndpointACLs {
+			acl.Selectors = append([]string(nil), acl.Selectors...)
+			acls = append(acls, acl)
+		}
+		d.StateStore.mu.RUnlock()
+		sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
 		response := controlResponse{OK: true, EndpointACLs: acls, Message: "endpoint ACL list"}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, d.StateStore.metadata())
 		writeControlResponse(conn, response)
 	case "delegate_issue":
 		if err := validateControlDelegateIssue(request); err != nil {
@@ -815,14 +830,20 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
 	case "bird_status":
-		projection := d.StateStore.birdStatusProjection()
+		d.StateStore.mu.RLock()
+		birdInstances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+		lastRoutingError := ""
+		if d.StateStore.runtime.RoutingReconcile != nil {
+			lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
+		}
+		d.StateStore.mu.RUnlock()
 		response := controlResponse{
 			OK:               true,
-			BirdInstances:    projection.instances,
-			LastRoutingError: projection.lastRoutingError,
+			BirdInstances:    birdInstances,
+			LastRoutingError: lastRoutingError,
 			Message:          "bird status",
 		}
-		applyStateStoreMeta(&response, projection.meta)
+		applyStateStoreMeta(&response, d.StateStore.metadata())
 		writeControlResponse(conn, response)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
@@ -873,17 +894,15 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "firewall_status":
-		fwSnapshot, meta, loaded := d.StateStore.firewallStatusProjection()
-		if !loaded {
-			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
+		d.StateStore.mu.RLock()
+		fwSnapshot := cloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)
+		d.StateStore.mu.RUnlock()
 		response := controlResponse{
 			OK:                true,
 			FirewallReconcile: fwSnapshot,
 			Message:           "firewall status",
 		}
-		applyStateStoreMeta(&response, meta)
+		applyStateStoreMeta(&response, d.StateStore.metadata())
 		writeControlResponse(conn, response)
 	case "links_status":
 		projection := d.StateStore.linksStatusProjection(observerRuntime(d), d.healthStatusResponse())
@@ -1153,7 +1172,12 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if latest == nil {
 		return errors.New("daemon state is not initialized")
 	}
-	currentIdentityKeyPath := d.StateStore.identityKeyPathProjection()
+	d.StateStore.mu.RLock()
+	currentIdentityKeyPath := ""
+	if d.StateStore.runtime != nil {
+		currentIdentityKeyPath = d.StateStore.runtime.IdentityKeyPath
+	}
+	d.StateStore.mu.RUnlock()
 	requestedIdentityKeyPath := config.Identity.KeyPath
 	if requestedIdentityKeyPath != "" {
 		requestedIdentityKeyPath, err = canonicalIdentityKeyPath(requestedIdentityKeyPath)
@@ -1877,7 +1901,13 @@ func (d *DaemonService) ipsecReconcileInterval() time.Duration {
 	}
 	groups := d.Sync.App.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
-		if d.StateStore.hasLinkInstancesProjection() {
+		hasLinkInstances := false
+		if d.StateStore != nil {
+			d.StateStore.mu.RLock()
+			hasLinkInstances = d.StateStore.runtime != nil && len(d.StateStore.runtime.LinkInstances) > 0
+			d.StateStore.mu.RUnlock()
+		}
+		if hasLinkInstances {
 			return defaultIPsecReconcileInterval
 		}
 		return 0

@@ -9,17 +9,19 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func inspectPeerSetInput(state *stateFile, config *syncConfigFile, now time.Time) inspect.PeerSetInput {
+func inspectPeerSetInput(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time) inspect.PeerSetInput {
 	input := inspect.PeerSetInput{}
-	if state != nil {
-		input.LocalIDs = append(input.LocalIDs, string(state.ManagedZone))
-		input.RuntimeIDs = make([]string, 0, len(state.SyncPeers))
-		for id := range state.SyncPeers {
+	if managedZone != "" {
+		input.LocalIDs = append(input.LocalIDs, string(managedZone))
+	}
+	if peers != nil {
+		input.RuntimeIDs = make([]string, 0, len(peers))
+		for id := range peers {
 			input.RuntimeIDs = append(input.RuntimeIDs, id)
 		}
-		for id := range gossip.ExtractPeerEndpointsAt(state.Network, now) {
-			input.SignedIDs = append(input.SignedIDs, id)
-		}
+	}
+	for id := range gossip.ExtractPeerEndpointsAt(network, now) {
+		input.SignedIDs = append(input.SignedIDs, id)
 	}
 	if config != nil {
 		input.LocalIDs = append(input.LocalIDs, config.PeerID)

@@ -41,7 +41,7 @@ func buildDebugPeerView(state *stateFile, config *syncConfigFile, peerID string,
 	if state == nil {
 		return inspect.PeerDebugView{}, fmt.Errorf("state is nil")
 	}
-	if !inspect.PeerKnown(inspectPeerSetInput(state, config, now), peerID) {
+	if !inspect.PeerKnown(inspectPeerSetInput(state.ManagedZone, state.Network, state.SyncPeers, config, now), peerID) {
 		return inspect.PeerDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
 	}
 	return buildGossipPeerView(state, config, peerID, now), nil
@@ -51,7 +51,7 @@ func buildGossipPeerViews(state *stateFile, config *syncConfigFile, now time.Tim
 	if state == nil {
 		return nil
 	}
-	peerIDs := inspect.BuildPeerIDs(inspectPeerSetInput(state, config, now))
+	peerIDs := inspect.BuildPeerIDs(inspectPeerSetInput(state.ManagedZone, state.Network, state.SyncPeers, config, now))
 	views := make([]inspect.PeerDebugView, 0, len(peerIDs))
 	for _, peerID := range peerIDs {
 		views = append(views, buildGossipPeerView(state, config, peerID, now))

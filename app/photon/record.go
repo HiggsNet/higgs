@@ -150,13 +150,20 @@ func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) (
 }
 
 func lookupRecordDetail(state *stateFile, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
+	if state == nil {
+		return nil, fmt.Errorf("state is nil")
+	}
+	return lookupRecordDetailFromNetwork(state.Network, path, key, history)
+}
+
+func lookupRecordDetailFromNetwork(network *zone.NetworkState, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
 	if history < 0 {
 		return nil, fmt.Errorf("history must be >= 0")
 	}
-	if state == nil || state.Network == nil {
+	if network == nil {
 		return nil, fmt.Errorf("state is nil")
 	}
-	zs := state.Network.Zones[path]
+	zs := network.Zones[path]
 	if zs == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
@@ -114,20 +115,37 @@ func observerIDsPayload(key string, ids []string) map[string]any {
 	return map[string]any{key: ids}
 }
 
-// observerLinkIDsPayload returns {link_ids: [...]} derived from the current
-// state snapshot's link instance keys.
+// observerLinkIDsPayload returns {link_ids: [...]} from Linux runtime state.
 func (d *DaemonService) observerLinkIDsPayload() any {
-	ids := d.StateStore.linkIDsProjection()
+	if d == nil || d.StateStore == nil {
+		return nil
+	}
+	d.StateStore.mu.RLock()
+	ids := make([]string, 0, len(d.StateStore.runtime.LinkInstances))
+	for id := range d.StateStore.runtime.LinkInstances {
+		ids = append(ids, id)
+	}
+	d.StateStore.mu.RUnlock()
 	if len(ids) == 0 {
 		return nil
 	}
 	return observerIDsPayload("link_ids", ids)
 }
 
-// observerPeerIDsPayload returns {peer_ids: [...]} derived from the current
-// state snapshot's sync peer keys.
+// observerPeerIDsPayload returns {peer_ids: [...]} from the common gossip
+// checkpoint.
 func (d *DaemonService) observerPeerIDsPayload() any {
-	ids := d.StateStore.peerIDsProjection()
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+		return nil
+	}
+	view := d.StateStore.common.ReadView()
+	if view.Gossip == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(view.Gossip.Peers))
+	for id := range view.Gossip.Peers {
+		ids = append(ids, id)
+	}
 	if len(ids) == 0 {
 		return nil
 	}
@@ -200,48 +218,68 @@ func (p *observerProvider) Status() (any, error) {
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
 	now := d.Sync.now()
 	zp := zone.ZonePath(zoneFilter)
-	projection := d.StateStore.zonesProjection(zp, now)
-	if !projection.loaded {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil {
 		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
 	}
-	// Single zone detail
-	if zoneFilter != "" {
-		if !projection.found {
+	if zp != "" {
+		zs := view.State.Network.Zones[zp]
+		if zs == nil {
 			return nil, observer.Errorf(http.StatusNotFound, "zone not found")
 		}
-		return projection.detail, nil
+		return inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path: zp, State: zs, Network: view.State.Network, Now: now, IncludeHistory: true,
+		}), nil
 	}
-	return projection.list, nil
+	return inspecthttp.ZonesFromNetwork(view.State.Network, now.Unix()), nil
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
 	}
+	view := d.StateStore.common.ReadView()
+	if view.State == nil {
+		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
+	}
+	now := d.Sync.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
-	projection := d.StateStore.peersProjection(d.Sync.Config, d.Sync.now(), observabilitySnapshots)
-	if !projection.loaded {
-		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
+	peers := syncPeerReadView(view.Gossip)
+	peerSet := inspectPeerSetInput(view.State.ManagedZone, view.State.Network, peers, d.Sync.Config, now)
+	for peerID := range observabilitySnapshots {
+		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
 	}
-	// Single peer detail
+	ids := inspect.BuildPeerIDs(peerSet)
+	items := make(map[string]inspecthttp.PeerJSON, len(ids))
+	for _, peerID := range ids {
+		peer := peers[peerID]
+		observed := observabilitySnapshots[peerID]
+		items[peerID] = inspecthttp.PeerFromInputs(
+			peerID,
+			bootstrapAddrForPeer(d.Sync.Config, peerID),
+			inspectPeerEndpoints(peerID, peer, observed, d.Sync.Config, view.State.Network, now),
+			peer,
+			observed,
+		)
+	}
 	if peerFilter != "" {
-		if !projection.known[peerFilter] {
+		peer, ok := items[peerFilter]
+		if !ok {
 			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 		}
-		return projection.peers[peerFilter], nil
+		return peer, nil
 	}
-	// All peers
-	peers := make([]inspecthttp.PeerJSON, 0, len(projection.order))
-	for _, id := range projection.order {
-		peers = append(peers, projection.peers[id])
+	response := make([]inspecthttp.PeerJSON, 0, len(ids))
+	for _, peerID := range ids {
+		response = append(response, items[peerID])
 	}
-	return inspecthttp.PeersResponse{Peers: peers}, nil
+	return inspecthttp.PeersResponse{Peers: response}, nil
 }
 
 func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
@@ -461,15 +499,18 @@ func (p *observerProvider) Routes() (any, error) {
 
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
-	projection := d.StateStore.birdStatusProjection()
-	if !projection.loaded {
-		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
+	d.StateStore.mu.RLock()
+	instances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+	lastRoutingError := ""
+	if d.StateStore.runtime.RoutingReconcile != nil {
+		lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
 	}
+	d.StateStore.mu.RUnlock()
 	return inspecthttp.BirdResponse{
-		Instances:        projection.instances,
-		LastRoutingError: projection.lastRoutingError,
+		Instances:        instances,
+		LastRoutingError: lastRoutingError,
 	}, nil
 }

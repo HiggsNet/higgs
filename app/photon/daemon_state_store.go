@@ -388,6 +388,15 @@ func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
 	return cloneStateFile(committed), rev
 }
 
+func (s *DaemonStateStore) metadata() daemonStateStoreMeta {
+	if s == nil {
+		return daemonStateStoreMeta{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.metaLocked()
+}
+
 // routingSnapshot returns a routing-owned workspace without serializing the
 // complete daemon state. Network and unrelated children remain shared and must
 // be treated as immutable. The fields routing reconcile mutates are detached.
