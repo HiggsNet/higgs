@@ -58,7 +58,6 @@ type GossipActionController interface {
 	GossipStateView(context.Context) GossipStateView
 	ApplyGossipSnapshots(context.Context, string, []gossip.ApplySnapshotAction) (GossipSnapshotApplyResult, error)
 	SendGossip(context.Context, gossip.OutboundMessage) error
-	StartGossipObjectPull(context.Context, gossip.StartObjectPullAction) error
 	RecordGossipBackoffs(context.Context, []gossip.RecordBackoffAction) error
 	PersistGossip(context.Context, GossipPersistenceIntent, *GossipCompletionIntent) error
 	ReportGossipIssue(GossipExecutionIssue)
@@ -133,8 +132,9 @@ func (runtime *Runtime) ExecuteGossipActions(
 		}
 	}
 	for _, pull := range plan.ObjectPulls {
-		if err := controller.StartGossipObjectPull(ctx, pull); err != nil {
+		if err := runtime.SubmitGossipObjectPull(pull); err != nil {
 			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
+			_ = runtime.PostGossipObjectPullCompletion(GossipObjectPullCompletion{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}
 	}
 	for _, timer := range plan.Timers {

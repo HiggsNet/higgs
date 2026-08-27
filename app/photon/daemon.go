@@ -56,8 +56,6 @@ type DaemonService struct {
 
 	hostRuntime       *corehost.Runtime
 	syncIngressRoutes map[string]syncIngressRoute
-	objectPullResults chan ObjectPullResult
-	objectPullPool    *objectPullPool
 
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager   birdProcessManager
@@ -191,8 +189,6 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
-	d.objectPullResults = make(chan ObjectPullResult, 64)
-	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
 	d.configureHealthManager()
 	return d
 }
@@ -305,7 +301,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
 	}
-	d.objectPullPool.Start(ctx)
+	if err := d.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: d}, 0, 0); err != nil {
+		return err
+	}
 	stopControl, err := d.startControlServer(ctx)
 	if err != nil {
 		return err
@@ -476,9 +474,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			event, ok := d.hostRuntime.GossipEventFor(hostEvent)
 			if ok && d.handleSyncEvent(ctx, event) {
 			}
-		case result := <-d.objectPullResults:
-			timer.Stop()
-			d.acceptObjectPullResult(result)
 		case <-d.healthUpdates:
 			timer.Stop()
 			d.handleHealthUpdate(d.Sync.now())

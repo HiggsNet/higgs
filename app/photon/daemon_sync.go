@@ -771,11 +771,6 @@ func (controller *daemonGossipActionController) SendGossip(_ context.Context, ou
 	return controller.daemon.sendSyncSessionMessage(outbound.PeerID, outbound.Message)
 }
 
-func (controller *daemonGossipActionController) StartGossipObjectPull(ctx context.Context, action gossip.StartObjectPullAction) error {
-	controller.daemon.submitObjectPull(ctx, action.PeerID, action.Zone, controller.now)
-	return nil
-}
-
 func (controller *daemonGossipActionController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
 	for _, backoff := range backoffs {
 		if controller.mutations == nil {
@@ -837,49 +832,6 @@ func (d *DaemonService) executeSyncActionsWithMutations(ctx context.Context, ses
 	}
 	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, controller)
 	return result.NetworkChanged
-}
-
-func (d *DaemonService) submitObjectPull(ctx context.Context, peerID string, path zone.ZonePath, now time.Time) {
-	if d == nil || d.objectPullPool == nil || d.Sync == nil {
-		return
-	}
-	addr, stateAvailable := d.StateStore.peerTCPAddrProjection(d.Sync.Config, peerID)
-	if !stateAvailable {
-		err := fmt.Errorf("no committed state for peer %s", peerID)
-		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.acceptObjectPullResult(result)
-		return
-	}
-	if addr == "" {
-		err := fmt.Errorf("no TCP address for peer %s", peerID)
-		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.acceptObjectPullResult(result)
-		return
-	}
-	d.observeObjectPullAttempt(peerID, path, now)
-	if !d.objectPullPool.Submit(ctx, ObjectPullRequest{PeerID: peerID, Zone: path, Addr: addr}) {
-		err := errors.New("object pull submit failed")
-		result := ObjectPullResult{PeerID: peerID, Zone: path, Err: err, Unreachable: true}
-		d.acceptObjectPullResult(result)
-	}
-}
-
-// acceptObjectPullResult is the sole ingress for completed platform pull work:
-// Linux records transport diagnostics, then HostRuntime maps and orders the
-// common completion with packet and timer events.
-func (d *DaemonService) acceptObjectPullResult(result ObjectPullResult) {
-	d.observeObjectPullResult(result)
-	if err := d.hostRuntime.PostGossipObjectPullCompletion(corehost.GossipObjectPullCompletion{
-		PeerID:   result.PeerID,
-		Zone:     result.Zone,
-		Snapshot: result.Snapshot,
-		Err:      result.Err,
-	}); err != nil {
-		d.logWarn("sync", "object_pull_result_dropped", map[string]any{
-			"peer_id": result.PeerID,
-			"zone":    result.Zone,
-		})
-	}
 }
 
 func (d *DaemonService) syncDatagramBudget() int {

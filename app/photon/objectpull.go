@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -116,20 +117,7 @@ func objectPullTCPServe(addr string, lookup func(*gossip.ObjectPullRequest) *gos
 				defer c.Close()
 				defer release()
 				_ = c.SetDeadline(time.Now().Add(objectPullServerConnDeadline))
-				req, err := gossip.DecodeObjectPullRequest(c)
-				if err != nil {
-					return
-				}
-				resp := lookup(req)
-				if resp == nil {
-					resp = &gossip.ObjectPullResponse{Error: "not found"}
-				}
-				data, err := gossip.EncodeObjectPullResponse(resp)
-				if err != nil {
-					return
-				}
-				_ = c.SetDeadline(time.Now().Add(objectPullServerConnDeadline))
-				_, _ = c.Write(data)
+				_ = gossip.ServeObjectPull(c, lookup)
 			}(conn)
 		}
 	}()
@@ -181,15 +169,7 @@ func pullObjectTCPForPeerUntil(peerID, addr string, req *gossip.ObjectPullReques
 		return nil, err
 	}
 	_ = conn.SetDeadline(ioDeadline)
-	if _, err := conn.Write(data); err != nil {
-		return nil, err
-	}
-	ioDeadline, err = objectPullClientDeadlineUntil(deadline, objectPullClientIOTimeout)
-	if err != nil {
-		return nil, err
-	}
-	_ = conn.SetDeadline(ioDeadline)
-	resp, err := gossip.DecodeObjectPullResponse(conn)
+	resp, err := gossip.ExchangeObjectPull(conn, req)
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +364,7 @@ func (d *DaemonService) observeObjectPullAttempt(peerID string, path zone.ZonePa
 	recordObjectPullAttempt(d.PeerObservability, peerID, "zone", path, "", now)
 }
 
-func (d *DaemonService) observeObjectPullResult(result ObjectPullResult) {
+func (d *DaemonService) observeObjectPullResult(result objectPullTransportResult) {
 	if d == nil || d.Sync == nil {
 		return
 	}
@@ -471,17 +451,9 @@ func startObjectPullServer(d *DaemonService) (net.Listener, error) {
 	return listener, nil
 }
 
-// ObjectPullRequest is a work item submitted to the async object-pull pool.
-type ObjectPullRequest struct {
-	PeerID string
-	Zone   zone.ZonePath
-	Addr   string
-}
-
-// ObjectPullResult is delivered back to the daemon event loop when an async
-// object pull finishes. The event loop applies the snapshot; workers must not
-// mutate NetworkState directly.
-type ObjectPullResult struct {
+// objectPullTransportResult contains Linux transport diagnostics produced alongside a
+// common HostRuntime completion. It is never a second event or state channel.
+type objectPullTransportResult struct {
 	PeerID      string
 	Zone        zone.ZonePath
 	Snapshot    *corestate.ZoneSnapshot
@@ -490,109 +462,69 @@ type ObjectPullResult struct {
 	Err         error
 }
 
-// objectPullPool runs a fixed number of workers that perform TCP object pulls
-// asynchronously and return results on the event loop channel.
-type objectPullPool struct {
-	requests chan ObjectPullRequest
-	results  chan<- ObjectPullResult
-	workers  int
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+type daemonObjectPullWorker struct{ daemon *DaemonService }
+
+func (worker daemonObjectPullWorker) PullGossipObject(ctx context.Context, action gossip.StartObjectPullAction) corehost.GossipObjectPullCompletion {
+	result := worker.pull(ctx, action)
+	if worker.daemon != nil {
+		worker.daemon.observeObjectPullResult(result)
+	}
+	return corehost.GossipObjectPullCompletion{PeerID: result.PeerID, Zone: result.Zone, Snapshot: result.Snapshot, Err: result.Err}
 }
 
-// newObjectPullPool creates a pool. Start must be called before submitting work.
-func newObjectPullPool(results chan<- ObjectPullResult, workers int) *objectPullPool {
-	if workers <= 0 {
-		workers = maxObjectPullConcurrency
-	}
-	return &objectPullPool{
-		requests: make(chan ObjectPullRequest),
-		results:  results,
-		workers:  workers,
-	}
-}
-
-// Start launches the worker goroutines.
-func (p *objectPullPool) Start(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	p.cancel = cancel
-	for i := 0; i < p.workers; i++ {
-		p.wg.Add(1)
-		go p.worker(ctx)
-	}
-}
-
-// Stop signals workers to exit and waits for them.
-func (p *objectPullPool) Stop() {
-	if p.cancel != nil {
-		p.cancel()
-	}
-	p.wg.Wait()
-}
-
-// Submit enqueues a pull request. It returns false if the context is canceled
-// or the request channel is full.
-func (p *objectPullPool) Submit(ctx context.Context, req ObjectPullRequest) bool {
-	select {
-	case p.requests <- req:
-		return true
-	case <-ctx.Done():
-		return false
-	case <-time.After(5 * time.Second):
-		return false
-	}
-}
-
-func (p *objectPullPool) worker(ctx context.Context) {
-	defer p.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case req, ok := <-p.requests:
-			if !ok {
-				return
-			}
-			result := p.doPull(ctx, req)
-			select {
-			case p.results <- result:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-}
-
-func (p *objectPullPool) doPull(_ context.Context, req ObjectPullRequest) ObjectPullResult {
+func (worker daemonObjectPullWorker) pull(ctx context.Context, action gossip.StartObjectPullAction) objectPullTransportResult {
 	logger := newAppLogger(nil)
-	addr := req.Addr
-	if addr == "" {
-		err := fmt.Errorf("no TCP address for peer %s", req.PeerID)
-		logger.Info("object_pull", "worker_no_addr", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String()})
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Err: err, Unreachable: true}
+	result := objectPullTransportResult{PeerID: action.PeerID, Zone: action.Zone}
+	if worker.daemon == nil || worker.daemon.StateStore == nil || worker.daemon.Sync == nil {
+		result.Err = errors.New("object pull daemon is not initialized")
+		result.Unreachable = true
+		return result
 	}
-	logger.Debug("object_pull", "worker_start", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "addr": addr})
-	resp, err := pullObjectTCPForPeerUntil(req.PeerID, addr, &gossip.ObjectPullRequest{
+	addr, stateAvailable := worker.daemon.StateStore.peerTCPAddrProjection(worker.daemon.Sync.Config, action.PeerID)
+	if !stateAvailable {
+		result.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)
+		result.Unreachable = true
+		return result
+	}
+	if addr == "" {
+		result.Err = fmt.Errorf("no TCP address for peer %s", action.PeerID)
+		result.Unreachable = true
+		logger.Info("object_pull", "worker_no_addr", map[string]any{"peer_id": action.PeerID, "zone": action.Zone.String()})
+		return result
+	}
+	worker.daemon.observeObjectPullAttempt(action.PeerID, action.Zone, worker.daemon.Sync.now())
+	logger.Debug("object_pull", "worker_start", map[string]any{"peer_id": action.PeerID, "zone": action.Zone.String(), "addr": addr})
+	deadline, _ := ctx.Deadline()
+	resp, err := pullObjectTCPForPeerUntil(action.PeerID, addr, &gossip.ObjectPullRequest{
 		Type: gossip.ObjectPullZone,
-		Zone: req.Zone,
-	}, time.Time{})
+		Zone: action.Zone,
+	}, deadline)
 	respBytes := 0
 	if resp != nil {
 		respBytes = encodedObjectPullResponseSize(resp)
 	}
-	logger.Debug("object_pull", "worker_done", map[string]any{"peer_id": req.PeerID, "zone": req.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
+	result.Bytes = respBytes
+	logger.Debug("object_pull", "worker_done", map[string]any{"peer_id": action.PeerID, "zone": action.Zone.String(), "ok": err == nil && resp != nil && resp.OK && resp.Snapshot != nil, "bytes": respBytes, "error": errString(err)})
 	unreachable := isObjectPullUnreachable(err)
 	if err != nil {
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Unreachable: unreachable, Err: err}
+		result.Unreachable = unreachable
+		result.Err = err
+		return result
 	}
 	if resp == nil || !resp.OK {
-		err := fmt.Errorf("object pull failed: %s", resp.Error)
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Err: err}
+		if resp == nil {
+			result.Err = errors.New("object pull returned empty response")
+		} else {
+			result.Err = fmt.Errorf("object pull failed: %s", resp.Error)
+		}
+		return result
 	}
 	if resp.Snapshot == nil {
-		return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Bytes: respBytes, Err: errors.New("object pull returned empty snapshot")}
+		result.Err = errors.New("object pull returned empty snapshot")
+		return result
 	}
-	return ObjectPullResult{PeerID: req.PeerID, Zone: req.Zone, Snapshot: resp.Snapshot, Bytes: respBytes, Err: nil}
+	result.Snapshot = resp.Snapshot
+	return result
 }
 
 func errString(err error) string {

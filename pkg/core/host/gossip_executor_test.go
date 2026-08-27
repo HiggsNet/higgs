@@ -26,6 +26,15 @@ type memoryGossipController struct {
 type memoryLinuxGossipController struct{ memoryGossipController }
 type memoryWindowsGossipController struct{ memoryGossipController }
 
+type memoryGossipObjectPullWorker struct {
+	pulls chan gossip.StartObjectPullAction
+}
+
+func (worker *memoryGossipObjectPullWorker) PullGossipObject(_ context.Context, pull gossip.StartObjectPullAction) GossipObjectPullCompletion {
+	worker.pulls <- pull
+	return GossipObjectPullCompletion{PeerID: pull.PeerID, Zone: pull.Zone}
+}
+
 func (controller *memoryGossipController) GossipStateView(context.Context) GossipStateView {
 	controller.trace = append(controller.trace, "read")
 	if len(controller.views) == 0 {
@@ -45,11 +54,6 @@ func (controller *memoryGossipController) ApplyGossipSnapshots(context.Context, 
 
 func (controller *memoryGossipController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	controller.trace = append(controller.trace, "send:"+string(outbound.Message.Type))
-	return nil
-}
-
-func (controller *memoryGossipController) StartGossipObjectPull(_ context.Context, pull gossip.StartObjectPullAction) error {
-	controller.trace = append(controller.trace, "pull:"+pull.Zone.String())
 	return nil
 }
 
@@ -73,6 +77,10 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	runtime := NewRuntime(clock, 4)
 	defer runtime.Stop()
+	pullWorker := &memoryGossipObjectPullWorker{pulls: make(chan gossip.StartObjectPullAction, 1)}
+	if err := runtime.StartGossipObjectPullWorkers(t.Context(), pullWorker, 1, 1); err != nil {
+		t.Fatal(err)
+	}
 	controller := &memoryGossipController{
 		views: []GossipStateView{
 			{Loaded: true},
@@ -95,7 +103,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	if result.Aborted || !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	wantTrace := []string{"read", "apply", "read", "send:ping", "pull:node-a.catofes.", "backoff", "persist"}
+	wantTrace := []string{"read", "apply", "read", "send:ping", "backoff", "persist"}
 	if !reflect.DeepEqual(controller.trace, wantTrace) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, wantTrace)
 	}
@@ -104,6 +112,14 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	}
 	if controller.completion == nil || controller.completion.PeerID != "peer-a" || controller.completion.Err != nil {
 		t.Fatalf("completion = %#v", controller.completion)
+	}
+	if pull := <-pullWorker.pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
+		t.Fatalf("pull = %#v", pull)
+	}
+	if event, ok := runtime.GossipEventFor(<-runtime.Events()); !ok {
+		t.Fatal("object-pull completion was not queued")
+	} else if _, ok := event.(*gossip.ObjectPullResultEvent); !ok {
+		t.Fatalf("event = %T, want *gossip.ObjectPullResultEvent", event)
 	}
 	clock.Advance(time.Second)
 	if fired := receiveTimer(t, runtime.Events()); fired.ID.Owner != "peer-a" || fired.ID.Key != gossip.TimerKindRound {
@@ -170,6 +186,9 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	var outcomes []outcome
 	for _, adapter := range adapters {
 		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
+		if err := runtime.StartGossipObjectPullWorkers(t.Context(), &memoryGossipObjectPullWorker{pulls: make(chan gossip.StartObjectPullAction, 1)}, 1, 1); err != nil {
+			t.Fatal(err)
+		}
 		controller, memory := adapter.new()
 		runtime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, actions, controller)
 		runtime.Stop()
@@ -196,7 +215,7 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	if !reflect.DeepEqual(outcomes[0], outcomes[1]) {
 		t.Fatalf("adapter outcomes differ: %#v", outcomes)
 	}
-	if want := []string{"read", "send:fetch_catalog_page", "pull:node-a.catofes.", "persist"}; !reflect.DeepEqual(outcomes[0].trace, want) {
+	if want := []string{"read", "send:fetch_catalog_page", "persist"}; !reflect.DeepEqual(outcomes[0].trace, want) {
 		t.Fatalf("trace = %#v, want %#v", outcomes[0].trace, want)
 	}
 	if !outcomes[0].persisted.Requested || outcomes[0].persisted.Scope != gossip.SyncPersistenceMeta || outcomes[0].persisted.Reason != "metadata" {

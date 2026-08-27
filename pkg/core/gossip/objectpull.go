@@ -34,6 +34,49 @@ type ObjectPullResponse struct {
 	Error    string                    `msgpack:"e,omitempty"`
 }
 
+// ExchangeObjectPull performs the platform-neutral request/response exchange
+// on an already connected stream. Dialing, deadlines and socket ownership stay
+// with the injected platform transport.
+func ExchangeObjectPull(stream io.ReadWriter, req *ObjectPullRequest) (*ObjectPullResponse, error) {
+	if stream == nil {
+		return nil, fmt.Errorf("object pull stream is nil")
+	}
+	data, err := EncodeObjectPullRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := stream.Write(data); err != nil {
+		return nil, err
+	}
+	return DecodeObjectPullResponse(stream)
+}
+
+// ServeObjectPull performs one platform-neutral server exchange on an already
+// accepted stream. Listener ownership, admission limits and deadlines remain
+// with the platform transport.
+func ServeObjectPull(stream io.ReadWriter, lookup func(*ObjectPullRequest) *ObjectPullResponse) error {
+	if stream == nil {
+		return fmt.Errorf("object pull stream is nil")
+	}
+	request, err := DecodeObjectPullRequest(stream)
+	if err != nil {
+		return err
+	}
+	var response *ObjectPullResponse
+	if lookup != nil {
+		response = lookup(request)
+	}
+	if response == nil {
+		response = &ObjectPullResponse{Error: "not found"}
+	}
+	data, err := EncodeObjectPullResponse(response)
+	if err != nil {
+		return err
+	}
+	_, err = stream.Write(data)
+	return err
+}
+
 // EncodeObjectPullRequest serializes a request with a 4-byte big-endian length prefix.
 func EncodeObjectPullRequest(req *ObjectPullRequest) ([]byte, error) {
 	payload, err := msgpack.Marshal(req)

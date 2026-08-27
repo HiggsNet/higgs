@@ -1153,10 +1153,14 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	serviceA.objectPullPool.Start(ctx)
-	defer serviceA.objectPullPool.Stop()
-	serviceB.objectPullPool.Start(ctx)
-	defer serviceB.objectPullPool.Stop()
+	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceA}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer serviceA.hostRuntime.Stop()
+	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceB}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer serviceB.hostRuntime.Stop()
 
 	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
 		t.Fatalf("start sync node-b from node-a: %v", err)

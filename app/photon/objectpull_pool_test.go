@@ -4,11 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
+func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	now := time.Unix(1000, 0)
@@ -34,52 +35,29 @@ func TestObjectPullPoolPullsZoneAsync(t *testing.T) {
 	}
 	defer listener.Close()
 
-	results := make(chan ObjectPullResult, 1)
-	pool := newObjectPullPool(results, 1)
-	ctx := t.Context()
-	pool.Start(ctx)
-	defer pool.Stop()
-
-	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes.", Addr: listener.Addr().String()}) {
-		t.Fatal("pool submit returned false")
+	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
+	service := newTestDaemonService(&Runtime{}, state, config, time.Second)
+	completion := (daemonObjectPullWorker{daemon: service}).PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	if completion.Err != nil {
+		t.Fatalf("object pull failed: %v", completion.Err)
 	}
-
-	select {
-	case res := <-results:
-		if res.Err != nil {
-			t.Fatalf("object pull failed: %v", res.Err)
-		}
-		if res.Snapshot == nil || res.Snapshot.Zone != "node-b.catofes." {
-			t.Fatalf("unexpected snapshot: %+v", res.Snapshot)
-		}
-		if len(res.Snapshot.Records) != 1 {
-			t.Fatalf("expected 1 record, got %d", len(res.Snapshot.Records))
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for object pull result")
+	if completion.Snapshot == nil || completion.Snapshot.Zone != "node-b.catofes." {
+		t.Fatalf("unexpected snapshot: %+v", completion.Snapshot)
+	}
+	if len(completion.Snapshot.Records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(completion.Snapshot.Records))
 	}
 }
 
-func TestObjectPullPoolReturnsErrorForUnreachable(t *testing.T) {
-	results := make(chan ObjectPullResult, 1)
-	pool := newObjectPullPool(results, 1)
-	ctx := t.Context()
-	pool.Start(ctx)
-	defer pool.Stop()
-
-	if !pool.Submit(ctx, ObjectPullRequest{PeerID: "node-b.catofes.", Zone: "node-b.catofes.", Addr: "127.0.0.1:1"}) {
-		t.Fatal("pool submit returned false")
+func TestDaemonObjectPullWorkerReturnsErrorForUnreachable(t *testing.T) {
+	state, _ := buildTestNetworkState(t)
+	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}}}
+	service := newTestDaemonService(&Runtime{}, state, config, time.Second)
+	completion := (daemonObjectPullWorker{daemon: service}).PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	if completion.Err == nil {
+		t.Fatal("expected error for unreachable peer")
 	}
-
-	select {
-	case res := <-results:
-		if res.Err == nil {
-			t.Fatal("expected error for unreachable peer")
-		}
-		if res.Snapshot != nil {
-			t.Fatal("expected nil snapshot on error")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for object pull result")
+	if completion.Snapshot != nil {
+		t.Fatal("expected nil snapshot on error")
 	}
 }

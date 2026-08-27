@@ -264,8 +264,10 @@ func syncServe(ctx context.Context) error {
 		defer objectPullListener.Close()
 		logger.Info("object_pull", "serve_started", map[string]any{"addr": objectPullListener.Addr()})
 	}
-	service.objectPullPool.Start(ctx)
-	defer service.objectPullPool.Stop()
+	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
+		return err
+	}
+	defer service.hostRuntime.Stop()
 	logger.Info("sync", "serve_started", map[string]any{
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
@@ -290,8 +292,6 @@ func syncServe(ctx context.Context) error {
 			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
 				service.handleSyncEvent(ctx, event)
 			}
-		case result := <-service.objectPullResults:
-			service.acceptObjectPullResult(result)
 		}
 	}
 }
@@ -321,8 +321,10 @@ func syncOnce(peerID string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
-	service.objectPullPool.Start(ctx)
-	defer service.objectPullPool.Stop()
+	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
+		return err
+	}
+	defer service.hostRuntime.Stop()
 	service.updateDiscoveredPeers()
 	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
 		return err
@@ -330,7 +332,7 @@ func syncOnce(peerID string) error {
 	var responderQuietUntil time.Time
 	for {
 		drained := false
-		if service.hostRuntime.Gossip.Session(peerID) == nil && service.hostRuntime.PendingEventCount() == 0 && len(service.objectPullResults) == 0 {
+		if service.hostRuntime.Gossip.Session(peerID) == nil && service.hostRuntime.PendingEventCount() == 0 && service.hostRuntime.PendingGossipObjectPullCount() == 0 {
 			drained = true
 			if responderQuietUntil.IsZero() {
 				responderQuietUntil = time.Now().Add(syncOnceResponderQuiet)
@@ -353,9 +355,6 @@ func syncOnce(peerID string) error {
 			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
 				service.handleSyncEvent(ctx, event)
 			}
-		case result := <-service.objectPullResults:
-			responderQuietUntil = time.Time{}
-			service.acceptObjectPullResult(result)
 		default:
 			deadline := time.Now().Add(100 * time.Millisecond)
 			if drained && !responderQuietUntil.IsZero() && responderQuietUntil.Before(deadline) {

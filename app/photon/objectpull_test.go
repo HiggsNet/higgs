@@ -247,7 +247,7 @@ func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *te
 
 	state.Lock()
 	unlock := state.Unlock
-	service.observeObjectPullResult(ObjectPullResult{
+	service.observeObjectPullResult(objectPullTransportResult{
 		PeerID:      "node-b.catofes.",
 		Zone:        "node-b.catofes.",
 		Bytes:       4096,
@@ -287,7 +287,7 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLoc
 
 	state.Lock()
 	unlock := state.Unlock
-	service.submitObjectPull(context.Background(), "node-b.catofes.", "node-b.catofes.", now)
+	(daemonObjectPullWorker{daemon: service}).PullGossipObject(context.Background(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	unlock()
 
 	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)

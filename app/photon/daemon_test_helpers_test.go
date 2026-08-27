@@ -1135,12 +1135,6 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 				}
 			default:
 			}
-			select {
-			case res := <-svc.objectPullResults:
-				svc.acceptObjectPullResult(res)
-				processed = true
-			default:
-			}
 		}
 		for i, tr := range transports {
 			packet, err := receiveWithContext(ctx, tr, time.Now().Add(10*time.Millisecond))

@@ -158,9 +158,9 @@ authorization 和 transport records 作为可信事实来源。
 - [x] `gossip.Engine` 已从过渡期的 single-writer orchestration 收敛为同步协议对象：只拥有 session
   registry、pending announce hint、inbound planning 和 FSM advance，不再拥有 event channel、clock、timer、
   goroutine、stop/reset 或 resource API。Linux 已改从同一个 `host.Runtime` queue 消费 gossip 事件。
-- [ ] 继续把当前仍在 Linux daemon 的 object-pull completion 编排和 action/state/persistence executor 迁入
-  公共 HostRuntime；不得让 Linux/Windows 各写一份 host loop，也不得让 Engine/controller 各自创建
-  ticker/goroutine timer。
+- [x] object-pull 请求/响应 exchange 已归入公共 gossip，bounded worker、背压和 completion delivery 已归入
+  公共 HostRuntime；Linux daemon 私有 pool、result channel 和三处额外 event-loop 分支已删除。Linux 只提供
+  TCP dial/listen/deadline 与观测 adapter，Linux/Windows 不再各写一份 object-pull host loop。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制

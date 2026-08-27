@@ -90,10 +90,14 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	if listenerB != nil {
 		defer listenerB.Close()
 	}
-	serviceA.objectPullPool.Start(ctx)
-	defer serviceA.objectPullPool.Stop()
-	serviceB.objectPullPool.Start(ctx)
-	defer serviceB.objectPullPool.Stop()
+	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceA}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer serviceA.hostRuntime.Stop()
+	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceB}, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer serviceB.hostRuntime.Stop()
 
 	// Start sessions in both directions through the event-loop timer handler.
 	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {

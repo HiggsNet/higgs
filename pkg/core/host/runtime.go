@@ -4,8 +4,10 @@
 package host
 
 import (
+	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -41,9 +43,13 @@ type Runtime struct {
 
 	events chan Event
 
-	mu        sync.RWMutex
-	scheduler *Scheduler
-	stopped   bool
+	mu                sync.RWMutex
+	scheduler         *Scheduler
+	objectPullCancel  context.CancelFunc
+	objectPullJobs    chan gossip.StartObjectPullAction
+	objectPullWG      sync.WaitGroup
+	objectPullPending atomic.Int64
+	stopped           bool
 }
 
 func NewRuntime(clock Clock, eventBuffer int) *Runtime {
@@ -182,8 +188,14 @@ func (runtime *Runtime) Stop() {
 	}
 	runtime.stopped = true
 	scheduler := runtime.scheduler
+	objectPullCancel := runtime.objectPullCancel
 	runtime.mu.Unlock()
+	if objectPullCancel != nil {
+		objectPullCancel()
+	}
 	scheduler.Stop()
+	runtime.objectPullWG.Wait()
+	runtime.objectPullPending.Store(0)
 }
 
 func (runtime *Runtime) schedulerForRead() *Scheduler {
