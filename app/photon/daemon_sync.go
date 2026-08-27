@@ -106,35 +106,11 @@ func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *ne
 	if d == nil || d.StateStore == nil || addr == nil || peerID == "" {
 		return false
 	}
-	state, _ := d.StateStore.Snapshot()
-	if state == nil || !peerChainVerified(state, peerID, now) {
+	patch, ok := corehost.PlanVerifiedObservedCheckpoint(d.currentGossipDiscoveryInput(), peerID, addr.String(), now)
+	if !ok {
 		return false
 	}
-	peer := state.SyncPeers[peerID]
-	endpoint := addr.String()
-	firstSeen := peer.ObservedFirstSeenUnix
-	failures := peer.ObservedFailureCount
-	grace := append([]observedGraceAddrState(nil), peer.ObservedGraceAddrs...)
-	if peer.ObservedAddr != endpoint || firstSeen == 0 {
-		if observedPathActive(peer, now) && peer.ObservedAddr != "" && peer.ObservedAddr != endpoint {
-			grace = appendObservedGraceAddr(grace, peer.ObservedAddr, now.Add(observedPathMigrationGrace), now)
-		}
-		firstSeen = now.Unix()
-		failures = 0
-	}
-	grace = pruneObservedGraceAddrs(grace, endpoint, now)
-	typedGrace := make([]corestate.ObservedGraceEndpoint, 0, len(grace))
-	for _, item := range grace {
-		typedGrace = append(typedGrace, corestate.ObservedGraceEndpoint{Endpoint: item.Addr, UntilUnix: item.UntilUnix})
-	}
-	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
-		ObservedEndpoint:  corestate.PatchField[string]{Set: true, Value: endpoint},
-		ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: firstSeen},
-		ObservedLastUnix:  corestate.PatchField[int64]{Set: true, Value: now.Unix()},
-		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: now.Add(observedPathTTL).Unix()},
-		ObservedFailures:  corestate.PatchField[int]{Set: true, Value: failures},
-		ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: typedGrace},
-	})
+	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, patch)
 	if err != nil {
 		d.logWarn("sync", "observed_checkpoint_commit_failed", map[string]any{"peer_id": peerID, "error": err})
 		return false
@@ -164,10 +140,11 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	summary := d.StateStore.catalogSummaryProjection()
-	if summary == nil {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil {
 		return nil
 	}
+	summary := corestate.CatalogSummaryFor(view.State.Network)
 	session := d.hostRuntime.Gossip.NewSession(peerID)
 	if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
@@ -471,10 +448,10 @@ func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnap
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return nil, syncSnapshotCommit{}, errors.New("daemon service is not initialized")
 	}
-	state, _ := d.StateStore.Snapshot()
 	managedZone := zone.ZonePath("")
-	if state != nil {
-		managedZone = state.ManagedZone
+	view := d.StateStore.common.ReadView()
+	if view.State != nil {
+		managedZone = view.State.ManagedZone
 	}
 	batch := make([]corestate.RemoteSnapshot, 0, len(applies))
 	for _, apply := range applies {
@@ -553,8 +530,15 @@ type daemonGossipActionController struct {
 }
 
 func (controller *daemonGossipActionController) GossipStateView(context.Context) corehost.GossipStateView {
-	projection := controller.daemon.StateStore.syncStateProjection()
-	return corehost.GossipStateView{Loaded: projection.loaded, Digests: projection.digests, SenderPeerID: controller.daemon.Sync.Config.PeerID}
+	view := controller.daemon.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil {
+		return corehost.GossipStateView{}
+	}
+	return corehost.GossipStateView{
+		Loaded:       true,
+		Digests:      corestate.ZoneDigests(view.State.Network),
+		SenderPeerID: controller.daemon.Sync.Config.PeerID,
+	}
 }
 
 func (controller *daemonGossipActionController) GossipDatagramBudget() int {
@@ -629,13 +613,17 @@ func (controller *daemonGossipActionController) HandleGossipObjectChunkNACK(_ co
 }
 
 func (controller *daemonGossipActionController) ApplyGossipSnapshots(_ context.Context, peerID string, actions []gossip.ApplySnapshotAction) (corehost.GossipSnapshotApplyResult, error) {
-	projection := controller.daemon.StateStore.syncStateProjection()
+	view := controller.daemon.StateStore.common.ReadView()
+	managedZone := zone.ZonePath("")
+	if view.State != nil {
+		managedZone = view.State.ManagedZone
+	}
 	var applies []syncSnapshotApply
 	for _, action := range actions {
 		if action.Snapshot == nil {
 			continue
 		}
-		if action.Snapshot.Zone == projection.managedZone {
+		if action.Snapshot.Zone == managedZone {
 			controller.daemon.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
 				"peer_id": peerID,
 				"zone":    action.Snapshot.Zone,

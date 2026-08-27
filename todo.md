@@ -172,6 +172,9 @@ authorization 和 transport records 作为可信事实来源。
   patch、persist-before-publish 和 UDP address book 更新已整体进入公共 HostRuntime；Linux 原 planner/apply
   及重复地址合并实现已删除。在线 daemon 直接从 common Store 与 Linux cleanup owner 组装输入，不新增
   `DaemonStateStore` discovery view。
+- [x] `daemon_sync.go` 已不再读取完整 `stateFile`：catalog summary、action state view、managed-zone snapshot
+  apply guard 和 observed checkpoint 规划均直接使用 common Store/HostRuntime；删除 catalog summary、sync state
+  两个 daemon projection，observed 地址迁移与 grace patch 也由公共 discovery policy 生成。
 - [ ] 按 10.3A 将 Linux `stateFile` 中的 verified Network/sync metadata 与
   firewall/IPsec/routing/BIRD/admission runtime state 解耦；先形成 Linux/Windows 共用的
   `pkg/core/state`，再让 Photon Windows 接入网络同步。不得在 Windows composition root 中复制

@@ -57,6 +57,33 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 	}
 }
 
+func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	now := time.Unix(1000, 0)
+	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {
+		ObservedAddr:          "198.51.100.10:33434",
+		ObservedFirstSeenUnix: now.Add(-time.Minute).Unix(),
+		ObservedUntilUnix:     now.Add(time.Minute).Unix(),
+		ObservedFailureCount:  2,
+	}}
+	patch, ok := corehost.PlanVerifiedObservedCheckpoint(
+		testDaemonGossipDiscoveryInput(state, config), "node-b.catofes.", "198.51.100.20:33434",
+		now,
+	)
+	if !ok {
+		t.Fatal("verified peer did not produce observed checkpoint patch")
+	}
+	if patch.ObservedEndpoint.Value != "198.51.100.20:33434" || patch.ObservedFirstUnix.Value != now.Unix() || patch.ObservedFailures.Value != 0 {
+		t.Fatalf("observed patch = %#v", patch)
+	}
+	if len(patch.ObservedGrace.Value) != 1 || patch.ObservedGrace.Value[0].Endpoint != "198.51.100.10:33434" {
+		t.Fatalf("observed grace = %#v", patch.ObservedGrace.Value)
+	}
+	if _, ok := corehost.PlanVerifiedObservedCheckpoint(testDaemonGossipDiscoveryInput(state, config), "unknown.catofes.", "198.51.100.30:33434", now); ok {
+		t.Fatal("unverified peer produced observed checkpoint patch")
+	}
+}
+
 func testDaemonGossipDiscoveryInput(state *stateFile, config *syncConfigFile) corehost.GossipDiscoveryInput {
 	checkpoint, _ := projectLegacyGossipCheckpoint(state.SyncPeers)
 	return daemonGossipDiscoveryInput(corestate.View{State: &corestate.VerifiedState{

@@ -183,11 +183,13 @@ func TestRelaySyncQueuesCompactCatalogSummary(t *testing.T) {
 		if timer.LocalSummary == nil {
 			t.Fatal("relay event omitted local catalog summary")
 		}
-		wantRoot := corestate.CatalogRoot(service.StateStore.syncStateProjection().digests)
+		view := service.StateStore.common.ReadView()
+		digests := corestate.ZoneDigests(view.State.Network)
+		wantRoot := corestate.CatalogRoot(digests)
 		if !bytes.Equal(timer.LocalSummary.CatalogRoot, wantRoot) {
 			t.Fatalf("relay summary root = %x, want %x", timer.LocalSummary.CatalogRoot, wantRoot)
 		}
-		if timer.LocalSummary.ZoneCount != len(service.StateStore.syncStateProjection().digests) {
+		if timer.LocalSummary.ZoneCount != len(digests) {
 			t.Fatalf("relay summary zone count = %d, want projected digests", timer.LocalSummary.ZoneCount)
 		}
 		pingSize, err := gossip.WireEncodeSize(&gossip.Message{

@@ -351,18 +351,6 @@ func (s *DaemonStateStore) syncTimerProjection(config *syncConfigFile, now time.
 	return out
 }
 
-func (s *DaemonStateStore) catalogSummaryProjection() *corestate.CatalogSummary {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil || s.committed.Network == nil {
-		return nil
-	}
-	return corestate.CatalogSummaryFor(s.committed.Network)
-}
-
 func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int, senderPeerID string) (*corestate.CatalogPage, error) {
 	if s == nil {
 		return nil, nil
@@ -373,28 +361,6 @@ func (s *DaemonStateStore) catalogPageProjection(cursor string, budget int, send
 		return nil, nil
 	}
 	return gossip.CatalogPageForDigests(corestate.ZoneDigests(s.committed.Network), cursor, budget, senderPeerID)
-}
-
-type syncStateProjection struct {
-	loaded      bool
-	managedZone zone.ZonePath
-	digests     []corestate.ZoneDigest
-}
-
-func (s *DaemonStateStore) syncStateProjection() syncStateProjection {
-	var out syncStateProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil || s.committed.Network == nil {
-		return out
-	}
-	out.loaded = true
-	out.managedZone = s.committed.ManagedZone
-	out.digests = corestate.ZoneDigests(s.committed.Network)
-	return out
 }
 
 func (s *DaemonStateStore) filteredCatalogProjection(peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {

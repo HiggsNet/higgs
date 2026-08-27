@@ -16,6 +16,11 @@ import (
 
 var ErrGossipCheckpointWriterRequired = errors.New("gossip checkpoint writer is required")
 
+const (
+	GossipObservedPathTTL            = 3 * time.Minute
+	GossipObservedPathMigrationGrace = time.Minute
+)
+
 // GossipDiscoveryInput is the detached common/runtime input used to rebuild
 // the in-memory peer address book. Suppressed peers remain dialable but do not
 // regain a checkpoint until their platform cleanup marker is cleared.
@@ -46,6 +51,35 @@ type GossipDiscoveryPlan struct {
 
 type GossipCheckpointWriter interface {
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
+}
+
+// PlanVerifiedObservedCheckpoint validates the peer against verified state
+// and returns the loss-tolerant checkpoint update for one authenticated UDP
+// source. Invalid or locally managed peers produce no patch.
+func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint string, now time.Time) (corestate.PeerCheckpointPatch, bool) {
+	if peerID == "" || endpoint == "" || !discoveryPeerVerified(input, peerID, now) {
+		return corestate.PeerCheckpointPatch{}, false
+	}
+	peer := input.Peers[peerID]
+	firstSeen := peer.ObservedFirstSeenUnix
+	failures := peer.ObservedFailureCount
+	grace := append([]corestate.ObservedGraceEndpoint(nil), peer.ObservedGraceEndpoints...)
+	if peer.ObservedEndpoint != endpoint || firstSeen == 0 {
+		if discoveryObservedActive(peer, now) && peer.ObservedEndpoint != "" && peer.ObservedEndpoint != endpoint {
+			grace = appendObservedGraceEndpoint(grace, peer.ObservedEndpoint, now.Add(GossipObservedPathMigrationGrace), now)
+		}
+		firstSeen = now.Unix()
+		failures = 0
+	}
+	grace = pruneObservedGraceEndpoints(grace, endpoint, now)
+	return corestate.PeerCheckpointPatch{
+		ObservedEndpoint:  corestate.PatchField[string]{Set: true, Value: endpoint},
+		ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: firstSeen},
+		ObservedLastUnix:  corestate.PatchField[int64]{Set: true, Value: now.Unix()},
+		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: now.Add(GossipObservedPathTTL).Unix()},
+		ObservedFailures:  corestate.PatchField[int]{Set: true, Value: failures},
+		ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: grace},
+	}, true
 }
 
 // RefreshGossipDiscovery persists checkpoint changes before publishing the
@@ -262,6 +296,30 @@ func discoveryPeerVerified(input GossipDiscoveryInput, peerID string, now time.T
 
 func discoveryObservedActive(peer corestate.PeerCheckpoint, now time.Time) bool {
 	return peer.ObservedEndpoint != "" && peer.ObservedUntilUnix != 0 && now.Before(time.Unix(peer.ObservedUntilUnix, 0))
+}
+
+func appendObservedGraceEndpoint(grace []corestate.ObservedGraceEndpoint, endpoint string, until, now time.Time) []corestate.ObservedGraceEndpoint {
+	if endpoint == "" || !now.Before(until) {
+		return pruneObservedGraceEndpoints(grace, "", now)
+	}
+	out := pruneObservedGraceEndpoints(grace, endpoint, now)
+	return append(out, corestate.ObservedGraceEndpoint{Endpoint: endpoint, UntilUnix: until.Unix()})
+}
+
+func pruneObservedGraceEndpoints(grace []corestate.ObservedGraceEndpoint, current string, now time.Time) []corestate.ObservedGraceEndpoint {
+	if len(grace) == 0 {
+		return nil
+	}
+	out := make([]corestate.ObservedGraceEndpoint, 0, len(grace))
+	seen := make(map[string]bool, len(grace))
+	for _, entry := range grace {
+		if entry.Endpoint == "" || entry.Endpoint == current || seen[entry.Endpoint] || entry.UntilUnix == 0 || !now.Before(time.Unix(entry.UntilUnix, 0)) {
+			continue
+		}
+		seen[entry.Endpoint] = true
+		out = append(out, entry)
+	}
+	return out
 }
 
 func discoveryAddressPrivate(addr string) bool {
