@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // handleObjectChunk keeps UDP assembly and transport repair outside the FSM,
@@ -81,21 +83,21 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 		!chunk.Zone.Valid() || len(chunk.RootHash) == 0 {
 		return
 	}
-	if _, err := d.StateStore.UpdateSyncPeer(peerID, func(peer *syncPeerState) error {
-		state := &stateFile{SyncPeers: map[string]syncPeerState{peerID: *peer}}
-		recordRejectedDigest(state, peerID, corestate.ZoneDigest{
-			Zone:     chunk.Zone,
-			RootHash: chunk.RootHash,
-		}, gossip.RejectReason(applyErr), now)
-		*peer = state.SyncPeers[peerID]
-		return nil
-	}); err != nil {
+	reason := gossip.RejectReason(applyErr)
+	if reason == "" {
+		reason = "verify_failed"
+	}
+	_, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
+		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
+			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
+			UpdatedUnix: now.Unix(), UntilUnix: now.Add(rejectedDigestTTL).Unix(),
+		}},
+	})
+	if err != nil {
 		d.logWarn("sync", "chunk_reject_state_commit_failed", map[string]any{
 			"peer_id": peerID,
 			"zone":    chunk.Zone,
 			"error":   err,
 		})
-		return
 	}
-	d.markMetadataCheckpointDirty()
 }

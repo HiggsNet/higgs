@@ -17,7 +17,7 @@ func newTestObserverServer() *observerServer {
 	state := newTestStateFile()
 	d := &DaemonService{
 		PeerObservability: peerObservability,
-		StateStore:        NewDaemonStateStore(state),
+		StateStore:        newTestDaemonStateStore(state),
 		Sync: &SyncRuntime{
 			Config:        &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
 			App:           &Runtime{Config: &appConfig{}},
@@ -33,10 +33,9 @@ func updateTestObserverState(srv *observerServer, fn func(*stateFile)) {
 	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
 		return
 	}
-	_, _ = srv.daemon.StateStore.Update(func(state *stateFile) error {
-		fn(state)
-		return nil
-	})
+	state, _ := srv.daemon.StateStore.Snapshot()
+	fn(state)
+	replaceTestDaemonState(srv.daemon.StateStore, state)
 }
 
 func newTestStateFile() *stateFile {

@@ -75,7 +75,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
 	service.vethManager = fakeVM
@@ -122,10 +122,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}
 
 	// Read the generated config and verify upstream interface + static route support.
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	birdState := latest.BirdInstances["photontesth2"]
 	if birdState == nil {
 		t.Fatal("BirdInstances[photontesth2] is nil")
@@ -344,7 +341,7 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 		Clock:     func() time.Time { return now },
 	}
 	fakeRM := &fakeUpstreamRouteManager{}
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = &fakeBirdProcessManager{running: false}
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} }
 	service.vethManager = &fakeVethManager{}

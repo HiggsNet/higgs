@@ -323,20 +323,6 @@ func (s *DaemonStateStore) peersProjection(config *syncConfigFile, now time.Time
 // Published roots are immutable, so the persistence adapter can encode this
 // revision after releasing the store lock. The lease must never be used as a
 // general-purpose state accessor.
-type committedStateLease struct {
-	state    *stateFile
-	revision uint64
-}
-
-func (s *DaemonStateStore) persistenceLease() committedStateLease {
-	if s == nil {
-		return committedStateLease{}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return committedStateLease{state: s.committed, revision: s.revision}
-}
-
 type syncTimerProjection struct {
 	loaded     bool
 	peers      []string

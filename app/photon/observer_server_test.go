@@ -33,7 +33,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	d := &DaemonService{
-		StateStore: NewDaemonStateStore(newTestStateFile()),
+		StateStore: newTestDaemonStateStore(newTestStateFile()),
 		Sync: &SyncRuntime{
 			Config: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
 			App: &Runtime{Config: &appConfig{Observer: observerConfig{

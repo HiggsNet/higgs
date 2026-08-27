@@ -51,7 +51,7 @@ type controlRequest struct {
 type controlResponse struct {
 	OK                bool                          `json:"ok"`
 	Error             string                        `json:"error,omitempty"`
-	StateRevision     uint64                        `json:"state_revision,omitempty"`
+	StateRevision     uint64                        `json:"state_revision"`
 	SnapshotTimeUnix  int64                         `json:"snapshot_time_unix,omitempty"`
 	Dirty             daemonDirtyFlags              `json:"dirty,omitempty"`
 	ReconcileProgress daemonReconcileStatus         `json:"reconcile_in_progress,omitempty"`

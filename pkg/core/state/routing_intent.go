@@ -149,14 +149,14 @@ func applyRevokeIPAMAssignmentIntent(state *VerifiedState, intent RevokeIPAMAssi
 }
 
 func applyAnnounceRouteIntent(state *VerifiedState, intent AnnounceRouteIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
-	return applyRouteIntent(state, intent.Zone, intent.Prefix, true, now)
+	return applyRouteIntent(state, intent.Zone, intent.Prefix, intent.Controller, true, now)
 }
 
 func applyWithdrawRouteIntent(state *VerifiedState, intent WithdrawRouteIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
-	return applyRouteIntent(state, intent.Zone, intent.Prefix, false, now)
+	return applyRouteIntent(state, intent.Zone, intent.Prefix, intent.Controller, false, now)
 }
 
-func applyRouteIntent(state *VerifiedState, path zone.ZonePath, prefix string, active bool, now time.Time) (*zone.Record, zone.ZonePath, error) {
+func applyRouteIntent(state *VerifiedState, path zone.ZonePath, prefix, controller string, active bool, now time.Time) (*zone.Record, zone.ZonePath, error) {
 	if !path.Valid() {
 		return nil, "", zone.ErrInvalidZonePath
 	}
@@ -177,7 +177,10 @@ func applyRouteIntent(state *VerifiedState, path zone.ZonePath, prefix string, a
 			return nil, "", fmt.Errorf("route %s in %s is already withdrawn", canonical, path)
 		}
 	}
-	value, err := json.Marshal(routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active})
+	if controller != "" && controller != routing.RouteControllerAuto {
+		return nil, "", fmt.Errorf("unknown route controller: %s", controller)
+	}
+	value, err := json.Marshal(routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active, Controller: controller})
 	if err != nil {
 		return nil, "", err
 	}

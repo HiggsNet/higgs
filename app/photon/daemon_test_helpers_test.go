@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -20,6 +21,92 @@ import (
 	"testing"
 	"time"
 )
+
+func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
+	store := newTestDaemonStateStore(state)
+	if rt != nil && rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {
+		view := store.common.ReadView()
+		view.State.TrustedRootPublicKey = append(ed25519.PublicKey(nil), rt.Config.TrustedRootPublicKey...)
+		store.common = corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil)
+		store.refreshView()
+	}
+	return newDaemonServiceWithStore(rt, store, config, interval)
+}
+
+func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {
+	verified := &corestate.VerifiedState{}
+	checkpoint := &corestate.GossipCheckpoint{}
+	if state != nil {
+		verified.ManagedZone = state.ManagedZone
+		verified.Network = state.Network
+		verified.RootPrivateKey = state.RootPrivateKey
+		verified.IdentityPrivateKey = state.ZonePrivateKey
+		checkpoint = testGossipCheckpoint(state.SyncPeers)
+	}
+	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
+	store, err := NewDaemonStateStore(common, linuxRuntimeStateFromLegacy(state))
+	if err != nil {
+		panic(err)
+	}
+	return store
+}
+
+func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheckpoint {
+	out := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint, len(peers))}
+	for peerID, peer := range peers {
+		projected, _ := projectLegacyGossipCheckpoint(map[string]syncPeerState{"fixture-peer.invalid.": peer})
+		if checkpoint, ok := projected.Peers["fixture-peer.invalid."]; ok {
+			out.Peers[peerID] = checkpoint
+		}
+	}
+	return out
+}
+
+func replaceTestDaemonState(store *DaemonStateStore, state *stateFile) {
+	if store == nil {
+		return
+	}
+	replacement := newTestDaemonStateStore(state)
+	store.writeMu.Lock()
+	store.common = replacement.common
+	store.runtime = replacement.runtime
+	store.writeMu.Unlock()
+	store.refreshView()
+}
+
+func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
+	if store == nil || fn == nil {
+		return
+	}
+	state, _ := store.Snapshot()
+	fn(state)
+}
+
+func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (uint64, bool, error) {
+	if store == nil {
+		return 0, false, fmt.Errorf("store is nil")
+	}
+	_, revision := store.Snapshot()
+	return store.commitRuntimeIfRevision(revision, fn)
+}
+
+func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64, error) {
+	state, _ := store.Snapshot()
+	if state == nil {
+		return 0, fmt.Errorf("state is nil")
+	}
+	path := state.ManagedZone
+	for candidate, zs := range state.Network.Zones {
+		if zs != nil && authorityHasPrivateKey(zs.Authority, state.ZonePrivateKey) {
+			path = candidate
+			break
+		}
+	}
+	result, err := store.ApplyCommonLocalIntent(context.Background(), corestate.PutRecordIntent{
+		Zone: path, Key: fmt.Sprintf("tests/revision/%d", now.UnixNano()), Type: "application/vnd.photon.test-revision.v1", Value: []byte("1"),
+	}, false, now)
+	return uint64(result.Changes.VerifiedRevision), err
+}
 
 type observedIPsecDriver struct {
 	ipsec.DryRunDriver

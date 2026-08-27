@@ -19,7 +19,7 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	parent := managed.Parent()
 	removeIPAMPoolForTest(committed.Network, parent, "10.0.0.0/16")
 
-	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	service := newTestDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -66,7 +66,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 		t.Fatalf("SaveState(older disk): %v", err)
 	}
 
-	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	service := newTestDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -81,12 +81,9 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	disk, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(disk): %v", err)
-	}
-	if disk.Network.Zones[managed].Records[key] == nil {
-		t.Fatal("accepted committed-state assignment was not persisted")
+	committedAfter := service.currentState()
+	if committedAfter.Network.Zones[managed].Records[key] == nil {
+		t.Fatal("accepted assignment was not published by the common store")
 	}
 }
 
@@ -117,7 +114,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 		t.Fatalf("SaveState(active disk): %v", err)
 	}
 
-	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:  daemonEventRouteMutation,
@@ -158,7 +155,7 @@ func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing
 		t.Fatalf("SaveState(disk assignment): %v", err)
 	}
 
-	service := newDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
+	service := newTestDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, committed), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventServiceMutation,
@@ -190,7 +187,7 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -227,7 +224,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
 	}
 	_, directErr := applyIPAMMutation(state, request, rt.Now())
-	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
 	if directErr == nil || result.Error == nil {
 		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
@@ -264,7 +261,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	service := newDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
@@ -287,7 +284,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 
 func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: time.Now}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: time.Now}, state, config, time.Second)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,

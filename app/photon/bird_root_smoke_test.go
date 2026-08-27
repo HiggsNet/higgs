@@ -76,7 +76,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	// Use real process manager and birdc client.
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = bird.NewExecProcessManager("")
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -191,7 +191,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	service1 := newDaemonService(rt, state, syncConfig, time.Second)
+	service1 := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service1.birdProcessManager = bird.NewExecProcessManager("")
 	service1.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -228,7 +228,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState before restart reconcile: %v", err)
 	}
-	service2 := newDaemonService(rt, restartedState, syncConfig, time.Second)
+	service2 := newTestDaemonService(rt, restartedState, syncConfig, time.Second)
 	service2.birdProcessManager = bird.NewExecProcessManager("")
 	service2.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -368,7 +368,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 
 	service := &DaemonService{
 		health: manager,
-		StateStore: NewDaemonStateStore(&stateFile{LinkInstances: map[string]linkInstanceState{
+		StateStore: newTestDaemonStateStore(&stateFile{LinkInstances: map[string]linkInstanceState{
 			"link-1": {
 				ID:                  "link-1",
 				GroupID:             "main",
@@ -591,7 +591,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	// Use real process manager.
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = bird.NewExecProcessManager("")
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}

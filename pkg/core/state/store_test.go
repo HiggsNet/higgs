@@ -157,6 +157,35 @@ func TestStorePersistenceFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 	}
 }
 
+func TestStoreDeletePeerCheckpointsDoesNotAdvanceVerifiedRevision(t *testing.T) {
+	sink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{}, sink.Commit)
+	if result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
+		FailureCount: PatchField[int]{Set: true, Value: 2},
+	}); err != nil || !result.Committed {
+		t.Fatalf("UpdatePeerCheckpoint = result %+v err %v", result, err)
+	}
+
+	result, err := store.DeletePeerCheckpoints(context.Background(), []string{"peer-a", "missing"})
+	if err != nil {
+		t.Fatalf("DeletePeerCheckpoints: %v", err)
+	}
+	if !result.Committed || !result.Changes.GossipCheckpointChanged || result.Changes.VerifiedRevision != 0 {
+		t.Fatalf("delete result = %+v", result)
+	}
+	view := store.ReadView()
+	if view.Revision != 0 || len(view.Gossip.Peers) != 0 {
+		t.Fatalf("view after delete = revision %d gossip %+v", view.Revision, view.Gossip)
+	}
+	if sink.commits != 2 {
+		t.Fatalf("commits = %d, want update plus delete", sink.commits)
+	}
+	result, err = store.DeletePeerCheckpoints(context.Background(), []string{"peer-a"})
+	if err != nil || result.Committed || sink.commits != 2 {
+		t.Fatalf("no-op delete = result %+v err %v commits %d", result, err, sink.commits)
+	}
+}
+
 func TestStoreReadViewIsDetached(t *testing.T) {
 	now := time.Unix(1000, 0)
 	initial, privateKey := testNetwork(t)

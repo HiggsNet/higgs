@@ -42,7 +42,7 @@ func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncCo
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.Sync.Transport = transport
 	service.updateDiscoveredPeers()
 	committed, _ := service.StateStore.Snapshot()
@@ -128,7 +128,7 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 		t.Fatalf("Receive(A): %v", err)
 	}
 
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transportA
 	if err := service.handlePacketEventSyncSession(packet, context.Background()); err != nil {
 		t.Fatalf("handlePacketEventSyncSession: %v", err)
@@ -218,7 +218,7 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 	}
 	remoteSummary.CatalogRoot[0] ^= 0xff
 
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transportB
 	message := &gossip.Message{
 		Type:   gossip.MessagePing,

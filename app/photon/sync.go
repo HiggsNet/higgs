@@ -44,16 +44,6 @@ type SyncRuntime struct {
 	Transport     *gossip.Transport
 	TransportDeps *SyncTransportDeps
 	Observability *observability.PeerObservabilityStore
-
-	// reloadStateStamp is only accessed by the daemon event loop.  It avoids
-	// reopening and decoding the complete state database when nothing changed.
-	reloadStateStamp stateFileStamp
-}
-
-type stateFileStamp struct {
-	path     string
-	info     os.FileInfo
-	revision uint64
 }
 
 type SyncTransportDeps struct {
@@ -103,45 +93,6 @@ func (sr *SyncRuntime) logger() *appLogger {
 		logger.now = sr.App.Now
 	}
 	return logger
-}
-
-func (sr *SyncRuntime) saveStateSnapshotAtRevision(state *stateFile, revision uint64) error {
-	if sr == nil || sr.App == nil {
-		return saveState(state)
-	}
-	// Until a complete, stable post-close marker is available, reload must not
-	// trust the previous token.
-	sr.reloadStateStamp = stateFileStamp{}
-	info, err := saveStateAtWithFileInfo(sr.App.StatePath, state)
-	if err != nil {
-		return err
-	}
-	if info != nil {
-		sr.reloadStateStamp = stateFileStamp{path: sr.App.StatePath, info: info, revision: revision}
-	}
-	return nil
-}
-
-func (sr *SyncRuntime) saveStateMetaSnapshotAtRevision(state *stateFile, revision uint64) error {
-	if sr == nil || sr.App == nil {
-		return saveStateMeta(state)
-	}
-	sr.reloadStateStamp = stateFileStamp{}
-	info, err := saveStateMetaAtWithFileInfo(sr.App.StatePath, state)
-	if err != nil {
-		return err
-	}
-	if info != nil {
-		sr.reloadStateStamp = stateFileStamp{path: sr.App.StatePath, info: info, revision: revision}
-	}
-	return nil
-}
-
-func (sr *SyncRuntime) loadState() (*stateFile, error) {
-	if sr != nil && sr.App != nil {
-		return sr.App.LoadState()
-	}
-	return loadState()
 }
 
 func syncStatus(verbose bool) error {
@@ -289,17 +240,13 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	service, boltStore, err := openDaemonService(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
-	}
+	defer boltStore.Close()
+	config := service.Sync.Config
 	logger := newAppLogger(config)
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	defer service.flushMetadataCheckpointOnShutdown()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
@@ -323,8 +270,6 @@ func syncServe(ctx context.Context) error {
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),
 	})
-	checkpointTicker := time.NewTicker(250 * time.Millisecond)
-	defer checkpointTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -347,10 +292,6 @@ func syncServe(ctx context.Context) error {
 			}
 		case result := <-service.objectPullResults:
 			service.acceptObjectPullResult(result)
-		case <-checkpointTicker.C:
-			if err := service.flushMetadataCheckpoint(true); err != nil {
-				logger.Warn("state", "metadata_checkpoint_failed", map[string]any{"error": err})
-			}
 		}
 	}
 }
@@ -360,16 +301,11 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	service, boltStore, err := openDaemonService(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
-	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
-	defer service.flushMetadataCheckpointOnShutdown()
+	defer boltStore.Close()
 	transport, err := service.Sync.openTransport(service.currentState())
 	if err != nil {
 		return err
@@ -450,63 +386,6 @@ func syncRun(ctx context.Context, interval time.Duration) error {
 	return daemonRun(ctx, interval)
 }
 
-func (sr *SyncRuntime) reloadStateIfChanged(previous []corestate.ZoneDigest) (*stateFile, bool, error) {
-	return sr.reloadStateIfChangedWith(previous, sr.loadState)
-}
-
-// reloadStateIfChangedWith reloads only when the state DB changed. The loader
-// argument keeps the file-change gate independently testable; production uses
-// sr.loadState.
-func (sr *SyncRuntime) reloadStateIfChangedWith(previous []corestate.ZoneDigest, load func() (*stateFile, error)) (*stateFile, bool, error) {
-	path := sr.stateFilePath()
-	var before os.FileInfo
-	if path != "" {
-		if info, err := os.Stat(path); err == nil {
-			before = info
-			if sr.reloadStateStamp.matches(path, info) {
-				// This exact file version was already produced or observed by
-				// the previous poll. There is no new external state to return.
-				return nil, false, nil
-			}
-		}
-	}
-
-	latest, err := load()
-	if err != nil {
-		return nil, false, err
-	}
-	if path != "" {
-		// Do not cache a token if the file moved while it was being read. That
-		// makes the next loop reload once more instead of suppressing a newer
-		// external write.
-		if after, err := os.Stat(path); err == nil && sameStateFileInfo(before, after) {
-			sr.reloadStateStamp = stateFileStamp{path: path, info: after}
-		} else {
-			sr.reloadStateStamp = stateFileStamp{}
-		}
-	}
-	if !sameZoneDigests(previous, corestate.ZoneDigests(latest.Network)) {
-		return latest, true, nil
-	}
-	return latest, false, nil
-}
-
-func (sr *SyncRuntime) stateFilePath() string {
-	if sr != nil && sr.App != nil {
-		return sr.App.StatePath
-	}
-	return ""
-}
-
-func (stamp stateFileStamp) matches(path string, info os.FileInfo) bool {
-	return stamp.path == path && sameStateFileInfo(stamp.info, info)
-}
-
-func sameStateFileInfo(a, b os.FileInfo) bool {
-	return a != nil && b != nil && os.SameFile(a, b) &&
-		a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
-}
-
 func zonePathStrings(paths []zone.ZonePath) []string {
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -534,18 +413,6 @@ func (e *syncPendingZonesError) PendingZones() []string {
 		return nil
 	}
 	return zonePathStrings(e.zones)
-}
-
-func sameZoneDigests(a, b []corestate.ZoneDigest) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Zone != b[i].Zone || !bytes.Equal(a[i].RootHash, b[i].RootHash) {
-			return false
-		}
-	}
-	return true
 }
 
 func shouldSkipRemoteZone(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
@@ -923,13 +790,13 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (sr *SyncRuntime) publishEndpointRecordInState(state *stateFile) (bool, error) {
+func (sr *SyncRuntime) endpointProtocolIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
 	config := sr.Config
 	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
-		return false, nil
+		return nil, nil
 	}
 	if config != nil && config.DisableEndpointPublish {
-		return sr.clearPublishedEndpointRecordInState(state)
+		return sr.clearPublishedEndpointRecordIntent(state)
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
@@ -952,25 +819,21 @@ func (sr *SyncRuntime) publishEndpointRecordInState(state *stateFile) (bool, err
 	recordValue := gossip.LocalEndpointsToRecordWithPolicy(endpoints, previous, now, config.EndpointTTL, config.EndpointGrace)
 	value, err := json.Marshal(recordValue)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
 			if bytes.Equal(existing.Value, value) || (gossip.EndpointRecordEndpointsEqual(previous, recordValue) && !endpointRefreshDue(previous, now, config.EndpointRefresh)) {
-				return false, nil
+				return nil, nil
 			}
 		}
 	}
 
-	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
-	if err != nil {
-		return false, err
-	}
-	if err := state.Network.Put(record); err != nil {
-		return false, err
-	}
-	return true, nil
+	return &corestate.PutProtocolRecordIntent{
+		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: state.ManagedZone,
+		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
+	}, nil
 }
 
 func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh time.Duration) bool {
@@ -1058,34 +921,30 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (sr *SyncRuntime) clearPublishedEndpointRecordInState(state *stateFile) (bool, error) {
+func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
 	config := sr.Config
 	zs := state.Network.Zones[state.ManagedZone]
 	if zs == nil {
-		return false, nil
+		return nil, nil
 	}
 	existing := zs.Records[gossip.EndpointRecordKeyUDP]
 	if existing == nil {
-		return false, nil
+		return nil, nil
 	}
 	var current gossip.EndpointRecord
 	if err := json.Unmarshal(existing.Value, &current); err == nil && len(current.Endpoints) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	now := sr.now()
 	recordValue := gossip.LocalEndpointsToRecordWithPolicy(nil, nil, now, config.EndpointTTL, 0)
 	value, err := json.Marshal(recordValue)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	record, err := buildSignedRecordAt(state, state.ManagedZone, gossip.EndpointRecordKeyUDP, value, "sync.endpoint", now)
-	if err != nil {
-		return false, err
-	}
-	if err := state.Network.Put(record); err != nil {
-		return false, err
-	}
-	return true, nil
+	return &corestate.PutProtocolRecordIntent{
+		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: state.ManagedZone,
+		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
+	}, nil
 }
 
 func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {

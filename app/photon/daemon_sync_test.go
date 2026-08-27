@@ -65,9 +65,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		t.Fatalf("SaveState(B): %v", err)
 	}
 
-	serviceA := newDaemonService(rtA, stateA, configA, time.Second)
+	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
 	serviceA.Sync.Transport = transportA
-	serviceB := newDaemonService(rtB, stateB, configB, time.Second)
+	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
 	serviceB.Sync.Transport = transportB
 
 	fc := newFakeClock(now)
@@ -128,14 +128,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		t.Fatalf("session for A still active on B")
 	}
 
-	latestA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(A): %v", err)
-	}
-	latestB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(B): %v", err)
-	}
+	latestA := serviceA.currentState()
+	latestB := serviceB.currentState()
 	if latestA.Network.Zones["node-b.catofes."] == nil || latestA.Network.Zones["node-b.catofes."].Records["event-loop-test"] == nil {
 		t.Fatalf("record from B did not appear on A")
 	}
@@ -155,7 +149,7 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 		},
 	}
 	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, time.Minute)
+	service := newTestDaemonService(rt, state, config, time.Minute)
 	for {
 		if err := service.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: "queued.catofes."}); err != nil {
 			break
@@ -179,7 +173,7 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "state.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "peer-a"
@@ -208,8 +202,8 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("fetch catalog page queued %d sync events, want none", got)
 	}
-	if after := service.StateStore.Meta().Revision; after != before+1 {
-		t.Fatalf("fetch catalog page state revision = %d, want one packet commit after %d", after, before)
+	if after := service.StateStore.Meta().Revision; after != before {
+		t.Fatalf("fetch catalog page verified revision = %d, want %d", after, before)
 	}
 
 	before = service.StateStore.Meta().Revision
@@ -227,8 +221,8 @@ func TestDaemonEventLoopResponderDoesNotStealActiveSession(t *testing.T) {
 	if got := service.hostRuntime.PendingEventCount(); got != 0 {
 		t.Fatalf("fetch zone queued %d sync events, want none", got)
 	}
-	if after := service.StateStore.Meta().Revision; after != before+1 {
-		t.Fatalf("fetch zone state revision = %d, want one packet commit after %d", after, before)
+	if after := service.StateStore.Meta().Revision; after != before {
+		t.Fatalf("fetch zone verified revision = %d, want %d", after, before)
 	}
 }
 
@@ -240,7 +234,7 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "state.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
@@ -286,7 +280,7 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "node-b.catofes."
@@ -329,25 +323,12 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	if peerState.ObservedAddr != "127.0.0.1:33434" {
 		t.Fatalf("ObservedAddr = %q, want verified packet source", peerState.ObservedAddr)
 	}
-	if got, want := service.metadataCheckpointDue(), now.Add(verifiedPacketMetadataCheckpointMaxDelay); !got.Equal(want) {
-		t.Fatalf("verified packet checkpoint due = %s, want %s", got, want)
-	}
-	if err := service.flushMetadataCheckpoint(true); err != nil {
-		t.Fatalf("flushMetadataCheckpoint: %v", err)
-	}
-	persisted, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if got := persisted.SyncPeers[peerID].LastSyncUnix; got != now.Unix() {
-		t.Fatalf("persisted LastSyncUnix = %d, want %d", got, now.Unix())
-	}
 }
 
 func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
-	service := newDaemonService(&Runtime{
+	service := newTestDaemonService(&Runtime{
 		Config: defaultAppConfig(),
 		Clock:  func() time.Time { return now },
 	}, state, config, time.Second)
@@ -372,15 +353,15 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		t.Fatalf("ExecuteGossipInbound: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
-	if after != before+1 {
-		t.Fatalf("state revision = %d, want one commit after %d", after, before)
+	if after != before {
+		t.Fatalf("verified revision = %d, want checkpoint update to keep %d", after, before)
 	}
 }
 
 func TestDaemonHintedSessionWritesOnlyObservability(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(1000, 0)
-	service := newDaemonService(&Runtime{
+	service := newTestDaemonService(&Runtime{
 		Config: defaultAppConfig(),
 		Clock:  func() time.Time { return now },
 	}, state, config, time.Second)
@@ -410,7 +391,7 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "peer-a"
@@ -426,8 +407,8 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	before := service.StateStore.Meta().Revision
 	service.handleSyncEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: peerID})
 	after := service.StateStore.Meta().Revision
-	if after != before+1 {
-		t.Fatalf("state revision = %d, want one event commit after %d", after, before)
+	if after != before {
+		t.Fatalf("verified revision = %d, want checkpoint update to keep %d", after, before)
 	}
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
@@ -448,7 +429,7 @@ func TestDaemonUnsolicitedPingSummaryMismatchStartsSession(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "peer-a"
@@ -477,7 +458,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "state.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "peer-a"

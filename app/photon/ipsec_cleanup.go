@@ -149,7 +149,6 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 		workspace.IPsecPortRecord,
 		workspace.LinkInstances,
 		workspace.IPsecReconcile,
-		true,
 	); err != nil {
 		return cleaned, orphans, err
 	} else if !committed {

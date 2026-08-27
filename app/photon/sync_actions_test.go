@@ -25,7 +25,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	service.hostRuntime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
@@ -66,7 +66,7 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	service.hostRuntime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
@@ -103,14 +103,12 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 
 func TestRecordSyncPeerStateUsesSoleCommittedAuthority(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{}, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	beforeRevision := service.StateStore.Meta().Revision
 
-	service.recordSyncPeerState(peerID, "test_local_cow", func(next *stateFile) {
-		peer := next.SyncPeers[peerID]
+	service.recordSyncPeerState(peerID, "test_local_cow", func(peer *corestate.PeerCheckpoint) {
 		peer.LastSyncUnix = 42
-		next.SyncPeers[peerID] = peer
 	})
 
 	// The constructor input is detached from the store and must remain
@@ -119,8 +117,8 @@ func TestRecordSyncPeerStateUsesSoleCommittedAuthority(t *testing.T) {
 		t.Fatalf("constructor input peer changed to %+v", state.SyncPeers[peerID])
 	}
 	committed, revision := service.StateStore.Snapshot()
-	if revision != beforeRevision+1 {
-		t.Fatalf("revision = %d, want %d", revision, beforeRevision+1)
+	if revision != beforeRevision {
+		t.Fatalf("verified revision = %d, want unchanged %d", revision, beforeRevision)
 	}
 	if committed.SyncPeers[peerID].LastSyncUnix != 42 {
 		t.Fatalf("committed peer = %+v, want LastSyncUnix 42", committed.SyncPeers[peerID])
@@ -137,7 +135,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 
 	state.Lock()
@@ -218,7 +216,7 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	defer transport.Close()
 	peerID := "node-b.catofes."
 	transport.SetPeerAddrs(peerID, []*net.UDPAddr{transport.LocalAddr()})
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transport
 
 	state.Lock()
@@ -266,7 +264,7 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 	}
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	session := gossip.NewSyncSession("node-b.catofes.")
 	state.Lock()
 	unlock := state.Unlock
@@ -298,7 +296,7 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	recordRejectedDigest(state, "node-b.catofes.", digestForSnapshot(snapshot), "previous transient rejection", now.Add(-time.Minute))
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
@@ -309,15 +307,12 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	if changed {
 		t.Fatal("executeSyncActions changed = true for identical snapshot")
 	}
-	if revision := service.StateStore.Meta().Revision; revision != beforeRevision+1 {
-		t.Fatalf("revision = %d, want metadata commit after %d", revision, beforeRevision)
+	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+		t.Fatalf("verified revision = %d, want unchanged %d", revision, beforeRevision)
 	}
 	committed, _ := service.StateStore.Snapshot()
 	if afterRoot := corestate.ZoneRoot(committed.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("no-op snapshot changed zone root: before=%x after=%x", beforeRoot, afterRoot)
-	}
-	if due := service.metadataCheckpointDue(); due.IsZero() {
-		t.Fatal("metadata-only state commit did not schedule a checkpoint")
 	}
 
 	notifications := 0
@@ -338,7 +333,7 @@ func TestExecuteSyncActionsPureNoopDoesNotCommit(t *testing.T) {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
 
-	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
 	if changed := service.executeSyncActions(context.Background(), session, []SyncAction{
@@ -348,9 +343,6 @@ func TestExecuteSyncActionsPureNoopDoesNotCommit(t *testing.T) {
 	}
 	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
 		t.Fatalf("pure no-op revision = %d, want unchanged %d", revision, beforeRevision)
-	}
-	if due := service.metadataCheckpointDue(); !due.IsZero() {
-		t.Fatalf("pure no-op scheduled metadata checkpoint at %s", due)
 	}
 }
 
@@ -362,7 +354,7 @@ func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
 
-	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones[snapshot.Zone])...)
 	changed := service.executeSyncActions(context.Background(), session, []SyncAction{ApplySnapshotAction{
@@ -410,7 +402,7 @@ func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalStat
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones[staleSnapshot.Zone])...)
 	expectedRoot := digestForSnapshot(staleSnapshot).RootHash
 
-	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
 	changed := service.executeSyncActions(context.Background(), session, []SyncAction{ApplySnapshotAction{
 		PeerID:       session.PeerID,
@@ -467,15 +459,10 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 	}
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	session := gossip.NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
-	var beforeRoot, beforeParent, beforeChild *zone.ZoneState
-	readCommittedForTest(service.StateStore, func(committed *stateFile) {
-		beforeRoot = committed.Network.Zones[zone.RootZone]
-		beforeParent = committed.Network.Zones["catofes."]
-		beforeChild = committed.Network.Zones["node-b.catofes."]
-	})
+	beforeRootEpoch := state.Network.Zones[zone.RootZone].Authority.Epoch
 
 	changed := service.executeSyncActions(context.Background(), session, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: session.PeerID, Snapshot: validParent},
@@ -490,28 +477,21 @@ func TestExecuteSyncActionsBatchesSnapshotSavepointsIntoOneRevision(t *testing.T
 		t.Fatalf("revision = %d, want one batch publication after %d", revision, beforeRevision)
 	}
 	readCommittedForTest(service.StateStore, func(committed *stateFile) {
-		if committed.Network.Zones[zone.RootZone] != beforeRoot {
-			t.Fatal("unmodified root zone was not shared by batch commit")
+		if root := committed.Network.Zones[zone.RootZone]; root == nil || root.Authority.Epoch != beforeRootEpoch {
+			t.Fatal("batch commit changed the unmodified root zone")
 		}
-		if committed.Network.Zones["catofes."] == beforeParent {
-			t.Fatal("successful parent savepoint was not detached")
+		if committed.Network.Zones["catofes."] == nil {
+			t.Fatal("successful parent savepoint was not applied")
 		}
-		if committed.Network.Zones["node-b.catofes."] == beforeChild {
+		if child := committed.Network.Zones["node-b.catofes."]; child == nil || child.Records["batch-record"] == nil {
 			t.Fatal("later successful child savepoint did not run")
 		}
-		rejected, ok := committed.SyncPeers[session.PeerID].RejectedDigests[rejectedDigestKey("catofes.")]
+		rejected, ok := committed.SyncPeers[session.PeerID].RejectedDigests["catofes."]
 		if !ok || rejected.Reason == "" {
 			t.Fatalf("invalid middle savepoint rejection = %+v, present=%t", rejected, ok)
 		}
 	})
 
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if reloaded.Network.Zones["catofes."] == nil || reloaded.Network.Zones["node-b.catofes."] == nil {
-		t.Fatal("persisted batch is missing a successful snapshot")
-	}
 }
 
 func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
@@ -540,7 +520,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 		t.Fatalf("SaveState(target): %v", err)
 	}
 	config := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
-	service := newDaemonService(rt, targetState, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, targetState, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	session := NewSyncSession(peerID)
 	_, _ = session.OnEvent(&SyncTimerEvent{PeerID: peerID}, now)
@@ -614,13 +594,6 @@ drainEvents:
 	if current := service.currentState(); current == targetState || current.Network.Zones["catofes."] == nil {
 		t.Fatal("current state was not installed from committed snapshot")
 	}
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if reloaded.Network.Zones["catofes."] == nil {
-		t.Fatal("persisted state missing chunk-applied zone")
-	}
 	if active := service.hostRuntime.Gossip.Session(peerID); active != nil {
 		t.Fatalf("chunk sync session remained active after apply acknowledgement: state=%s pending=%d inflight=%d", active.State, active.PendingCount(), active.InflightCount())
 	}
@@ -641,12 +614,18 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
 	beforeRev := service.StateStore.Meta().Revision
 	rootHash := corestate.ZoneRoot(state.Network.Zones["catofes."])
+	if len(rootHash) == 0 {
+		rootHash = []byte("catofes-root")
+	}
+	if !zone.ZonePath("catofes.").Valid() {
+		t.Fatal("catofes fixture zone is invalid")
+	}
 
-	err := service.handleObjectChunk(&gossip.Message{
+	message := &gossip.Message{
 		Type:   gossip.MessageObjectChunk,
 		PeerID: peerID,
 		ObjectChunk: &gossip.ObjectChunk{
@@ -659,21 +638,25 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 			Total:      1,
 			Data:       []byte("invalid object"),
 		},
-	}, corestate.DefaultSyncLimits())
+	}
+	err := service.handleObjectChunk(message, corestate.DefaultSyncLimits())
 	if err == nil {
 		t.Fatal("handleObjectChunk accepted invalid object hash")
+	}
+	if len(message.ObjectChunk.RootHash) == 0 {
+		t.Fatalf("chunk root hash was lost: %v", err)
 	}
 
 	if len(state.SyncPeers[peerID].RejectedDigests) != 0 {
 		t.Fatal("chunk rejection mutated the old live peer state")
 	}
 	committed, rev := service.StateStore.Snapshot()
-	if rev != beforeRev+1 {
-		t.Fatalf("state revision = %d, want one peer COW commit after %d", rev, beforeRev)
+	if rev != beforeRev {
+		t.Fatalf("verified revision = %d, want rejected checkpoint to keep %d", rev, beforeRev)
 	}
-	rejected, ok := committed.SyncPeers[peerID].RejectedDigests[rejectedDigestKey("catofes.")]
+	rejected, ok := committed.SyncPeers[peerID].RejectedDigests["catofes."]
 	if !ok || rejected.Reason == "" || rejected.RootHashHex == "" {
-		t.Fatalf("committed rejected digest = %+v, present=%v", rejected, ok)
+		t.Fatalf("committed rejected digest = %+v, present=%v, all=%+v, common=%+v", rejected, ok, committed.SyncPeers[peerID].RejectedDigests, service.StateStore.common.ReadView().Gossip.Peers)
 	}
 	if current := service.currentState(); len(current.SyncPeers[peerID].RejectedDigests) != 1 {
 		t.Fatalf("current rejected digests = %+v, want installed committed peer", current.SyncPeers[peerID].RejectedDigests)

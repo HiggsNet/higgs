@@ -36,7 +36,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return client
@@ -46,10 +46,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -147,7 +144,7 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: true}
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return client
@@ -196,7 +193,7 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return client
@@ -252,7 +249,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		startedCh: make(chan struct{}),
 		unblock:   make(chan struct{}),
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -272,10 +269,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		t.Fatal("routing reconcile did not enter blocking BIRD start")
 	}
 
-	newerRev, err := service.StateStore.Update(func(state *stateFile) error {
-		state.IdentityKeyPath = "newer-routing-revision"
-		return nil
-	})
+	newerRev, err := advanceTestVerifiedRevision(service.StateStore, now.Add(time.Nanosecond))
 	if err != nil {
 		close(pm.unblock)
 		t.Fatalf("advance state revision during routing apply: %v", err)
@@ -299,9 +293,6 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
 	snapshot, _ := service.StateStore.Snapshot()
-	if snapshot.IdentityKeyPath != "newer-routing-revision" {
-		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
-	}
 	if len(snapshot.BirdInstances) != 0 {
 		t.Fatalf("bird instances = %+v, want stale result discarded", snapshot.BirdInstances)
 	}
@@ -342,7 +333,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	}
 
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	}
@@ -355,10 +346,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		t.Fatalf("external mode should call client.Status")
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
@@ -387,15 +375,12 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.BirdInstances) != 0 {
 		t.Fatalf("BirdInstances len = %d, want 0", len(latest.BirdInstances))
 	}
@@ -406,7 +391,7 @@ func TestRoutingReconcileInterval(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
 		t.Fatalf("routingReconcileInterval = %s, want 30s", got)
 	}
@@ -417,7 +402,7 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)
 	}

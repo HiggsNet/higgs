@@ -39,7 +39,7 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	badRecord.Value = []byte("tampered")
 	snapshot := &corestate.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("applySyncSnapshotAction accepted an invalid snapshot")
 	}
@@ -72,7 +72,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	if _, commit, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err != nil {
 		t.Fatalf("applySyncSnapshotAction(root grant): %v", err)
 	} else if !commit.StateCommitted || !commit.NetworkChanged {
@@ -124,7 +124,7 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 	}
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	if _, _, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
 		t.Fatal("managed authority refresh accepted a different identity key")
 	}
@@ -153,7 +153,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState(inconsistent): %v", err)
 	}
-	service := newDaemonService(rt, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	if changed, err := service.prepareStartupState(); err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	} else if !changed {
@@ -170,10 +170,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	if err := photoncrypto.VerifyChain(committed.Network, managed, now); err != nil {
 		t.Fatalf("VerifyChain(managed): %v", err)
 	}
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(refreshed): %v", err)
-	}
+	reloaded := service.currentState()
 	if got := reloaded.Network.Zones[managed].Authority.Epoch; got != 2 {
 		t.Fatalf("persisted managed authority epoch = %d, want 2", got)
 	}

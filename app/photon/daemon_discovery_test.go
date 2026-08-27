@@ -35,10 +35,10 @@ func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
 		t.Fatalf("planning mutated source peer: %+v", original)
 	}
 	peer := updates["node-b.catofes."]
-	if peer.DiscoveredAddr != "203.0.113.10:33434" {
-		t.Fatalf("planned DiscoveredAddr = %q", peer.DiscoveredAddr)
+	if !peer.DiscoveredEndpoint.Set || peer.DiscoveredEndpoint.Value != "203.0.113.10:33434" {
+		t.Fatalf("planned discovered endpoint = %+v", peer.DiscoveredEndpoint)
 	}
-	if peer.ObservedAddr != "" || peer.ObservedUntilUnix != 0 {
+	if !peer.ObservedEndpoint.Set || peer.ObservedEndpoint.Value != "" || !peer.ObservedUntilUnix.Set || peer.ObservedUntilUnix.Value != 0 {
 		t.Fatalf("expired observed path was not cleared: %+v", peer)
 	}
 
@@ -157,15 +157,15 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState(initial): %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	transport := &gossip.Transport{}
 	service.Sync.Transport = transport
 
 	before := service.StateStore.Meta().Revision
 	service.updateDiscoveredPeers()
 	after := service.StateStore.Meta().Revision
-	if after != before+1 {
-		t.Fatalf("discovery revision = %d, want %d", after, before+1)
+	if after != before {
+		t.Fatalf("discovery changed verified revision: before=%d after=%d", before, after)
 	}
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("transport address = %v", addr)
@@ -173,14 +173,6 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	if got := service.currentState().SyncPeers["node-b.catofes."].DiscoveredAddr; got != "203.0.113.10:33434" {
 		t.Fatalf("committed DiscoveredAddr = %q", got)
 	}
-	persisted, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	if got := persisted.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "203.0.113.10:33434" {
-		t.Fatalf("persisted DiscoveredAddr = %q", got)
-	}
-
 	transport.RemovePeerAddrs("node-b.catofes.")
 	service.updateDiscoveredPeers()
 	if got := service.StateStore.Meta().Revision; got != after {

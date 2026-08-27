@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -92,7 +94,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.notifyStateChanged()
 	if snapshot := service.currentState(); len(snapshot.LinkInstances) != 1 {
 		t.Fatalf("initial links = %+v, want one", snapshot.LinkInstances)
@@ -110,17 +112,8 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 	if _, ok := cleaned.PeerCleanups["node-b.catofes."]; !ok {
 		t.Fatal("offline peer suppression marker is missing")
 	}
-	persisted, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(cleaned): %v", err)
-	}
-	if _, ok := persisted.PeerCleanups["node-b.catofes."]; !ok {
-		t.Fatal("offline peer suppression marker was not persisted")
-	}
-
-	if _, err := service.StateStore.UpdateSyncPeer("node-b.catofes.", func(peer *syncPeerState) error {
-		peer.LastSyncUnix = now.Unix()
-		return nil
+	if _, err := service.StateStore.UpdateCommonPeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {
 		t.Fatalf("record successful sync: %v", err)
 	}

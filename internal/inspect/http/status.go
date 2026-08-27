@@ -5,7 +5,7 @@ type StatusResponse struct {
 	ManagedZone       string `json:"managed_zone,omitempty"`
 	ListenAddr        string `json:"listen_addr,omitempty"`
 	DaemonOnline      bool   `json:"daemon_online"`
-	StateRevision     uint64 `json:"state_revision,omitempty"`
+	StateRevision     uint64 `json:"state_revision"`
 	SnapshotTimeUnix  int64  `json:"snapshot_time_unix,omitempty"`
 	Dirty             any    `json:"dirty,omitempty"`
 	ReconcileProgress any    `json:"reconcile_progress,omitempty"`

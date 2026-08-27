@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"net"
 	"sort"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -31,12 +33,13 @@ func (d *DaemonService) updateDiscoveredPeers() {
 		return
 	}
 	now := d.Sync.now()
-	var committedPlan daemonDiscoveryPlan
-	_, changed, err := d.StateStore.updateSyncPeersWithView(func(view syncPeerMutationView) (map[string]syncPeerState, error) {
-		updates, plan := planDaemonDiscoveredPeers(view, d.Sync.Config, now)
-		committedPlan = plan
-		return updates, nil
-	})
+	state, _ := d.StateStore.Snapshot()
+	if state == nil {
+		return
+	}
+	view := syncPeerMutationView{ManagedZone: state.ManagedZone, Network: state.Network, SyncPeers: state.SyncPeers, PeerCleanups: state.PeerCleanups}
+	patches, committedPlan := planDaemonDiscoveredPeers(view, d.Sync.Config, now)
+	_, err := d.StateStore.UpdateCommonPeerCheckpoints(context.Background(), patches)
 	if err != nil {
 		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
 		return
@@ -45,19 +48,14 @@ func (d *DaemonService) updateDiscoveredPeers() {
 	// The plan corresponds to the revision that either committed or was found
 	// to need no state change. No transport operation occurs on stale attempts.
 	applyDaemonDiscoveryPlan(d.Sync.Transport, committedPlan)
-	if !changed {
-		return
-	}
-	if err := d.saveCommittedState(); err != nil {
-		d.logWarn("endpoint", "discovered_peer_save_failed", map[string]any{"error": err})
-	}
 }
 
-func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile, now time.Time) (map[string]syncPeerState, daemonDiscoveryPlan) {
+func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile, now time.Time) (map[string]corestate.PeerCheckpointPatch, daemonDiscoveryPlan) {
 	updates := make(map[string]syncPeerState)
+	patches := make(map[string]corestate.PeerCheckpointPatch)
 	plan := daemonDiscoveryPlan{peers: make(map[string]daemonPeerTransportUpdate)}
 	if view.Network == nil || config == nil {
-		return updates, plan
+		return patches, plan
 	}
 
 	plan.knownPeerIDs = verifiedZonePeerIDs(view, config, now)
@@ -165,7 +163,36 @@ func planDaemonDiscoveredPeers(view syncPeerMutationView, config *syncConfigFile
 		}
 		plan.peers[peerID] = action
 	}
-	return updates, plan
+	for peerID, next := range updates {
+		current := view.SyncPeers[peerID]
+		patch := corestate.PeerCheckpointPatch{}
+		if current.DiscoveredAddr != next.DiscoveredAddr {
+			patch.DiscoveredEndpoint = corestate.PatchField[string]{Set: true, Value: next.DiscoveredAddr}
+		}
+		if current.DiscoveredAtUnix != next.DiscoveredAtUnix {
+			patch.DiscoveredAtUnix = corestate.PatchField[int64]{Set: true, Value: next.DiscoveredAtUnix}
+		}
+		if current.ObservedAddr != next.ObservedAddr {
+			patch.ObservedEndpoint = corestate.PatchField[string]{Set: true, Value: next.ObservedAddr}
+		}
+		if current.ObservedFirstSeenUnix != next.ObservedFirstSeenUnix {
+			patch.ObservedFirstUnix = corestate.PatchField[int64]{Set: true, Value: next.ObservedFirstSeenUnix}
+		}
+		if current.ObservedLastSeenUnix != next.ObservedLastSeenUnix {
+			patch.ObservedLastUnix = corestate.PatchField[int64]{Set: true, Value: next.ObservedLastSeenUnix}
+		}
+		if current.ObservedLastSyncUnix != next.ObservedLastSyncUnix {
+			patch.ObservedSyncUnix = corestate.PatchField[int64]{Set: true, Value: next.ObservedLastSyncUnix}
+		}
+		if current.ObservedUntilUnix != next.ObservedUntilUnix {
+			patch.ObservedUntilUnix = corestate.PatchField[int64]{Set: true, Value: next.ObservedUntilUnix}
+		}
+		if current.ObservedFailureCount != next.ObservedFailureCount {
+			patch.ObservedFailures = corestate.PatchField[int]{Set: true, Value: next.ObservedFailureCount}
+		}
+		patches[peerID] = patch
+	}
+	return patches, plan
 }
 
 func plannedObservedPaths(view syncPeerMutationView, peerID string, peer syncPeerState, now time.Time) ([]gossip.ObservedPath, bool, bool) {

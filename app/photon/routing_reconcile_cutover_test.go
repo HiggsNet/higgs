@@ -68,7 +68,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	client := &fakeBirdClient{status: &bird.BirdObservedState{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
 	}}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.health = manager
 	service.birdProcessManager = &fakeBirdProcessManager{running: false}
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {

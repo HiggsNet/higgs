@@ -50,7 +50,7 @@ func TestObserverReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *t
 	state.IPsecReconcile = &ipsecReconcileState{DesiredLinks: 1}
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
-	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
 	srv := newObserverServer(service, appConfig.Observer)
 	if srv == nil {
 		t.Fatal("observer server is nil")

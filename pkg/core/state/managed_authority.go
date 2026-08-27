@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -10,6 +11,60 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
+
+// RefreshManagedAuthority commits a newer parent-owned authority envelope for
+// the managed zone while preserving its locally owned contents.
+func (store *Store) RefreshManagedAuthority(ctx context.Context, now time.Time) (CommitResult, ManagedAuthorityResult, error) {
+	var commit CommitResult
+	var authority ManagedAuthorityResult
+	if store == nil {
+		return commit, authority, ErrVerifiedStoreClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	store.writeMu.Lock()
+	defer store.writeMu.Unlock()
+	store.mu.RLock()
+	if store.closed {
+		store.mu.RUnlock()
+		return commit, authority, ErrVerifiedStoreClosed
+	}
+	baseRevision := store.revision
+	current := cloneVerifiedState(store.state)
+	gossipCandidate := cloneGossipCheckpoint(store.gossip)
+	store.mu.RUnlock()
+	var publicKey []byte
+	if len(current.IdentityPrivateKey) == ed25519.PrivateKeySize {
+		publicKey = current.IdentityPrivateKey.Public().(ed25519.PublicKey)
+	}
+	network, authority, err := ReconcileManagedAuthority(current.Network, current.ManagedZone, publicKey, now)
+	if err != nil {
+		return commit, authority, err
+	}
+	if !authority.Adopted && !authority.Refreshed {
+		commit.Changes.VerifiedRevision = baseRevision
+		return commit, authority, nil
+	}
+	candidate := cloneVerifiedState(current)
+	candidate.Network = network
+	if err := ValidateStateRoot(candidate); err != nil {
+		return CommitResult{}, ManagedAuthorityResult{}, err
+	}
+	nextRevision := baseRevision + 1
+	changes := ChangeSet{VerifiedRevision: nextRevision, ChangedZones: []zone.ZonePath{candidate.ManagedZone}, NetworkChanged: true, SecurityPriority: true}
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
+			return CommitResult{}, ManagedAuthorityResult{}, err
+		}
+	}
+	store.mu.Lock()
+	store.state = candidate
+	store.gossip = gossipCandidate
+	store.revision = nextRevision
+	store.mu.Unlock()
+	return CommitResult{Committed: true, Changes: changes}, authority, nil
+}
 
 type ManagedAuthorityResult struct {
 	Adopted   bool

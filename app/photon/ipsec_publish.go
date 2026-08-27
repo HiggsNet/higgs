@@ -14,37 +14,45 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func (sr *SyncRuntime) publishIPsecRecordsInState(state *stateFile) (bool, error) {
+type localIPsecPublishPlan struct {
+	Intents      []corestate.LocalIntent
+	TransportKey *ipsecTransportKeyState
+	PortRecord   *ipsecPortRecordState
+}
+
+func (sr *SyncRuntime) ipsecProtocolPlan(state *stateFile) (localIPsecPublishPlan, error) {
+	var plan localIPsecPublishPlan
 	if sr == nil || state == nil || state.Network == nil || sr.App == nil || sr.App.Config == nil {
 		if sr != nil {
 			sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
 		}
-		return false, nil
+		return plan, nil
 	}
 	config := sr.App.Config
 	if state.ManagedZone == zone.RootZone {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
-		return false, nil
+		return plan, nil
 	}
 	if !state.ManagedZone.Valid() {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": state.ManagedZone})
-		return false, nil
+		return plan, nil
 	}
 	if len(state.ZonePrivateKey) == 0 {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": state.ManagedZone})
-		return false, nil
+		return plan, nil
 	}
 	if autoJoinPending(state) {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": state.ManagedZone})
-		return false, nil
+		return plan, nil
 	}
 	if len(config.IPsec.LinkGroups) == 0 {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": state.ManagedZone})
-		return false, nil
+		return plan, nil
 	}
 	sr.logger().Debug("ipsec", "publish_started", map[string]any{
 		"managed_zone": state.ManagedZone,
@@ -54,25 +62,31 @@ func (sr *SyncRuntime) publishIPsecRecordsInState(state *stateFile) (bool, error
 	now := sr.now()
 	key, keyRecord, err := ensureIPsecTransportKey(state, now)
 	if err != nil {
-		return false, err
+		return plan, err
 	}
-	state.IPsecTransportKey = key
+	plan.TransportKey = cloneIPsecTransportKeyState(key)
 	records, err := localIPsecRecords(config, state, state.ManagedZone, keyRecord, now)
 	if err != nil {
-		return false, err
+		return plan, err
 	}
-	changed := false
 	for _, item := range records {
-		updated, err := putSignedIPsecRecordIfChanged(state, state.ManagedZone, item.key, item.recordType, item.value, now)
+		value, err := json.Marshal(item.value)
 		if err != nil {
-			return false, err
+			return localIPsecPublishPlan{}, err
 		}
+		if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
+			if current := zs.Records[item.key]; current != nil && current.Type == item.recordType && bytes.Equal(current.Value, value) {
+				continue
+			}
+		}
+		plan.Intents = append(plan.Intents, corestate.PutProtocolRecordIntent{
+			Kind: corestate.ProtocolRecordIPsec, Zone: state.ManagedZone, Key: item.key, Type: item.recordType, Value: value,
+		})
 		sr.logger().Debug("ipsec", "publish_record_decision", map[string]any{
 			"managed_zone": state.ManagedZone,
 			"key":          item.key,
-			"updated":      updated,
+			"updated":      true,
 		})
-		changed = changed || updated
 	}
 	for _, item := range records {
 		if item.key != ipsec.RecordKeyPorts {
@@ -93,22 +107,40 @@ func (sr *SyncRuntime) publishIPsecRecordsInState(state *stateFile) (bool, error
 		}
 		previousState := state.IPsecPortRecord
 		sr.logger().Debug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
-		state.IPsecPortRecord = &ipsecPortRecordState{
+		plan.PortRecord = &ipsecPortRecordState{
 			Mode:       portRecord.Mode,
 			Range:      r,
 			Generation: portRecord.Current.Generation,
 			UpdatedAt:  portRecord.UpdatedAt,
 		}
-		if previousState == nil || previousState.Mode != state.IPsecPortRecord.Mode || previousState.Generation != state.IPsecPortRecord.Generation || previousState.UpdatedAt != state.IPsecPortRecord.UpdatedAt || !ipsecPortRangesEqual(previousState.Range, state.IPsecPortRecord.Range) {
-			changed = true
-		}
 	}
-	if changed {
+	if len(plan.Intents) > 0 || !sameIPsecPublishRuntime(state, plan) {
 		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
-		return true, nil
+		return plan, nil
 	}
 	sr.logger().Debug("ipsec", "publish_unchanged", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
-	return false, nil
+	return plan, nil
+}
+
+func sameIPsecPublishRuntime(state *stateFile, plan localIPsecPublishPlan) bool {
+	return ipsecTransportKeyStateEqual(state.IPsecTransportKey, plan.TransportKey) &&
+		ipsecPortRecordStateEqual(state.IPsecPortRecord, plan.PortRecord)
+}
+
+func ipsecTransportKeyStateEqual(a, b *ipsecTransportKeyState) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Kind == b.Kind && a.Algorithm == b.Algorithm && bytes.Equal(a.PublicKey, b.PublicKey) &&
+		bytes.Equal(a.PrivateKey, b.PrivateKey) && a.Fingerprint == b.Fingerprint && a.NotBefore == b.NotBefore &&
+		a.NotAfter == b.NotAfter && a.UpdatedAt == b.UpdatedAt
+}
+
+func ipsecPortRecordStateEqual(a, b *ipsecPortRecordState) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Mode == b.Mode && a.Generation == b.Generation && a.UpdatedAt == b.UpdatedAt && ipsecPortRangesEqual(a.Range, b.Range)
 }
 
 func ipsecPortPublishLogFields(config *appConfig, previous *ipsecPortRecordState, record *ipsec.PortRecord, now time.Time) map[string]any {

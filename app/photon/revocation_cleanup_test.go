@@ -311,7 +311,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	// Flush revocation cleanup.
 	service.flushRevocationCleanup()
@@ -332,7 +332,7 @@ func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	before := service.StateStore.Meta().Revision
 
 	service.flushRevocationCleanup()
@@ -358,7 +358,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
 	before := service.StateStore.Meta().Revision
 
@@ -387,7 +387,7 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 		RevokedAuthorityHash:  delegation.AuthorityHash,
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Second)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -419,7 +419,7 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
 
 	state.Lock()
@@ -512,7 +512,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	}
 
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -617,7 +617,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = ipsecDriver
 	service.XFRMDriver = ipsecDriver
 	service.firewallDriver = firewallDriver
@@ -635,10 +635,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
 		t.Fatalf("initial firewall authorized prefixes = %v, want node-b route", initialFirewall.Prefixes.MeshAuthorizedV4)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(initial): %v", err)
-	}
+	latest := service.currentState()
 	initialBirdCfg := readBirdConfigForNetns(t, latest, "photontesth2")
 	if !strings.Contains(initialBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
@@ -698,10 +695,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 
-	latest, err = rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(revoked): %v", err)
-	}
+	latest = service.currentState()
 	revokedBirdCfg := readBirdConfigForNetns(t, latest, "photontesth2")
 	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)

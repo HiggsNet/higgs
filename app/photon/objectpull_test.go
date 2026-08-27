@@ -242,7 +242,7 @@ func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *te
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 
 	state.Lock()
@@ -282,7 +282,7 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLoc
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 
 	state.Lock()

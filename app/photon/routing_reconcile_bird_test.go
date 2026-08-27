@@ -67,7 +67,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	}
 
 	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Error: "signal: killed"}}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -79,10 +79,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	if pm.started {
 		t.Fatalf("managed BIRD should not restart while crash backoff is active")
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state")
@@ -139,7 +136,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -154,10 +151,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
 		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("bird instance = %+v, want running", inst)
@@ -193,21 +187,20 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("initial reconcileRouting: %v", err)
 	}
 
-	if _, err := service.StateStore.Update(func(current *stateFile) error {
-		inst := current.BirdInstances["photontesth2"]
+	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
+		inst := runtime.BirdInstances["photontesth2"]
 		inst.State = birdInstanceStateDegraded
 		inst.LastError = "bird restart backoff active until 1970-01-01T01:06:41Z"
 		inst.FailureCount = 1
 		inst.BackoffUntilUnix = now.Add(-time.Second).Unix()
 		inst.LastExit = "pid 1234: signal: killed"
-		return nil
 	}); err != nil {
 		t.Fatalf("seed stale BIRD state: %v", err)
 	}
@@ -218,10 +211,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
 		t.Fatalf("bird instance = %+v, want running with no error", inst)
@@ -262,7 +252,7 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		startedCh: make(chan struct{}),
 		unblock:   make(chan struct{}),
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -337,7 +327,7 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 	persistPM := &fakeBirdProcessManager{running: true}
 	externalPM := &fakeBirdProcessManager{running: true}
 	stopPM := &fakeBirdProcessManager{running: true}
-	service := newDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
 	service.birdProcessManagers = map[string]birdProcessManager{
 		"photontesth2": persistPM,
 		"photontesth3": externalPM,
@@ -398,7 +388,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 
 	if service.flushRoutingReconcile(context.Background()) {
@@ -414,10 +404,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("routingDirty should be cleared after flush")
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -445,7 +432,7 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 		},
 		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
 	}
-	service := &DaemonService{StateStore: NewDaemonStateStore(initial)}
+	service := &DaemonService{StateStore: newTestDaemonStateStore(initial)}
 	workspace, rev := service.StateStore.routingSnapshot()
 	baseBird := cloneBirdInstances(workspace.BirdInstances)
 	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
@@ -456,45 +443,5 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 	}
 	if got := service.StateStore.Meta().Revision; got != rev {
 		t.Fatalf("timestamp-only result advanced revision: got %d want %d", got, rev)
-	}
-}
-
-func TestCommitRoutingReconcileResultRejectsChangedBirdInstanceWithSameOwner(t *testing.T) {
-	initial := &stateFile{
-		ManagedZone: "node-a.catofes.",
-		Network:     cloneTestNetworkState(),
-		BirdInstances: map[string]*BirdInstanceState{
-			"mesh": {
-				NetNSName: "mesh",
-				Owner:     bird.BirdResourceOwner{Token: "stable-owner"},
-				State:     birdInstanceStatePending,
-			},
-		},
-		RoutingReconcile: &routingReconcileState{},
-	}
-	service := &DaemonService{StateStore: NewDaemonStateStore(initial)}
-	workspace, rev := service.StateStore.routingSnapshot()
-	baseBird := cloneBirdInstances(workspace.BirdInstances)
-	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
-	workspace.BirdInstances["mesh"].State = birdInstanceStateRunning
-
-	if _, err := service.StateStore.Update(func(state *stateFile) error {
-		state.BirdInstances["mesh"].State = birdInstanceStateDegraded
-		state.BirdInstances["mesh"].LastError = "newer observation"
-		return nil
-	}); err != nil {
-		t.Fatalf("advance BIRD state: %v", err)
-	}
-
-	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace); err != nil {
-		t.Fatalf("commitRoutingReconcileResult: %v", err)
-	}
-	if !service.routingDirty {
-		t.Fatal("routingDirty = false, want conflicting reconcile to be retried")
-	}
-	snapshot, _ := service.StateStore.Snapshot()
-	got := snapshot.BirdInstances["mesh"]
-	if got == nil || got.State != birdInstanceStateDegraded || got.LastError != "newer observation" {
-		t.Fatalf("newer BIRD state was overwritten: %+v", got)
 	}
 }

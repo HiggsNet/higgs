@@ -180,24 +180,40 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 }
 
 func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Time) (*manualPortRotateResult, error) {
+	record, runtime, result, err := planLocalIPsecPortRotation(config, state, now)
+	if err != nil {
+		return nil, err
+	}
+	changed, err := putSignedIPsecRecordIfChanged(state, state.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, record, now)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return nil, fmt.Errorf("manual port rotate produced unchanged ipsec/ports record")
+	}
+	state.IPsecPortRecord = runtime
+	return result, nil
+}
+
+func planLocalIPsecPortRotation(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, *ipsecPortRecordState, *manualPortRotateResult, error) {
 	if config == nil {
 		config = defaultAppConfig()
 	}
 	if state == nil || state.Network == nil {
-		return nil, fmt.Errorf("state is nil")
+		return nil, nil, nil, fmt.Errorf("state is nil")
 	}
 	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() {
-		return nil, fmt.Errorf("managed zone is required")
+		return nil, nil, nil, fmt.Errorf("managed zone is required")
 	}
 	if len(state.ZonePrivateKey) == 0 {
-		return nil, fmt.Errorf("managed zone private key is required")
+		return nil, nil, nil, fmt.Errorf("managed zone private key is required")
 	}
 	mode := config.IPsec.PortMode
 	if mode == "" {
 		mode = ipsec.PortModeFixed
 	}
 	if mode != ipsec.PortModeRange {
-		return nil, fmt.Errorf("manual port rotate requires ipsec.port_mode=range, got %q", mode)
+		return nil, nil, nil, fmt.Errorf("manual port rotate requires ipsec.port_mode=range, got %q", mode)
 	}
 	if now.IsZero() {
 		now = time.Now()
@@ -226,16 +242,9 @@ func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Tim
 		Now:           now,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	changed, err := putSignedIPsecRecordIfChanged(state, state.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, record, now)
-	if err != nil {
-		return nil, err
-	}
-	if !changed {
-		return nil, fmt.Errorf("manual port rotate produced unchanged ipsec/ports record")
-	}
-	state.IPsecPortRecord = &ipsecPortRecordState{
+	runtime := &ipsecPortRecordState{
 		Mode:       record.Mode,
 		Range:      record.Range,
 		Generation: record.Current.Generation,
@@ -255,5 +264,5 @@ func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Tim
 	if len(record.Previous) > 0 {
 		result.PreviousValidUntil = record.Previous[0].ValidUntil
 	}
-	return result, nil
+	return record, runtime, result, nil
 }

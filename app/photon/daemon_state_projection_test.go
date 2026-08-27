@@ -1,12 +1,10 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestDaemonStateReadProjectionsAreDetached(t *testing.T) {
@@ -33,7 +31,7 @@ func TestDaemonStateReadProjectionsAreDetached(t *testing.T) {
 			},
 		},
 	}
-	store := NewDaemonStateStore(state)
+	store := newTestDaemonStateStore(state)
 
 	status := store.statusProjection()
 	if !status.loaded || status.managedZone != state.ManagedZone || status.knownZones != 1 || status.knownPeers != 1 || status.linkInstances != 1 || status.desiredLinks != 1 {
@@ -56,12 +54,12 @@ func TestDaemonStateReadProjectionsAreDetached(t *testing.T) {
 	peers := store.peersProjection(&syncConfigFile{}, time.Unix(100, 0), nil)
 	peer := peers.peers["peer-a"]
 	peer.ObservedGraceAddrs[0].Addr = "changed"
-	peer.RejectedDigests["digest-a"] = rejectedDigestState{Reason: "changed"}
+	peer.RejectedDigests["node-a.catofes."] = rejectedDigestState{Reason: "changed"}
 	againPeer := store.peersProjection(&syncConfigFile{}, time.Unix(100, 0), nil).peers["peer-a"]
 	if got := againPeer.ObservedGraceAddrs[0].Addr; got != "203.0.113.1:4500" {
 		t.Fatalf("peer grace projection mutation leaked: %q", got)
 	}
-	if got := againPeer.RejectedDigests["digest-a"].Reason; got != "old" {
+	if got := againPeer.RejectedDigests["node-a.catofes."].Reason; got != "old" {
 		t.Fatalf("peer rejected digest projection mutation leaked: %q", got)
 	}
 
@@ -103,7 +101,7 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 		Network:     cloneTestNetworkState(),
 		SyncPeers:   cloneTestSyncPeers(),
 	}
-	store := NewDaemonStateStore(state)
+	store := newTestDaemonStateStore(state)
 	config := &syncConfigFile{
 		PeerID: "local",
 		Bootstrap: []syncConfigPeer{
@@ -161,11 +159,11 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 		t.Fatalf("relay catalog root = %x, want %x", relay.summary.CatalogRoot, wantCatalogRoot)
 	}
 	peer = relay.peerStates["peer-a"]
-	peer.RejectedDigests["digest-a"] = rejectedDigestState{Reason: "changed"}
+	peer.RejectedDigests["node-a.catofes."] = rejectedDigestState{Reason: "changed"}
 	relay.peerStates["peer-a"] = peer
 	relay.summary.CatalogRoot[0] ^= 0xff
 	againRelay := store.relayProjection(config, now, budget)
-	if got := againRelay.peerStates["peer-a"].RejectedDigests["digest-a"].Reason; got != "old" {
+	if got := againRelay.peerStates["peer-a"].RejectedDigests["node-a.catofes."].Reason; got != "old" {
 		t.Fatalf("relay peer projection mutation leaked: %q", got)
 	}
 	if string(againRelay.summary.CatalogRoot) != string(wantCatalogRoot) {
@@ -173,68 +171,7 @@ func TestDaemonStateSyncProjectionsAreDetached(t *testing.T) {
 	}
 }
 
-func TestDaemonStatePersistenceLeaseRetainsEncodedRevision(t *testing.T) {
-	initial := &stateFile{
-		ManagedZone:     "node-a.catofes.",
-		IdentityKeyPath: "old-key",
-		Network:         cloneTestNetworkState(),
-	}
-	store := NewDaemonStateStore(initial)
-	oldLease := store.persistenceLease()
-	if oldLease.state == nil || oldLease.revision == 0 {
-		t.Fatalf("old lease = %+v", oldLease)
-	}
-	if _, err := store.Update(func(state *stateFile) error {
-		state.IdentityKeyPath = "new-key"
-		return nil
-	}); err != nil {
-		t.Fatalf("advance committed state: %v", err)
-	}
-	if got := oldLease.state.IdentityKeyPath; got != "old-key" {
-		t.Fatalf("retained immutable root changed: %q", got)
-	}
-
-	path := filepath.Join(t.TempDir(), "state.db")
-	syncRuntime := &SyncRuntime{App: &Runtime{StatePath: path}}
-	if err := syncRuntime.saveStateSnapshotAtRevision(oldLease.state, oldLease.revision); err != nil {
-		t.Fatalf("save old lease: %v", err)
-	}
-	if syncRuntime.reloadStateStamp.revision != oldLease.revision {
-		t.Fatalf("old marker revision = %d, want %d", syncRuntime.reloadStateStamp.revision, oldLease.revision)
-	}
-	if got := loadPersistedIdentityKeyPath(t, path); got != "old-key" {
-		t.Fatalf("old encoded lease identity = %q", got)
-	}
-
-	daemon := &DaemonService{StateStore: store, Sync: syncRuntime}
-	if err := daemon.saveCommittedState(); err != nil {
-		t.Fatalf("save current committed state: %v", err)
-	}
-	currentLease := store.persistenceLease()
-	if syncRuntime.reloadStateStamp.revision != currentLease.revision {
-		t.Fatalf("current marker revision = %d, want %d", syncRuntime.reloadStateStamp.revision, currentLease.revision)
-	}
-	if got := loadPersistedIdentityKeyPath(t, path); got != "new-key" {
-		t.Fatalf("current encoded lease identity = %q", got)
-	}
-}
-
-func loadPersistedIdentityKeyPath(t *testing.T, path string) string {
-	t.Helper()
-	store, err := zone.OpenBoltStore(path, 0o600)
-	if err != nil {
-		t.Fatalf("open persisted state: %v", err)
-	}
-	defer store.Close()
-	var meta stateMeta
-	if err := store.LoadMetaJSON(cliMetaKey, &meta); err != nil {
-		t.Fatalf("load persisted meta: %v", err)
-	}
-	return meta.IdentityKeyPath
-}
-
 func TestDaemonStateProjectionSchemaGuard(t *testing.T) {
-	assertStateCloneFields(t, committedStateLease{}, "state", "revision")
 	assertStateCloneFields(t, daemonStatusProjection{},
 		"loaded", "meta", "managedZone", "knownZones", "knownPeers", "lastSyncUnix",
 		"linkInstances", "desiredLinks", "lastLinkError", "lastRoutingError",

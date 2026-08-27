@@ -169,7 +169,7 @@ func TestRelaySyncQueuesCompactCatalogSummary(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	config.Bootstrap = []syncConfigPeer{{ID: "node-c.catofes.", Addr: "127.0.0.1:33434"}}
 	now := time.Unix(1000, 0)
-	service := newDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
 
 	service.relaySyncToPeers("node-b.catofes.")
 

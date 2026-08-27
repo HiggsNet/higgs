@@ -16,7 +16,7 @@ import (
 
 func TestDaemonControlErrorResponses(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
 	if response.OK || response.Error == "" {
@@ -41,7 +41,7 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 
 func TestDaemonControlStatus(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
 	ctx := t.Context()
 	stop, err := service.startControlServer(ctx)
@@ -126,7 +126,7 @@ func TestDaemonControlRoutingReload(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.routingDirty = false
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
@@ -156,7 +156,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	client := &fakeBirdClient{raw: map[string]string{
 		"show route table all where source = RTS_BABEL all": "Table photon_photontesth24:\n10.0.0.0/24 unicast\n",
 	}}
-	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		if socketPath != "/run/photon/bird-photontesth2.ctl" {
 			t.Fatalf("socketPath = %q, want /run/photon/bird-photontesth2.ctl", socketPath)
@@ -219,7 +219,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			Established:    true,
 		}},
 	}
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
 	if !response.OK || response.Links == nil {
@@ -263,7 +263,7 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 	state.SyncPeers = map[string]syncPeerState{
 		"node-b": {LastSyncUnix: 1111, ObservedAddr: "198.51.100.2:7777", ObservedUntilUnix: time.Now().Add(time.Minute).Unix()},
 	}
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	committedRev := service.StateStore.Meta().Revision
 
 	state.Lock()
@@ -298,7 +298,7 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 
 func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	packet := &gossip.Packet{
 		Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 33434},
 		Message: &gossip.Message{
@@ -349,7 +349,7 @@ func TestDaemonControlRecordGet(t *testing.T) {
 	if err := state.Network.Put(record); err != nil {
 		t.Fatalf("Put(second record): %v", err)
 	}
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
 	response := controlRequestViaPipe(t, service, controlRequest{
 		Method:  "record_get",

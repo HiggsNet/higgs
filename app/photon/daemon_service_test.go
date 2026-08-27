@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
-	service := newDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, 0)
+	service := newTestDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, 0)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
@@ -33,7 +33,7 @@ func TestConfiguredStrongSwanDriverWithoutLinkGroupsIsNoop(t *testing.T) {
 
 func TestDaemonServiceStateChangedHook(t *testing.T) {
 	state := &stateFile{ManagedZone: "node-a.catofes."}
-	service := newDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
 	var called bool
 	service.Hooks.OnStateChanged = func(got *stateFile) {
 		called = true
@@ -54,7 +54,7 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	service.drainingEvents = true
 	var flushed []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
@@ -73,7 +73,7 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 
 func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
-	service := newDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 
 	service.firewallDirty = true
@@ -125,7 +125,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
@@ -137,10 +137,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(initial): %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.LinkInstances) != 0 {
 		t.Fatalf("initial link instances = %+v, want none", latest.LinkInstances)
 	}
@@ -175,10 +172,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest, err = rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(reloaded): %v", err)
-	}
+	latest = service.currentState()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances after reload = %d, want 1", len(latest.LinkInstances))
 	}
@@ -211,7 +205,7 @@ func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {

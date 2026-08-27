@@ -10,7 +10,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func newComposedDaemonStateStoreTestFixture(t *testing.T, commit corestate.CommitFunc) (*DaemonStateStore, zone.ZonePath) {
+func newDaemonStateStoreTestFixture(t *testing.T, commit corestate.CommitFunc) (*DaemonStateStore, zone.ZonePath) {
 	t.Helper()
 	rt, managed := buildIPAMTestRuntime(t)
 	legacy, err := rt.LoadState()
@@ -22,18 +22,18 @@ func newComposedDaemonStateStoreTestFixture(t *testing.T, commit corestate.Commi
 		t.Fatalf("projectLegacyCommonState: %v", err)
 	}
 	common := corestate.NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, commit)
-	store, err := NewComposedDaemonStateStore(common, &linuxRuntimeState{
+	store, err := NewDaemonStateStore(common, &linuxRuntimeState{
 		IdentityKeyPath: legacy.IdentityKeyPath,
 		EndpointACLs:    map[string]endpointACL{"admin": {Name: "admin"}},
 	})
 	if err != nil {
-		t.Fatalf("NewComposedDaemonStateStore: %v", err)
+		t.Fatalf("NewDaemonStateStore: %v", err)
 	}
 	return store, zone.ZonePath(managed)
 }
 
 func TestComposedDaemonStateStoreAppliesCommonIntentAndRefreshesReadView(t *testing.T) {
-	store, managed := newComposedDaemonStateStoreTestFixture(t, nil)
+	store, managed := newDaemonStateStoreTestFixture(t, nil)
 	now := time.Unix(1000, 0)
 	intent := corestate.PutRecordIntent{Zone: managed, Key: "apps/composed", Type: "application.test", Value: []byte("value")}
 
@@ -65,32 +65,9 @@ func TestComposedDaemonStateStoreAppliesCommonIntentAndRefreshesReadView(t *test
 	}
 }
 
-func TestComposedDaemonStateStoreRejectsLegacyWriters(t *testing.T) {
-	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
-	before, _ := store.Snapshot()
-	called := false
-	if _, err := store.Update(func(*stateFile) error {
-		called = true
-		return nil
-	}); err == nil {
-		t.Fatal("legacy Update succeeded in composed mode")
-	}
-	if called {
-		t.Fatal("legacy Update callback ran in composed mode")
-	}
-	if _, committed := store.commitNetworkCandidateIfRevision(0, zone.NewNetworkState()); committed {
-		t.Fatal("legacy Network candidate committed in composed mode")
-	}
-	store.ReplaceCommitted(&stateFile{ManagedZone: "replacement.example.", Network: zone.NewNetworkState()})
-	after, _ := store.Snapshot()
-	if after.ManagedZone != before.ManagedZone {
-		t.Fatalf("legacy replacement changed composed owner: %q", after.ManagedZone)
-	}
-}
-
 func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) {
 	wantErr := errors.New("persist failed")
-	store, managed := newComposedDaemonStateStoreTestFixture(t, func(context.Context, *corestate.CommitCandidate, corestate.ChangeSet) error {
+	store, managed := newDaemonStateStoreTestFixture(t, func(context.Context, *corestate.CommitCandidate, corestate.ChangeSet) error {
 		return wantErr
 	})
 	_, err := store.ApplyCommonLocalIntent(context.Background(), corestate.PutRecordIntent{
@@ -106,7 +83,7 @@ func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) 
 }
 
 func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision(t *testing.T) {
-	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	store, _ := newDaemonStateStoreTestFixture(t, nil)
 	result, err := store.UpdateCommonPeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
 		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: 42},
 	})
@@ -123,7 +100,7 @@ func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision
 }
 
 func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T) {
-	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	store, _ := newDaemonStateStoreTestFixture(t, nil)
 	commits := 0
 	store.commitRuntime = func(revision corestate.VerifiedRevision, candidate *linuxRuntimeState) error {
 		commits++
@@ -137,17 +114,17 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 		return nil
 	}
 	reconcile := &routingReconcileState{LastError: "planned"}
-	if revision, committed, err := store.commitComposedRoutingIfRevision(0, nil, reconcile); err != nil || !committed || revision != 0 {
+	if revision, committed, err := store.commitRoutingIfRevision(0, nil, reconcile); err != nil || !committed || revision != 0 {
 		t.Fatalf("routing runtime commit = revision %d committed %v err %v", revision, committed, err)
 	}
 	after, _ := store.Snapshot()
 	if after.RoutingReconcile == nil || after.RoutingReconcile.LastError != "planned" || store.Meta().Revision != 0 {
 		t.Fatalf("published runtime/meta = %+v/%+v", after.RoutingReconcile, store.Meta())
 	}
-	if _, committed, err := store.commitComposedRoutingIfRevision(0, nil, reconcile); err != nil || committed {
+	if _, committed, err := store.commitRoutingIfRevision(0, nil, reconcile); err != nil || committed {
 		t.Fatalf("runtime no-op = committed %v err %v", committed, err)
 	}
-	if _, committed, err := store.commitComposedRoutingIfRevision(1, nil, &routingReconcileState{LastError: "stale"}); err != nil || committed {
+	if _, committed, err := store.commitRoutingIfRevision(1, nil, &routingReconcileState{LastError: "stale"}); err != nil || committed {
 		t.Fatalf("stale runtime commit = committed %v err %v", committed, err)
 	}
 	if commits != 1 {
@@ -156,10 +133,10 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 }
 
 func TestComposedDaemonStateStoreRuntimePersistenceFailureDoesNotPublish(t *testing.T) {
-	store, _ := newComposedDaemonStateStoreTestFixture(t, nil)
+	store, _ := newDaemonStateStoreTestFixture(t, nil)
 	wantErr := errors.New("runtime persist failed")
 	store.commitRuntime = func(corestate.VerifiedRevision, *linuxRuntimeState) error { return wantErr }
-	_, committed, err := store.commitComposedFirewallIfRevision(0, map[string]endpointACL{"blocked": {Name: "blocked"}}, nil)
+	_, committed, err := store.commitFirewallIfRevision(0, map[string]endpointACL{"blocked": {Name: "blocked"}}, nil)
 	if !errors.Is(err, wantErr) || committed {
 		t.Fatalf("runtime failure = committed %v err %v", committed, err)
 	}

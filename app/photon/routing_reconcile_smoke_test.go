@@ -46,7 +46,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return client
@@ -56,10 +56,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -151,7 +148,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 	// Reconcile routing and verify BIRD config import/export filters.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -161,10 +158,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -221,7 +215,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -249,10 +243,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 
 	// Verify the BIRD export filter includes the auto-announced prefix.
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -339,7 +330,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -349,10 +340,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")

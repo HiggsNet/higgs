@@ -86,6 +86,31 @@ func TestStoreApplyLocalIntentsCommitsOnceAndRollsBackAsBatch(t *testing.T) {
 	}
 }
 
+func TestStoreProtocolRecordIntentValidatesTupleAndNoop(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, nil)
+	intent := PutProtocolRecordIntent{
+		Kind: ProtocolRecordGossipEndpoint, Zone: "node-a.catofes.", Key: "sync/endpoint/udp", Type: "sync.endpoint", Value: []byte(`{"endpoints":[]}`),
+	}
+	first, err := store.ApplyLocalIntent(context.Background(), intent, now)
+	if err != nil || !first.Committed || first.Record == nil {
+		t.Fatalf("first protocol intent = %+v, %v", first, err)
+	}
+	second, err := store.ApplyLocalIntent(context.Background(), intent, now.Add(time.Second))
+	if err != nil || second.Committed || second.Record == nil || second.Record.Version != first.Record.Version {
+		t.Fatalf("protocol no-op = %+v, %v", second, err)
+	}
+	invalid := intent
+	invalid.Type = "text"
+	if _, err := store.ApplyLocalIntent(context.Background(), invalid, now); err == nil {
+		t.Fatal("invalid protocol key/type tuple was accepted")
+	}
+	if view := store.ReadView(); view.Revision != 1 {
+		t.Fatalf("no-op/invalid tuple advanced revision to %d", view.Revision)
+	}
+}
+
 func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	network, _, _, _ := managedAuthorityFixture(t, true)
 	store := NewStore(&VerifiedState{Network: network}, nil)

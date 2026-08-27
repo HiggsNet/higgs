@@ -28,15 +28,42 @@ var NewSyncSession = gossip.NewSyncSession
 const SyncSessionCompleted = gossip.SyncSessionCompleted
 
 func (d *DaemonService) setState(state *stateFile) {
-	d.replaceCommittedState(state)
+	if d == nil {
+		return
+	}
+	replacement := newTestDaemonService(d.Sync.App, state, d.Sync.Config, d.Interval)
+	d.StateStore = replacement.StateStore
 }
 
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
-	changed, err := sr.publishIPsecRecordsInState(state)
-	if err != nil || !changed {
+	plan, err := sr.ipsecProtocolPlan(state)
+	if err != nil {
 		return err
 	}
-	if err := sr.saveStateSnapshotAtRevision(state, 0); err != nil {
+	changed := false
+	for _, raw := range plan.Intents {
+		intent := raw.(corestate.PutProtocolRecordIntent)
+		record, err := buildSignedRecordAt(state, intent.Zone, intent.Key, intent.Value, intent.Type, sr.now())
+		if err != nil {
+			return err
+		}
+		if err := state.Network.PutAt(record, sr.now()); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if !ipsecTransportKeyStateEqual(state.IPsecTransportKey, plan.TransportKey) {
+		state.IPsecTransportKey = cloneIPsecTransportKeyState(plan.TransportKey)
+		changed = true
+	}
+	if !ipsecPortRecordStateEqual(state.IPsecPortRecord, plan.PortRecord) {
+		state.IPsecPortRecord = cloneIPsecPortRecordState(plan.PortRecord)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := sr.App.SaveState(state); err != nil {
 		return err
 	}
 	if sr != nil && state != nil {
@@ -68,8 +95,8 @@ func (d *DaemonService) completeSyncSession(session *gossip.SyncSession, changed
 		return
 	}
 	peerID := session.PeerID
-	d.recordSyncPeerState(peerID, "peer_sync", func(state *stateFile) {
-		recordPeerSyncAt(state, peerID, session.LastError(), d.Sync.now())
+	d.recordSyncPeerState(peerID, "peer_sync", func(peer *corestate.PeerCheckpoint) {
+		recordPeerSyncCheckpoint(peer, session.LastError(), d.Sync.now())
 	})
 	d.completeSyncSessionAfterPeerState(session, changed)
 }

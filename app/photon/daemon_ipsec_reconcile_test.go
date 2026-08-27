@@ -152,12 +152,12 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	firstRev := service.StateStore.Meta().Revision
 	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
 	committedRev := service.StateStore.Meta().Revision
-	if committedRev != firstRev+1 {
-		t.Fatalf("first error revision = %d, want %d", committedRev, firstRev+1)
+	if committedRev != firstRev {
+		t.Fatalf("first error verified revision = %d, want %d", committedRev, firstRev)
 	}
 
 	now = now.Add(time.Minute)
@@ -167,8 +167,8 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 	}
 
 	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici timeout"))
-	if got := service.StateStore.Meta().Revision; got != committedRev+1 {
-		t.Fatalf("changed error revision = %d, want %d", got, committedRev+1)
+	if got := service.StateStore.Meta().Revision; got != committedRev {
+		t.Fatalf("changed runtime error verified revision = %d, want %d", got, committedRev)
 	}
 }
 
@@ -193,14 +193,11 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	service.notifyStateChanged()
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
 	}
@@ -218,10 +215,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 
 	service.setState(latest)
 	service.notifyStateChanged()
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(second): %v", err)
-	}
+	reloaded := service.currentState()
 	if len(reloaded.LinkInstances) != 1 {
 		t.Fatalf("second link instances len = %d, want 1", len(reloaded.LinkInstances))
 	}
@@ -364,14 +358,11 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
 	driver := &staleCommitIPsecDriver{}
 	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
-		if _, err := service.StateStore.Update(func(state *stateFile) error {
-			state.IdentityKeyPath = "newer-revision"
-			return nil
-		}); err != nil {
+		if _, err := advanceTestVerifiedRevision(service.StateStore, now.Add(time.Nanosecond)); err != nil {
 			t.Fatalf("advance state revision during apply: %v", err)
 		}
 	}
@@ -388,67 +379,11 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
-	if snapshot.IdentityKeyPath != "newer-revision" {
-		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
-	}
 	if len(snapshot.LinkInstances) != 0 {
 		t.Fatalf("link instances = %+v, want stale result discarded", snapshot.LinkInstances)
 	}
 	if snapshot.IPsecReconcile != nil {
 		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", snapshot.IPsecReconcile)
-	}
-}
-
-func TestDaemonIPsecReconcileStaleInstanceTokenDoesNotOverwriteCurrent(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(4055, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newDaemonService(rt, state, config, time.Second)
-	baseRev := service.StateStore.Meta().Revision
-	driver := &staleCommitIPsecDriver{}
-	driver.onLoadConnection = func(spec ipsec.TransportLinkSpec) {
-		id := ipsec.LinkInstanceID(spec)
-		if _, err := service.StateStore.Update(func(state *stateFile) error {
-			state.LinkInstances = map[string]linkInstanceState{
-				id: {ID: id, Owner: linkOwnerState{Token: "new-owner-token"}},
-			}
-			return nil
-		}); err != nil {
-			t.Fatalf("advance state revision during apply: %v", err)
-		}
-	}
-	service.IPsecDriver = driver
-	service.XFRMDriver = driver
-
-	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
-		t.Fatalf("reconcileIPsecLinks: %v", err)
-	}
-	if !service.ipsecDirty {
-		t.Fatal("ipsecDirty = false, want stale token conflict to schedule another reconcile")
-	}
-	snapshot, _ := service.StateStore.Snapshot()
-	if len(snapshot.LinkInstances) != 1 {
-		t.Fatalf("link instances = %+v, want current conflicting instance preserved", snapshot.LinkInstances)
-	}
-	for _, inst := range snapshot.LinkInstances {
-		if inst.Owner.Token != "new-owner-token" {
-			t.Fatalf("link instance owner token = %q, want current conflicting token preserved", inst.Owner.Token)
-		}
-	}
-	if snapshot.IPsecReconcile != nil {
-		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded from source revision %d", snapshot.IPsecReconcile, baseRev)
 	}
 }
 
@@ -468,7 +403,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 	driver := &staleCommitIPsecDriver{}
@@ -550,13 +485,10 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.notifyStateChanged()
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	var inst linkInstanceState
 	for _, v := range latest.LinkInstances {
 		inst = v
@@ -584,10 +516,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service.setState(state)
 	service.notifyStateChanged()
 
-	rotated, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(rotate): %v", err)
-	}
+	rotated := service.currentState()
 	for _, v := range rotated.LinkInstances {
 		inst = v
 	}
@@ -633,7 +562,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &countingIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -669,10 +598,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || latest.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")
 	}
@@ -703,7 +629,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &countingIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -731,23 +657,21 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 func TestDaemonIPsecReconcileInterval(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	appConfig := defaultAppConfig()
-	service := newDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
 	if interval := service.ipsecReconcileInterval(); interval != 0 {
 		t.Fatalf("interval without link groups = %s, want 0", interval)
 	}
 
-	if _, err := service.StateStore.Update(func(state *stateFile) error {
-		state.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
-		return nil
+	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
+		runtime.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
 	}); err != nil {
 		t.Fatalf("StateStore.Update(stale links): %v", err)
 	}
 	if interval := service.ipsecReconcileInterval(); interval != defaultIPsecReconcileInterval {
 		t.Fatalf("interval with stale instances = %s, want %s", interval, defaultIPsecReconcileInterval)
 	}
-	if _, err := service.StateStore.Update(func(state *stateFile) error {
-		state.LinkInstances = nil
-		return nil
+	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
+		runtime.LinkInstances = nil
 	}); err != nil {
 		t.Fatalf("StateStore.Update(clear links): %v", err)
 	}

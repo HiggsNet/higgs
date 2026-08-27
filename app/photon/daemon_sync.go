@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -89,12 +88,7 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 		msg := packet.Message
 		now := d.Sync.now()
 		d.rememberSyncIngressRoute(msg.PeerID, packet.Addr, now)
-		observed := false
-		mutations := []func(*stateFile){func(state *stateFile) {
-			observed = recordVerifiedObservedPath(state, msg.PeerID, packet.Addr, now)
-		}}
-		label := "observed_path"
-		if d.recordPacketPeerStateBatch(msg.PeerID, label, mutations...) && observed {
+		if d.recordVerifiedObservedCheckpoint(msg.PeerID, packet.Addr, now) {
 			recordObservedSource(d.PeerObservability, msg.PeerID, msg.Type, now)
 		}
 		d.seedObservedPeerPath(msg.PeerID)
@@ -106,6 +100,46 @@ func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx 
 		replyAddr: packet.Addr,
 	}
 	return d.hostRuntime.ExecuteGossipInbound(ctx, d.hostRuntime.Gossip.PlanInbound(packet), controller)
+}
+
+func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *net.UDPAddr, now time.Time) bool {
+	if d == nil || d.StateStore == nil || addr == nil || peerID == "" {
+		return false
+	}
+	state, _ := d.StateStore.Snapshot()
+	if state == nil || !peerChainVerified(state, peerID, now) {
+		return false
+	}
+	peer := state.SyncPeers[peerID]
+	endpoint := addr.String()
+	firstSeen := peer.ObservedFirstSeenUnix
+	failures := peer.ObservedFailureCount
+	grace := append([]observedGraceAddrState(nil), peer.ObservedGraceAddrs...)
+	if peer.ObservedAddr != endpoint || firstSeen == 0 {
+		if observedPathActive(peer, now) && peer.ObservedAddr != "" && peer.ObservedAddr != endpoint {
+			grace = appendObservedGraceAddr(grace, peer.ObservedAddr, now.Add(observedPathMigrationGrace), now)
+		}
+		firstSeen = now.Unix()
+		failures = 0
+	}
+	grace = pruneObservedGraceAddrs(grace, endpoint, now)
+	typedGrace := make([]corestate.ObservedGraceEndpoint, 0, len(grace))
+	for _, item := range grace {
+		typedGrace = append(typedGrace, corestate.ObservedGraceEndpoint{Endpoint: item.Addr, UntilUnix: item.UntilUnix})
+	}
+	_, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
+		ObservedEndpoint:  corestate.PatchField[string]{Set: true, Value: endpoint},
+		ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: firstSeen},
+		ObservedLastUnix:  corestate.PatchField[int64]{Set: true, Value: now.Unix()},
+		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: now.Add(observedPathTTL).Unix()},
+		ObservedFailures:  corestate.PatchField[int]{Set: true, Value: failures},
+		ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: typedGrace},
+	})
+	if err != nil {
+		d.logWarn("sync", "observed_checkpoint_commit_failed", map[string]any{"peer_id": peerID, "error": err})
+		return false
+	}
+	return true
 }
 
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
@@ -357,24 +391,22 @@ func filterRemoteCatalogPage(state *stateFile, peerID string, page *corestate.Ca
 	return &filtered
 }
 
-func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*stateFile)) bool {
+func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*corestate.PeerCheckpoint)) bool {
 	return d.recordSyncPeerStateBatch(peerID, label, fn)
 }
 
-func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*stateFile)) bool {
+func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*corestate.PeerCheckpoint)) bool {
 	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
 		return false
 	}
-	if _, err := d.StateStore.UpdateSyncPeer(peerID, func(peer *syncPeerState) error {
-		state := &stateFile{SyncPeers: map[string]syncPeerState{peerID: *peer}}
-		for _, fn := range fns {
-			if fn != nil {
-				fn(state)
-			}
+	view := d.StateStore.common.ReadView()
+	peer := view.Gossip.Peers[peerID]
+	for _, fn := range fns {
+		if fn != nil {
+			fn(&peer)
 		}
-		*peer = state.SyncPeers[peerID]
-		return nil
-	}); err != nil {
+	}
+	if _, err := d.StateStore.UpdateCommonPeerCheckpoint(context.Background(), peerID, fullPeerCheckpointPatch(peer)); err != nil {
 		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
 			"peer_id": peerID,
 			"label":   label,
@@ -382,42 +414,51 @@ func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...fu
 		})
 		return false
 	}
-	d.markMetadataCheckpointDirty()
 	return true
 }
 
-func (d *DaemonService) recordPacketPeerStateBatch(peerID, label string, fns ...func(*stateFile)) bool {
-	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
-		return false
+func fullPeerCheckpointPatch(peer corestate.PeerCheckpoint) corestate.PeerCheckpointPatch {
+	reject := make(map[zone.ZonePath]corestate.RejectedObject, len(peer.RejectedObjects))
+	for path, item := range peer.RejectedObjects {
+		reject[path] = item
 	}
-	if _, err := d.StateStore.updateSyncPeerWithView(peerID, func(view syncPeerMutationView, peer *syncPeerState) error {
-		state := &stateFile{
-			ManagedZone: view.ManagedZone,
-			Network:     view.Network,
-			SyncPeers:   map[string]syncPeerState{peerID: *peer},
-		}
-		for _, fn := range fns {
-			if fn != nil {
-				fn(state)
-			}
-		}
-		*peer = state.SyncPeers[peerID]
-		return nil
-	}); err != nil {
-		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
-			"peer_id": peerID,
-			"label":   label,
-			"error":   err,
-		})
-		return false
+	return corestate.PeerCheckpointPatch{
+		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastSyncUnix}, LastAttemptUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix},
+		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}, FailureCount: corestate.PatchField[int]{Set: true, Value: peer.FailureCount},
+		LastRelayUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastRelayUnix}, LastRelayRootHex: corestate.PatchField[string]{Set: true, Value: peer.LastRelayCatalogRootHex},
+		DiscoveredEndpoint: corestate.PatchField[string]{Set: true, Value: peer.DiscoveredEndpoint}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true, Value: peer.DiscoveredAtUnix},
+		ObservedEndpoint: corestate.PatchField[string]{Set: true, Value: peer.ObservedEndpoint}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedFirstSeenUnix},
+		ObservedLastUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedLastSeenUnix}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedLastSyncUnix},
+		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedUntilUnix}, ObservedFailures: corestate.PatchField[int]{Set: true, Value: peer.ObservedFailureCount},
+		ObservedGrace: corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: peer.ObservedGraceEndpoints}, LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}, Reject: reject,
 	}
-	d.markMetadataCheckpointDirtyWithin(verifiedPacketMetadataCheckpointMaxDelay)
-	return true
+}
+
+func recordPeerSyncCheckpoint(peer *corestate.PeerCheckpoint, syncErr error, now time.Time) {
+	if peer == nil {
+		return
+	}
+	peer.LastAttemptUnix = now.Unix()
+	if syncErr != nil {
+		peer.FailureCount++
+		backoff := time.Duration(1<<minInt(peer.FailureCount, 6)) * time.Second
+		peer.BackoffUntilUnix = now.Add(backoff).Unix()
+		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: syncErr.Error(), AtUnix: now.Unix()}
+		return
+	}
+	peer.LastSyncUnix = now.Unix()
+	peer.BackoffUntilUnix = 0
+	peer.FailureCount = 0
+	peer.LastFailure = nil
+	if peer.ObservedEndpoint != "" && peer.ObservedUntilUnix != 0 && now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
+		peer.ObservedLastSyncUnix = now.Unix()
+		peer.ObservedFailureCount = 0
+	}
 }
 
 type syncPeerStateMutation struct {
 	label string
-	apply func(*stateFile)
+	apply func(*corestate.PeerCheckpoint)
 }
 
 // syncPeerStateMutationBatch collects the control-state changes caused by one
@@ -434,7 +475,7 @@ func newSyncPeerStateMutationBatch(peerID string) *syncPeerStateMutationBatch {
 	return &syncPeerStateMutationBatch{peerID: peerID}
 }
 
-func (b *syncPeerStateMutationBatch) add(label string, fn func(*stateFile)) {
+func (b *syncPeerStateMutationBatch) add(label string, fn func(*corestate.PeerCheckpoint)) {
 	if b == nil || fn == nil {
 		return
 	}
@@ -445,10 +486,9 @@ func (b *syncPeerStateMutationBatch) addCompletion(session *gossip.SyncSession, 
 	if b == nil || session == nil || b.completionRecorded {
 		return
 	}
-	peerID := session.PeerID
 	lastError := session.LastError()
-	b.add("peer_sync", func(state *stateFile) {
-		recordPeerSyncAt(state, peerID, lastError, now)
+	b.add("peer_sync", func(peer *corestate.PeerCheckpoint) {
+		recordPeerSyncCheckpoint(peer, lastError, now)
 	})
 	b.completionRecorded = true
 }
@@ -460,7 +500,7 @@ func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
 	pending := b.pending
 	b.pending = nil
 	labels := make([]string, 0, len(pending))
-	fns := make([]func(*stateFile), 0, len(pending))
+	fns := make([]func(*corestate.PeerCheckpoint), 0, len(pending))
 	for _, mutation := range pending {
 		labels = append(labels, mutation.label)
 		fns = append(fns, mutation.apply)
@@ -503,113 +543,33 @@ var errSnapshotRootMismatch = errors.New("snapshot root does not match advertise
 
 const verifiedPacketMetadataCheckpointMaxDelay = 250 * time.Millisecond
 
-// applySyncSnapshotBatch gives every action an independent target-zone COW
-// savepoint, then publishes the final working root once. The callback body is
-// pure with respect to external effects, so an unexpected stale revision can
-// discard and recompute the complete batch safely.
 func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, syncSnapshotCommit, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return nil, syncSnapshotCommit{}, errors.New("daemon service is not initialized")
 	}
-	for range maxSyncPeerUpdateAttempts {
-		state, revision := d.StateStore.snapshotApplyWorkspace()
-		if state == nil || state.Network == nil {
-			return nil, syncSnapshotCommit{}, errors.New("daemon state network is nil")
-		}
-		beforeRoots := make(map[zone.ZonePath][]byte, len(applies)+1)
-		for _, apply := range applies {
-			if snapshot := apply.action.Snapshot; snapshot != nil {
-				beforeRoots[snapshot.Zone] = append([]byte(nil), corestate.ZoneRoot(state.Network.Zones[snapshot.Zone])...)
-			}
-		}
-		if state.ManagedZone.Valid() {
-			beforeRoots[state.ManagedZone] = append([]byte(nil), corestate.ZoneRoot(state.Network.Zones[state.ManagedZone])...)
-		}
-		outcomes := make([]syncSnapshotOutcome, len(applies))
-		dirty := false
-		for i, apply := range applies {
-			snapshot := apply.action.Snapshot
-			if snapshot == nil {
-				continue
-			}
-			outcome := &outcomes[i]
-			outcome.managedZone = state.ManagedZone
-			if len(apply.action.ExpectedRoot) > 0 {
-				actualRoot := digestForSnapshot(snapshot).RootHash
-				if !bytes.Equal(actualRoot, apply.action.ExpectedRoot) {
-					outcome.applyErr = fmt.Errorf("%w for %s: expected %x, received %x", errSnapshotRootMismatch, snapshot.Zone, apply.action.ExpectedRoot, actualRoot)
-					recordRejectedDigest(state, peerID, corestate.ZoneDigest{Zone: snapshot.Zone, RootHash: apply.action.ExpectedRoot}, gossip.RejectReason(outcome.applyErr), now)
-					dirty = true
-					continue
-				}
-			}
-			nextNetwork, result, err := corestate.ApplySnapshot(state.Network, snapshot, now, apply.limits)
-			if err != nil {
-				outcome.applyErr = err
-				recordRejectedDigest(state, peerID, digestForSnapshot(snapshot), gossip.RejectReason(err), now)
-				dirty = true
-				continue
-			}
-
-			// A parent snapshot can carry a newer authority for our managed
-			// Zone. Apply that authority envelope in the same savepoint while
-			// preserving all locally-owned Zone contents.
-			previousNetwork := state.Network
-			state.Network = nextNetwork
-			// ApplySnapshot detaches only snapshot.Zone. Authority adoption and
-			// refresh may mutate ManagedZone as a secondary effect, so detach it
-			// as well before entering those helpers.
-			if state.ManagedZone.Valid() && state.ManagedZone != snapshot.Zone {
-				state.Network = zone.CloneNetworkStateForZone(state.Network, state.ManagedZone)
-			}
-			outcome.adopted, outcome.adoptionErr = tryAdoptAutoJoinDelegation(state, now)
-			if outcome.adoptionErr == nil {
-				outcome.refreshed, outcome.refreshErr = tryRefreshManagedZoneAuthority(state, now)
-			}
-			if outcome.refreshErr != nil {
-				state.Network = previousNetwork
-				outcome.applyErr = fmt.Errorf("refresh managed zone authority: %w", outcome.refreshErr)
-				recordRejectedDigest(state, peerID, digestForSnapshot(snapshot), gossip.RejectReason(outcome.applyErr), now)
-				dirty = true
-				continue
-			}
-
-			// Successful action: advancing state.Network is this action's
-			// savepoint commit. A later rejected action cannot mutate it.
-			outcome.result = result
-			outcome.networkChanged = result.NetworkChanged || outcome.adopted || outcome.refreshed
-			peerState := state.SyncPeers[peerID]
-			_, hadRejectedDigest := peerState.RejectedDigests[rejectedDigestKey(snapshot.Zone)]
-			if !hadRejectedDigest {
-				_, hadRejectedDigest = peerState.RejectedDigests[snapshot.Zone.String()]
-			}
-			clearRejectedDigest(state, peerID, snapshot.Zone)
-			metadataChanged := hadRejectedDigest
-			if outcome.adopted || outcome.adoptionErr != nil {
-				recordAdoptionResult(state, outcome.adopted, outcome.adoptionErr, now)
-				metadataChanged = true
-			}
-			if !outcome.adopted && outcome.adoptionErr == nil && state.Admission != nil && state.Admission.Pending && isBootstrapPeer(d.Sync.Config, peerID) {
-				recordBootstrapSyncSuccess(state, peerID, d.Sync.Config, now)
-				metadataChanged = true
-			}
-			dirty = dirty || outcome.networkChanged || metadataChanged
-		}
-		if !dirty {
-			return outcomes, syncSnapshotCommit{}, nil
-		}
-		if _, committed := d.StateStore.commitSnapshotApplyIfRevision(revision, state); committed {
-			commit := syncSnapshotCommit{StateCommitted: true}
-			for path, beforeRoot := range beforeRoots {
-				if !bytes.Equal(beforeRoot, corestate.ZoneRoot(state.Network.Zones[path])) {
-					commit.NetworkChanged = true
-					break
-				}
-			}
-			return outcomes, commit, nil
+	state, _ := d.StateStore.Snapshot()
+	managedZone := zone.ZonePath("")
+	if state != nil {
+		managedZone = state.ManagedZone
+	}
+	batch := make([]corestate.RemoteSnapshot, 0, len(applies))
+	for _, apply := range applies {
+		batch = append(batch, corestate.RemoteSnapshot{
+			Snapshot: apply.action.Snapshot, ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...), Limits: apply.limits,
+		})
+	}
+	result, err := d.StateStore.ApplyCommonRemoteBatch(context.Background(), peerID, batch, now)
+	if err != nil {
+		return nil, syncSnapshotCommit{}, err
+	}
+	outcomes := make([]syncSnapshotOutcome, len(result.Outcomes))
+	for i, item := range result.Outcomes {
+		outcomes[i] = syncSnapshotOutcome{
+			result: item.Result, applyErr: item.Err, networkChanged: item.Result != nil && item.Result.NetworkChanged || item.ManagedZoneAdopted || item.AuthorityRefreshed,
+			adopted: item.ManagedZoneAdopted, refreshed: item.AuthorityRefreshed, managedZone: managedZone,
 		}
 	}
-	return nil, syncSnapshotCommit{}, errDaemonStateRevisionStale
+	return outcomes, syncSnapshotCommit{StateCommitted: result.Committed, NetworkChanged: result.Changes.NetworkChanged}, nil
 }
 
 func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotOutcome) {
@@ -701,8 +661,8 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerI
 func (controller *daemonGossipActionController) RecordGossipSummaryMatch(_ context.Context, peerID string) error {
 	recordSyncHint(controller.daemon.PeerObservability, peerID, "ping_summary_match", "", true, controller.now)
 	controller.daemon.recordSyncPeerStateBatch(peerID, "peer_sync",
-		func(state *stateFile) {
-			recordPeerSyncAt(state, peerID, nil, controller.now)
+		func(peer *corestate.PeerCheckpoint) {
+			recordPeerSyncCheckpoint(peer, nil, controller.now)
 		},
 	)
 	controller.daemon.logDebug("sync", "ping_summary_shortcut", map[string]any{
@@ -819,15 +779,14 @@ func (controller *daemonGossipActionController) StartGossipObjectPull(ctx contex
 func (controller *daemonGossipActionController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
 	for _, backoff := range backoffs {
 		if controller.mutations == nil {
-			controller.daemon.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(state *stateFile) {
-				recordPeerBackoff(state, backoff.PeerID, backoff.Err, controller.now)
+			controller.daemon.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(peer *corestate.PeerCheckpoint) {
+				recordPeerBackoffCheckpoint(peer, backoff.Err, controller.now)
 			})
 			continue
 		}
-		peerID := backoff.PeerID
 		actionErr := backoff.Err
-		controller.mutations.add("peer_backoff", func(state *stateFile) {
-			recordPeerBackoff(state, peerID, actionErr, controller.now)
+		controller.mutations.add("peer_backoff", func(peer *corestate.PeerCheckpoint) {
+			recordPeerBackoffCheckpoint(peer, actionErr, controller.now)
 		})
 	}
 	return nil
@@ -836,19 +795,14 @@ func (controller *daemonGossipActionController) RecordGossipBackoffs(_ context.C
 func (controller *daemonGossipActionController) PersistGossip(_ context.Context, intent corehost.GossipPersistenceIntent, completion *corehost.GossipCompletionIntent) error {
 	if controller.mutations != nil {
 		if completion != nil && !controller.mutations.completionRecorded {
-			peerID := completion.PeerID
 			completionErr := completion.Err
-			controller.mutations.add("peer_sync", func(state *stateFile) {
-				recordPeerSyncAt(state, peerID, completionErr, controller.now)
+			controller.mutations.add("peer_sync", func(peer *corestate.PeerCheckpoint) {
+				recordPeerSyncCheckpoint(peer, completionErr, controller.now)
 			})
 			controller.mutations.completionRecorded = true
 		}
 		controller.mutations.commit(controller.daemon)
 	}
-	if intent.Scope == gossip.SyncPersistenceNetwork {
-		return controller.daemon.saveCommittedState()
-	}
-	controller.daemon.markMetadataCheckpointDirty()
 	return nil
 }
 
@@ -1045,9 +999,6 @@ func (d *DaemonService) completeSyncSessionAfterPeerState(session *gossip.SyncSe
 		}
 		d.notifyStateChanged()
 		d.relaySyncToPeers(peerID)
-		if err := d.saveCommittedState(); err != nil {
-			d.logWarn("sync", "session_save_failed", map[string]any{"peer_id": peerID, "error": err})
-		}
 	}
 	d.hostRuntime.Gossip.RemoveSession(peerID)
 	if d.hostRuntime.Gossip.TakePendingHint(peerID) {
@@ -1099,8 +1050,9 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			d.hostRuntime.Gossip.RemoveSession(peerID)
 			continue
 		}
-		if d.recordSyncPeerState(peerID, "relay_success", func(state *stateFile) {
-			recordRelaySuccess(state, peerID, catalogRoot, now)
+		if d.recordSyncPeerState(peerID, "relay_success", func(peer *corestate.PeerCheckpoint) {
+			peer.LastRelayUnix = now.Unix()
+			peer.LastRelayCatalogRootHex = catalogRoot
 		}) {
 			recordRelaySuccessDiagnostics(d.PeerObservability, peerID, sourcePeerID, now)
 		}
@@ -1129,19 +1081,14 @@ func zoneStateFromSnapshot(snapshot *corestate.ZoneSnapshot) *zone.ZoneState {
 	return zs
 }
 
-// recordPeerBackoff mutates state.SyncPeers. The caller must hold the write lock
-// on state.
-func recordPeerBackoff(state *stateFile, peerID string, err error, now time.Time) {
-	if state == nil || peerID == "" {
+func recordPeerBackoffCheckpoint(peer *corestate.PeerCheckpoint, err error, now time.Time) {
+	if peer == nil {
 		return
 	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	peerState.LastAttemptUnix = now.Unix()
+	peer.LastAttemptUnix = now.Unix()
 	if err != nil {
-		peerState.LastError = err.Error()
+		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: err.Error(), AtUnix: now.Unix()}
 	}
-	backoff := time.Duration(1<<minInt(peerState.FailureCount, 6)) * time.Second
-	peerState.BackoffUntilUnix = now.Add(backoff).Unix()
-	state.SyncPeers[peerID] = peerState
+	backoff := time.Duration(1<<minInt(peer.FailureCount, 6)) * time.Second
+	peer.BackoffUntilUnix = now.Add(backoff).Unix()
 }

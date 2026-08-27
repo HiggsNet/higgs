@@ -243,7 +243,7 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	config := syncConfigFromAppConfig(appConfig, state)
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})

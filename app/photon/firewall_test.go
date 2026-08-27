@@ -56,7 +56,7 @@ func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	rev := service.StateStore.Meta().Revision
 	next := cloneFirewallReconcileState(state.FirewallReconcile)
 	next.LastRunUnix = 200
@@ -576,7 +576,7 @@ func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &DaemonService{
-		StateStore: NewDaemonStateStore(&stateFile{}),
+		StateStore: newTestDaemonStateStore(&stateFile{}),
 		Sync: &SyncRuntime{
 			App: &Runtime{Config: &appConfig{}},
 		},
@@ -774,7 +774,7 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &captureFirewallOwnerDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.firewallDriver = driver
 	if err := service.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
@@ -810,7 +810,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	driver := &blockingFirewallDriver{
 		started: make(chan struct{}),
 		unblock: make(chan struct{}),
@@ -898,14 +898,11 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
 	driver := &captureFirewallOwnerDriver{}
 	driver.onApply = func() {
-		if _, err := service.StateStore.Update(func(state *stateFile) error {
-			state.IdentityKeyPath = "newer-firewall-revision"
-			return nil
-		}); err != nil {
+		if _, err := advanceTestVerifiedRevision(service.StateStore, time.Unix(7010, 1)); err != nil {
 			t.Fatalf("advance state revision during firewall apply: %v", err)
 		}
 		driver.onApply = nil
@@ -921,9 +918,6 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	snapshot, rev := service.StateStore.Snapshot()
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
-	}
-	if snapshot.IdentityKeyPath != "newer-firewall-revision" {
-		t.Fatalf("identity key path = %q, want newer revision preserved", snapshot.IdentityKeyPath)
 	}
 	if snapshot.FirewallReconcile != nil {
 		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", snapshot.FirewallReconcile)
@@ -971,7 +965,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	if service.firewallReconcileInterval() != defaultFirewallReconcileInterval {
 		t.Fatalf("firewall interval = %s, want %s", service.firewallReconcileInterval(), defaultFirewallReconcileInterval)

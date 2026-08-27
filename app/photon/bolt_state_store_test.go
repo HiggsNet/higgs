@@ -113,13 +113,13 @@ func TestPersistedComposedDaemonStateStoreCommitsRuntimeThroughOwnedHandle(t *te
 	if err != nil || !found {
 		t.Fatalf("loadAndRestoreLinuxState = found %v err %v", found, err)
 	}
-	composed, err := newPersistedComposedDaemonStateStore(startup.Common, startup.Runtime, store)
+	composed, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, store)
 	if err != nil {
-		t.Fatalf("newPersistedComposedDaemonStateStore: %v", err)
+		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
 	before := startup.Common.ReadView()
-	if _, committed, err := composed.commitComposedRoutingIfRevision(uint64(before.Revision), nil, &routingReconcileState{LastError: "persisted"}); err != nil || !committed {
-		t.Fatalf("commitComposedRoutingIfRevision = committed %v err %v", committed, err)
+	if _, committed, err := composed.commitRoutingIfRevision(uint64(before.Revision), nil, &routingReconcileState{LastError: "persisted"}); err != nil || !committed {
+		t.Fatalf("commitRoutingIfRevision = committed %v err %v", committed, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

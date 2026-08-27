@@ -939,7 +939,7 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateF
 	if ipsecReconcileResultEqual(workspace, nextInstances, summary) {
 		return nil
 	}
-	currentRev, committed, err := d.commitIPsecRuntime(rev, workspace.IPsecTransportKey, workspace.IPsecPortRecord, nextInstances, summary, false)
+	currentRev, committed, err := d.commitIPsecRuntime(rev, workspace.IPsecTransportKey, workspace.IPsecPortRecord, nextInstances, summary)
 	if err != nil {
 		return err
 	}
@@ -1035,7 +1035,7 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	if ipsecReconcileResultEqual(snapshot, snapshot.LinkInstances, reconcile) {
 		return
 	}
-	currentRev, committed, commitErr := d.commitIPsecRuntime(rev, snapshot.IPsecTransportKey, snapshot.IPsecPortRecord, snapshot.LinkInstances, reconcile, false)
+	currentRev, committed, commitErr := d.commitIPsecRuntime(rev, snapshot.IPsecTransportKey, snapshot.IPsecPortRecord, snapshot.LinkInstances, reconcile)
 	if commitErr != nil {
 		d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": commitErr})
 		return
@@ -1050,40 +1050,6 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 		})
 		return
 	}
-}
-
-func (d *DaemonService) saveCommittedState() error {
-	if d == nil || d.StateStore == nil {
-		return nil
-	}
-	lease := d.StateStore.persistenceLease()
-	var err error
-	if d.Sync != nil {
-		err = d.Sync.saveStateSnapshotAtRevision(lease.state, lease.revision)
-	} else {
-		err = saveState(lease.state)
-	}
-	if err == nil {
-		d.noteMetadataPersisted(lease.revision)
-	}
-	return err
-}
-
-func (d *DaemonService) saveCommittedMeta() error {
-	if d == nil || d.StateStore == nil {
-		return nil
-	}
-	lease := d.StateStore.persistenceLease()
-	var err error
-	if d.Sync != nil {
-		err = d.Sync.saveStateMetaSnapshotAtRevision(lease.state, lease.revision)
-	} else {
-		err = saveStateMeta(lease.state)
-	}
-	if err == nil {
-		d.noteMetadataPersisted(lease.revision)
-	}
-	return err
 }
 
 // buildIPsecContactPointQuality builds a per-peer, per-contact-point quality

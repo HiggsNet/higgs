@@ -4,10 +4,13 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
+
+const daemonBoltLockTimeout = time.Second
 
 var errRuntimeStateSourceRevisionMismatch = errors.New("runtime state source verified revision does not match current state")
 
@@ -33,6 +36,29 @@ type linuxStartupState struct {
 	CommonReport    corestate.BoltLoadReport
 	MigrationReport legacyStateMigrationReport
 	Migrated        bool
+}
+
+func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState, error) {
+	var startup linuxStartupState
+	if rt == nil || rt.Config == nil || rt.StatePath == "" {
+		return nil, startup, errors.New("daemon runtime state path is not configured")
+	}
+	if _, err := rt.LoadState(); err != nil {
+		return nil, startup, err
+	}
+	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		return nil, startup, err
+	}
+	startup, found, err := loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
+	if err != nil || !found {
+		_ = store.Close()
+		if err != nil {
+			return nil, linuxStartupState{}, err
+		}
+		return nil, linuxStartupState{}, errors.New("daemon state is not initialized")
+	}
+	return store, startup, nil
 }
 
 // loadAndMigrateLinuxState composes the common and Linux bucket codecs through
@@ -82,8 +108,8 @@ func loadAndMigrateLinuxState(store *corestate.BoltStore, trustedRoot ed25519.Pu
 // with the persisted verified revision. The returned Store commits directly
 // through the same BoltStore owner.
 //
-// The online daemon is switched to this entry only together with all verified
-// and checkpoint writers; callers must not pair it with legacy saveState paths.
+// The online daemon uses this as its sole startup path; verified, checkpoint
+// and Linux runtime writes all return through the same BoltStore owner.
 func loadAndRestoreLinuxState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (linuxStartupState, bool, error) {
 	var startup linuxStartupState
 	snapshot, found, err := loadAndMigrateLinuxState(store, trustedRoot)

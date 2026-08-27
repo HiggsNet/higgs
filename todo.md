@@ -618,15 +618,15 @@ package dependency: app -> host -> gossip -> state -> zone
   - [x] E0：公共 `RestoreStore` 可从 BoltStore 加载的 detached candidate 和既有 `VerifiedRevision` 恢复
     内存 Store，校验状态根并再次 detach 输入；后续 Network commit 从磁盘 revision 继续递增，而不是重置为 0。
     BoltStore 同时提供窄 `LoadCommon` 启动读取方法。
-  - [ ] E1：DaemonStateStore 嵌入恢复后的公共 Store，并将在线 record/delegation/revocation、snapshot apply、
+- [x] E1：DaemonStateStore 嵌入恢复后的公共 Store，并将在线 record/delegation/revocation、snapshot apply、
     auto-join 和 peer checkpoint 一次性切到公共事务；同时把 record/IPAM/service/route publisher、discovery、
-    revocation cleanup 和 metadata checkpoint 纳入同一切换闭环。随后删除 `stateFile.Network/SyncPeers` 与 app 内
-    重复 mutation，禁止新旧 writer 并存。
+    revocation cleanup 和 metadata checkpoint 纳入同一切换闭环。公共 Store 独占 `Network`/checkpoint，Linux
+    runtime 独占 controller 数据；`stateFile.Network/SyncPeers` 只保留为 detached 聚合读形状，禁止新旧 writer 并存。
     - [x] E1a：完成新状态存储的启动恢复流程。启动时只打开一次数据库；遇到旧数据库就先升级，然后分别
       读出公共状态和 Linux 运行状态。公共状态恢复后可以继续写回同一个数据库，重启后 revision 和 gossip
       checkpoint 都能正确接续，且更新 checkpoint 不会误改 Linux 运行状态。这个入口暂不接入在线 daemon，
-      等 E1b 把所有旧保存路径一起替换后再启用，避免新旧写入方式混用。
-    - [ ] E1b：整体切换所有在线 writer 并删除旧状态所有权与保存路径。
+      E1b 已将该入口接入在线 daemon，并同步删除旧保存路径，避免新旧写入方式混用。
+    - [x] E1b：整体切换所有在线 writer 并删除旧状态所有权与保存路径。
       - [x] E1b1：从旧 `PeerRuntimeState/SyncPeers` 类型中删除 `DatagramStats/ObjectPullStats`；在线统计只由
         有界 `PeerObservabilityStore` 持有，inspect/HTTP 构建器显式接收独立 diagnostics，不再把统计临时塞回
         legacy peer 对象。旧数据库 JSON 中这两个可丢失字段直接忽略且永不回写。
@@ -641,7 +641,7 @@ package dependency: app -> host -> gossip -> state -> zone
         checkpoint 删除并迁入 `PeerDiagnostics`。这些字段只解释最近一次更新/抑制/观察的来源，不参与 relay
         节流或 observed path 有效性判断；在线 inspect/HTTP 继续展示，重启后丢失。relay 抑制诊断不再提交
         metadata，观察来源只在 endpoint 事务提交成功后记录。
-      - [ ] E1b5：补齐并整体切换公共 verified writer。`PutDelegationIntent` 已改为在同一事务同时更新父区
+      - [x] E1b5：补齐并整体切换公共 verified writer。`PutDelegationIntent` 已改为在同一事务同时更新父区
         delegation 与子区 authority，authority epoch 刷新保留子区 records/history，并把父区和子区都放入
         `ChangeSet.ChangedZones`。root authority grant 已有专用 `UpdateRootAuthorityIntent`，强制 epoch 单调、
         本地 root key 与 trusted root pin 不变且保留根区内容。join accept 的公共 `InstallIdentity` 已区分首次
@@ -654,24 +654,21 @@ package dependency: app -> host -> gossip -> state -> zone
         route 与 service endpoint 授权；通用 `PutRecordIntent` 在公共层拒绝对应保留 namespace/type。公共 preview
         复用完全相同的 normalization/validation/signing 路径但不落盘、不发布。daemon control request 到公共 intent
         的 adapter 只保留纯 DTO 转换，不读取本地 state、不重复 semantic validation；未接在线的独立 apply wrapper
-        已删除，最终 control handler 在整体切换时直接调用组合 Store。公共 Store + Linux runtime 的组合读取纯函数
-        边界已经落地：公共 `Store.ReadView()` 与
-        Linux runtime snapshot 只生成 detached 的临时 `stateFile` 供现有 projection/controller planner 迁移使用，
-        不提供保存或反向写回入口；checkpoint 到旧 peer 形状的映射也仅限读侧。`DaemonStateStore` 已新增尚未接入
-        生产启动的组合模式：只把该 detached 结果作为现有 reader 的缓存，公共 local intent 必须先经 `state.Store`
-        成功持久化/发布后才刷新缓存；preview、持久化失败和 no-op 均不发布。组合模式显式拒绝旧通用
-        `Update`、peer、Network/snapshot 和 controller commit writer，防止迁移漏项静默写回临时 `stateFile`。
+        已删除，control handler 直接调用 DaemonStateStore 中的公共 Store。公共 `Store.ReadView()` 与 Linux runtime
+        snapshot 生成 detached 的聚合 `stateFile`，仅供现有 projection/controller planner 读取，不提供保存或反向
+        写回入口；checkpoint 到旧 peer 形状的映射也只发生在该读视图中。
         公共 remote batch 与 peer checkpoint 已使用相同的 commit-before-refresh 委托；checkpoint-only commit
         不推进 verified revision。Linux routing/IPsec/firewall completion 也已有按唯一 verified revision 检查的
         typed runtime commit，持久化失败、stale 和 no-op 都不发布，真实 BoltStore 关闭重开已证明 runtime 更新不会
         改动公共 revision。daemon 的 routing/IPsec/firewall reconcile、IPsec cleanup 与 Endpoint ACL 调用点已统一
-        进入 runtime typed commit；组合模式不再触发旧 `saveCommittedMeta/saveCommittedState`，旧生产模式在最终启动
-        切换前仍由同一入口维持原持久化行为。硬切试验已确认 record writer 不能早于 endpoint publisher、admin、
-        remote/checkpoint 和测试持久化单独启用，否则必然形成半在线状态；后续不再提交单功能兼容 wrapper，而是在
-        一个未拆分的 cutover 批次内同时接入生产启动、迁完剩余调用点，并删除旧在线 writer/save 路径后再提交。
+        进入 runtime typed commit。生产启动现只打开一个 BoltStore，并已删除通用 `Update`、旧 peer/Network/snapshot
+        writer、`saveCommittedMeta/saveCommittedState`、在线数据库重载与 self-write marker；不存在新旧在线双写模式。
+        `stateFile` 目前只是 daemon planner/inspect 的 detached 聚合读形状，不再是持久化根，后续替换公共 host runtime
+        时再按 consumer 逐项缩小，而不是为切换继续增加 adapter。
         公共 Store 已补充批量本机 intent 原语：多条 publisher mutation 在同一 detached candidate 中按顺序校验、
         签名，任一失败整批回滚，只执行一次持久化且 VerifiedRevision 最多推进一次；原单条 API 反向复用该实现，
-        避免形成两套 mutation 语义。下一步直接用它替换 startup/endpoint 的旧 `BeginUpdate` 聚合事务。
+        避免形成两套 mutation 语义。startup/endpoint、admin、remote snapshot、discovery、cleanup 与全部 controller
+        completion 均已切换；全量 `make check`（含 Windows amd64 编译）通过。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

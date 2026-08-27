@@ -9,6 +9,8 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+var benchmarkStateSnapshot *stateFile
+
 func TestCloneStateFileDeepCopiesMutableState(t *testing.T) {
 	original := stateFile{
 		ManagedZone:    "node-a.catofes.",
@@ -286,7 +288,7 @@ func cloneTestSyncPeers() map[string]syncPeerState {
 		"peer-a": {
 			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "203.0.113.1:4500"}},
 			RejectedDigests: map[string]rejectedDigestState{
-				"digest-a": {Zone: "node-a.catofes.", Reason: "old"},
+				"digest-a": {Zone: "node-a.catofes.", RootHashHex: "01", Reason: "old"},
 			},
 		},
 	}

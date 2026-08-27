@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sort"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -41,12 +42,19 @@ type PeerCheckpointPatch struct {
 // revision and Network pointer are unaffected; persistence callback still observes the
 // same commit-before-publish ordering as verified transactions.
 func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
+	return store.UpdatePeerCheckpoints(ctx, map[string]PeerCheckpointPatch{peerID: patch})
+}
+
+// UpdatePeerCheckpoints commits one atomic loss-tolerant checkpoint batch.
+// Peer patches are applied in stable ID order and never advance the verified
+// revision.
+func (store *Store) UpdatePeerCheckpoints(ctx context.Context, patches map[string]PeerCheckpointPatch) (CommitResult, error) {
 	var out CommitResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
 	}
-	if peerID == "" {
-		return out, errors.New("peer id is empty")
+	if len(patches) == 0 {
+		return out, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -63,14 +71,79 @@ func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, pat
 	verified := cloneVerifiedState(store.state)
 	candidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
-	before, existed := candidate.Peers[peerID]
-	after := clonePeerCheckpoint(before)
-	applyPeerCheckpointPatch(&after, patch)
-	if (!existed && peerCheckpointEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
+	peerIDs := make([]string, 0, len(patches))
+	for peerID := range patches {
+		if peerID == "" {
+			return CommitResult{}, errors.New("peer id is empty")
+		}
+		peerIDs = append(peerIDs, peerID)
+	}
+	sort.Strings(peerIDs)
+	changed := false
+	for _, peerID := range peerIDs {
+		before, existed := candidate.Peers[peerID]
+		after := clonePeerCheckpoint(before)
+		applyPeerCheckpointPatch(&after, patches[peerID])
+		if (!existed && peerCheckpointEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
+			continue
+		}
+		candidate.Peers[peerID] = after
+		changed = true
+	}
+	if !changed {
 		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
 	}
-	candidate.Peers[peerID] = after
+	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
+	if store.commit != nil {
+		if err := store.commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
+			return CommitResult{}, err
+		}
+	}
+	store.mu.Lock()
+	store.gossip = candidate
+	store.mu.Unlock()
+	return CommitResult{Committed: true, Changes: changes}, nil
+}
+
+// DeletePeerCheckpoints removes loss-tolerant restart hints without changing
+// verified state or its revision.
+func (store *Store) DeletePeerCheckpoints(ctx context.Context, peerIDs []string) (CommitResult, error) {
+	var out CommitResult
+	if store == nil {
+		return out, ErrVerifiedStoreClosed
+	}
+	if len(peerIDs) == 0 {
+		return out, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	store.writeMu.Lock()
+	defer store.writeMu.Unlock()
+	store.mu.RLock()
+	if store.closed {
+		store.mu.RUnlock()
+		return out, ErrVerifiedStoreClosed
+	}
+	baseRevision := store.revision
+	verified := cloneVerifiedState(store.state)
+	candidate := cloneGossipCheckpoint(store.gossip)
+	store.mu.RUnlock()
+	changed := false
+	for _, peerID := range peerIDs {
+		if peerID == "" {
+			return CommitResult{}, errors.New("peer id is empty")
+		}
+		if _, ok := candidate.Peers[peerID]; ok {
+			delete(candidate.Peers, peerID)
+			changed = true
+		}
+	}
+	if !changed {
+		out.Changes.VerifiedRevision = baseRevision
+		return out, nil
+	}
 	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
 	if store.commit != nil {
 		if err := store.commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
@@ -151,7 +224,11 @@ func clonePeerFailure(failure *PeerFailure) *PeerFailure {
 }
 
 func peerCheckpointEmpty(metadata PeerCheckpoint) bool {
-	metadata.ObservedGraceEndpoints = nil
-	metadata.RejectedObjects = nil
+	if len(metadata.ObservedGraceEndpoints) == 0 {
+		metadata.ObservedGraceEndpoints = nil
+	}
+	if len(metadata.RejectedObjects) == 0 {
+		metadata.RejectedObjects = nil
+	}
 	return reflect.DeepEqual(metadata, PeerCheckpoint{})
 }

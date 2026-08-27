@@ -62,7 +62,7 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 
 	preview, err := service.handleStateGCEvent(false)
 	if err != nil {
@@ -82,10 +82,7 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	if len(applied.OrphanBirdInstances) != 1 || applied.OrphanBirdInstances[0] != "default" {
 		t.Fatalf("applied plan = %#v, want default orphan", applied)
 	}
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	reloaded := service.currentState()
 	if _, ok := reloaded.BirdInstances["default"]; ok {
 		t.Fatalf("stale default BIRD state remained: %#v", reloaded.BirdInstances)
 	}

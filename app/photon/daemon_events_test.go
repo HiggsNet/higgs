@@ -3,14 +3,16 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
@@ -24,7 +26,7 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,
@@ -44,10 +46,7 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	if result.Version != 1 {
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.Network.Zones["node-b.catofes."].Records["identity"] == nil {
 		t.Fatalf("record was not persisted")
 	}
@@ -64,7 +63,7 @@ func TestDaemonRecordPutUsesStateStoreWhileConstructorInputLocked(t *testing.T) 
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	state.Lock()
 	unlock := state.Unlock
@@ -95,10 +94,7 @@ func TestDaemonRecordPutUsesStateStoreWhileConstructorInputLocked(t *testing.T) 
 	if got := snapshot.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
 		t.Fatal("committed snapshot missing locked record")
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if got := latest.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
 		t.Fatal("persisted state missing locked record")
 	}
@@ -115,7 +111,7 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForConstructorInputLock(t *testing.T
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{
@@ -176,7 +172,7 @@ func TestDaemonEndpointTimerUsesStateStoreWhileConstructorInputLocked(t *testing
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	state.Lock()
 	unlock := state.Unlock
@@ -199,10 +195,7 @@ func TestDaemonEndpointTimerUsesStateStoreWhileConstructorInputLocked(t *testing
 	if got := snapshot.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
 		t.Fatal("committed snapshot missing endpoint record")
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if got := latest.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
 		t.Fatal("persisted state missing endpoint record")
 	}
@@ -242,7 +235,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 		t.Fatalf("LoadState: %v", err)
 	}
 	driver := &countingIPsecDriver{}
-	service := newDaemonService(rt, latest, config, time.Second)
+	service := newTestDaemonService(rt, latest, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 	reply := make(chan daemonEventResult, 1)
@@ -265,10 +258,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
-	rotatedState, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(rotated): %v", err)
-	}
+	rotatedState := service.currentState()
 	rotated, err := ipsec.ParsePortRecord(rotatedState.Network.Zones[rotatedState.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
@@ -298,7 +288,7 @@ func TestDaemonIPsecPortRotateUsesStateStoreWhileConstructorInputLocked(t *testi
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	state.Lock()
 	unlock := state.Unlock
@@ -324,10 +314,7 @@ func TestDaemonIPsecPortRotateUsesStateStoreWhileConstructorInputLocked(t *testi
 	if snapshot.IPsecPortRecord == nil || snapshot.IPsecPortRecord.Generation != result.CurrentGeneration {
 		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", snapshot.IPsecPortRecord, result.CurrentGeneration)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.IPsecPortRecord == nil || latest.IPsecPortRecord.Generation != result.CurrentGeneration {
 		t.Fatalf("persisted IPsecPortRecord = %#v, want generation %d", latest.IPsecPortRecord, result.CurrentGeneration)
 	}
@@ -344,7 +331,7 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
@@ -374,10 +361,7 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 			t.Fatalf("record_put event failed: %v", err)
 		}
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	record := latest.Network.Zones["node-b.catofes."].Records["identity"]
 	if record == nil {
 		t.Fatal("identity record missing")
@@ -401,7 +385,7 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	external, err := rt.LoadState()
 	if err != nil {
@@ -430,10 +414,7 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	if result.Error != nil {
 		t.Fatalf("handleEvent(record_put): %v", result.Error)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(latest): %v", err)
-	}
+	latest := service.currentState()
 	records := latest.Network.Zones["node-b.catofes."].Records
 	if records["external"] != nil {
 		t.Fatalf("out-of-band disk record replaced daemon committed authority")
@@ -468,7 +449,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(root): %v", err)
 	}
-	service := newDaemonService(rootRT, rootState, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newTestDaemonService(rootRT, rootState, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -487,6 +468,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	}
 
 	catofesKey := &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}
+	joinState := &stateFile{Network: zone.NewNetworkState()}
+	service = newTestDaemonService(rootRT, joinState, &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{
 		Type:       daemonEventJoinAccept,
 		JoinBundle: result.JoinBundle,
@@ -526,10 +509,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest, err := rootRT.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(latest): %v", err)
-	}
+	latest := service.currentState()
 	parent := latest.Network.Zones[zone.ZonePath("catofes.")]
 	if parent == nil || parent.Revocations["node-b.catofes."] == nil {
 		t.Fatalf("node-b revocation was not persisted")
@@ -553,7 +533,7 @@ func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing
 	if err != nil {
 		t.Fatalf("LoadState(root): %v", err)
 	}
-	service := newDaemonService(rt, state, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newTestDaemonService(rt, state, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -583,10 +563,7 @@ func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing
 	if got := snapshot.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		t.Fatal("committed snapshot missing catofes delegation")
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(latest): %v", err)
-	}
+	latest := service.currentState()
 	if got := latest.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		t.Fatal("persisted state missing catofes delegation")
 	}
@@ -606,7 +583,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState(root): %v", err)
 	}
-	service := newDaemonService(rt, state, &syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newTestDaemonService(rt, state, &syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -616,6 +593,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleDelegateIssueEvent(catofes): %v", err)
 	}
+	service = newTestDaemonService(rt, &stateFile{Network: zone.NewNetworkState()}, &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
 		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
 	}
@@ -672,10 +650,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		}
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(latest): %v", err)
-	}
+	latest := service.currentState()
 	catofes := latest.Network.Zones[zone.ZonePath("catofes.")]
 	if catofes.Records["admin-note"] == nil {
 		t.Fatalf("record_put result missing after concurrent admin events")
@@ -698,6 +673,11 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	oldCollect := collectSyncLocalEndpoints
+	collectSyncLocalEndpoints = func(port uint16, _ []string, _ []string, _ time.Duration, _ bool) ([]gossip.LocalEndpoint, error) {
+		return []gossip.LocalEndpoint{{IP: net.ParseIP("198.51.100.20"), Port: port, Scope: "global", Source: gossip.SourceAdvertise}}, nil
+	}
+	t.Cleanup(func() { collectSyncLocalEndpoints = oldCollect })
 	rt := &Runtime{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
@@ -706,7 +686,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	// First publish: records are created, state is flushed.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
@@ -757,7 +737,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 		ListenAddr:             "127.0.0.1:0",
 		DisableEndpointPublish: true,
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	beforeRev := service.StateStore.Meta().Revision
 
 	changed, err := service.prepareStartupState()
@@ -771,8 +751,8 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 		t.Fatal("prepareStartupState mutated the detached constructor input")
 	}
 	committed, rev := service.StateStore.Snapshot()
-	if rev != beforeRev+1 {
-		t.Fatalf("state revision = %d, want one startup commit after %d", rev, beforeRev)
+	if rev != beforeRev {
+		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
 	}
 	if committed.Admission == nil || !committed.Admission.Pending || committed.Admission.PendingSinceUnix != now.Unix() {
 		t.Fatalf("committed admission = %+v, want pending startup diagnosis", committed.Admission)
@@ -780,10 +760,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if current := service.currentState(); current == state || current.Admission == nil || !current.Admission.Pending {
 		t.Fatalf("current admission = %+v, want committed state", current.Admission)
 	}
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	reloaded := service.currentState()
 	if reloaded.Admission == nil || !reloaded.Admission.Pending {
 		t.Fatalf("persisted admission = %+v, want pending", reloaded.Admission)
 	}
@@ -821,7 +798,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	// First publish: record is created.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {

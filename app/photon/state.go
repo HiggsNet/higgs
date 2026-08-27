@@ -434,6 +434,11 @@ func closeStateStoreWithFileInfo(path string, store *zone.BoltStore, closed *boo
 	return afterClose, nil
 }
 
+func sameStateFileInfo(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) &&
+		a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
 func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {
 	if len(trustRoot) == 0 {
 		return nil

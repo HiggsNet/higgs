@@ -6,11 +6,14 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 var (
@@ -30,6 +33,27 @@ type PutRecordIntent struct {
 }
 
 func (PutRecordIntent) isLocalIntent() {}
+
+type ProtocolRecordKind string
+
+const (
+	ProtocolRecordGossipEndpoint ProtocolRecordKind = "gossip_endpoint"
+	ProtocolRecordIPsec          ProtocolRecordKind = "ipsec"
+	ProtocolRecordRoutingNetns   ProtocolRecordKind = "routing_netns"
+)
+
+// PutProtocolRecordIntent is the narrow publisher path for reserved protocol
+// records. Kind, key and type must be a known tuple; generic record writers
+// remain unable to enter these namespaces.
+type PutProtocolRecordIntent struct {
+	Kind  ProtocolRecordKind
+	Zone  zone.ZonePath
+	Key   string
+	Type  string
+	Value []byte
+}
+
+func (PutProtocolRecordIntent) isLocalIntent() {}
 
 type PutIPAMPoolIntent struct {
 	Zone        zone.ZonePath
@@ -65,15 +89,17 @@ type RevokeIPAMAssignmentIntent struct {
 func (RevokeIPAMAssignmentIntent) isLocalIntent() {}
 
 type AnnounceRouteIntent struct {
-	Zone   zone.ZonePath
-	Prefix string
+	Zone       zone.ZonePath
+	Prefix     string
+	Controller string
 }
 
 func (AnnounceRouteIntent) isLocalIntent() {}
 
 type WithdrawRouteIntent struct {
-	Zone   zone.ZonePath
-	Prefix string
+	Zone       zone.ZonePath
+	Prefix     string
+	Controller string
 }
 
 func (WithdrawRouteIntent) isLocalIntent() {}
@@ -266,6 +292,10 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 		if err = validateGenericRecordIntent(typed); err == nil {
 			out.Record, changed, err = applyPutRecordIntent(candidate, typed, now)
 		}
+	case PutProtocolRecordIntent:
+		if err = validateProtocolRecordIntent(typed); err == nil {
+			out.Record, changed, err = applyPutProtocolRecordIntent(candidate, typed, now)
+		}
 	case PutIPAMPoolIntent:
 		out.Record, changed, err = applyPutIPAMPoolIntent(candidate, typed, now)
 	case RevokeIPAMPoolIntent:
@@ -299,6 +329,47 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 		err = fmt.Errorf("unsupported local intent %T", intent)
 	}
 	return out, changed, additionallyChanged, securityPriority, metadataChanged, err
+}
+
+func validateProtocolRecordIntent(intent PutProtocolRecordIntent) error {
+	valid := false
+	switch intent.Kind {
+	case ProtocolRecordGossipEndpoint:
+		valid = intent.Key == "sync/endpoint/udp" && intent.Type == "sync.endpoint"
+	case ProtocolRecordRoutingNetns:
+		valid = intent.Key == routing.RecordKeyRoutingNetns && intent.Type == routing.RecordTypeRoutingNetns
+	case ProtocolRecordIPsec:
+		switch intent.Key {
+		case ipsec.RecordKeyProfile:
+			valid = intent.Type == ipsec.RecordTypeProfile
+		case ipsec.RecordKeyAddresses:
+			valid = intent.Type == ipsec.RecordTypeAddresses
+		case ipsec.RecordKeyPorts:
+			valid = intent.Type == ipsec.RecordTypePorts
+		case ipsec.RecordKeyTransportKey:
+			valid = intent.Type == ipsec.RecordTypeTransportKey
+		default:
+			valid = strings.HasPrefix(intent.Key, ipsec.RecordKeyOverlayPrefix) &&
+				len(strings.TrimPrefix(intent.Key, ipsec.RecordKeyOverlayPrefix)) > 0 && intent.Type == ipsec.RecordTypeOverlayIntent
+		}
+	}
+	if !valid {
+		return fmt.Errorf("invalid %s protocol record tuple %q/%q", intent.Kind, intent.Key, intent.Type)
+	}
+	return nil
+}
+
+func applyPutProtocolRecordIntent(state *VerifiedState, intent PutProtocolRecordIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
+	if state != nil && state.Network != nil {
+		if zs := state.Network.Zones[intent.Zone]; zs != nil {
+			if current := zs.Records[intent.Key]; current != nil && current.Type == intent.Type && bytes.Equal(current.Value, intent.Value) {
+				return cloneRecord(current), "", nil
+			}
+		}
+	}
+	return applyPutRecordIntent(state, PutRecordIntent{
+		Zone: intent.Zone, Key: intent.Key, Type: intent.Type, Value: intent.Value,
+	}, now)
 }
 
 func applyUpdateRootAuthorityIntent(state *VerifiedState, intent UpdateRootAuthorityIntent, now time.Time) (*zone.ZoneAuthority, zone.ZonePath, error) {

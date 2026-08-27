@@ -52,10 +52,9 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	if !apply {
 		return d.StateStore.stateGCPlanProjection(d.Sync.App.Config), nil
 	}
-	_, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
-		plan = buildStateGCPlan(d.Sync.App.Config, state)
-		return applyStateGCPlan(state, plan), nil
-	})
+	state, revision := d.StateStore.Snapshot()
+	plan = buildStateGCPlan(d.Sync.App.Config, state)
+	_, _, err := d.StateStore.commitBirdGCIfRevision(revision, plan.OrphanBirdInstances)
 	if err != nil {
 		return nil, err
 	}

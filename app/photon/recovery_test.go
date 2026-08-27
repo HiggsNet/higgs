@@ -55,13 +55,17 @@ func TestRecoveryApplySnapshotRestoresManagedZoneDelegations(t *testing.T) {
 
 func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
 	now := time.Unix(1000, 0)
 	snapshot, err := corestate.Snapshot(state.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
 
-	service := newDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	if _, _, err := service.handleRecoveryImportZoneEvent(snapshot); err != nil {
+		t.Fatalf("handleRecoveryImportZoneEvent(first): %v", err)
+	}
 	notifications := 0
 	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
 	beforeRevision := service.StateStore.Meta().Revision
@@ -188,7 +192,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncConfig(catofes): %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:     daemonEventRecoveryImportZone,
@@ -198,10 +202,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 		t.Fatalf("handle recovery import event: %v", result.Error)
 	}
 
-	reloaded, err := loadState()
-	if err != nil {
-		t.Fatalf("reload catofes state: %v", err)
-	}
+	reloaded := service.currentState()
 	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)

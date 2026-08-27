@@ -34,13 +34,10 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 
 	service.notifyStateChanged()
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
 	}
@@ -48,10 +45,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	appConfig.IPsec.LinkGroups = nil
 	service.setState(latest)
 	service.notifyStateChanged()
-	removed, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(after teardown): %v", err)
-	}
+	removed := service.currentState()
 	if len(removed.LinkInstances) != 0 {
 		t.Fatalf("link instances after teardown = %+v, want none", removed.LinkInstances)
 	}
@@ -61,10 +55,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 
 	service.setState(removed)
 	service.notifyStateChanged()
-	stable, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(stable): %v", err)
-	}
+	stable := service.currentState()
 	if len(stable.LinkInstances) != 0 {
 		t.Fatalf("stable link instances = %+v, want none", stable.LinkInstances)
 	}
@@ -111,16 +102,13 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
 	service.notifyStateChanged()
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
 		t.Fatalf("actions = %+v, want adopt", latest.IPsecReconcile.Actions)
 	}
@@ -198,7 +186,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -207,10 +195,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
 		t.Fatalf("startup recovered instance = %+v, want up adopted endpoint", inst)
@@ -265,16 +250,13 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionRepair {
 		t.Fatalf("startup reconcile = %+v, want repair", latest.IPsecReconcile)
 	}
@@ -355,16 +337,13 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.ActualSAs) != 1 {
 		t.Fatalf("startup reconcile actual SAs = %+v, want rotated SA retained", latest.IPsecReconcile)
 	}
@@ -411,7 +390,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -421,10 +400,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
 	assertDryRunApply(t, driver, spec, group.NetNS)
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateConnecting {
 		t.Fatalf("startup repaired instance = %+v, want connecting", inst)
@@ -465,7 +441,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -475,10 +451,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
 	assertDryRunApply(t, driver, spec, group.NetNS)
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateConnecting || inst.FailureCount != 0 || inst.BackoffUntil != 0 {
 		t.Fatalf("startup retried instance = %+v, want connecting with cleared backoff", inst)
@@ -505,15 +478,12 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
 	service.notifyStateChanged()
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(create): %v", err)
-	}
+	latest := service.currentState()
 	spec := singleDesiredSpec(t, latest)
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances after create = %+v, want one", latest.LinkInstances)
@@ -535,10 +505,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	service.setState(latest)
 	service.notifyStateChanged()
 
-	revoked, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(revoked): %v", err)
-	}
+	revoked := service.currentState()
 	if len(revoked.LinkInstances) != 0 {
 		t.Fatalf("link instances after revoke = %+v, want none", revoked.LinkInstances)
 	}
@@ -554,10 +521,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 
 	service.setState(revoked)
 	service.notifyStateChanged()
-	stable, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(stable): %v", err)
-	}
+	stable := service.currentState()
 	if len(stable.LinkInstances) != 0 || len(stable.IPsecReconcile.Actions) != 0 || stable.IPsecReconcile.DesiredLinks != 0 {
 		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stable.IPsecReconcile, stable.LinkInstances)
 	}
@@ -626,7 +590,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &ipsec.DryRunDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -646,10 +610,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.Network.Zones["node-b.catofes."] != nil {
 		t.Fatalf("revoked zone still present after purge")
 	}
@@ -758,7 +719,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -775,10 +736,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	if !ipsecFlushed {
 		t.Fatal("ipsec cleanup did not flush reconcile")
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("persisted link instances = %+v, want recreated link", latest.LinkInstances)
 	}
@@ -821,7 +779,7 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.
 		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 
@@ -841,10 +799,7 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.
 	if cleaned != 1 || orphans != 0 {
 		t.Fatalf("cleanup result = %d/%d, want 1/0", cleaned, orphans)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("persisted link instances = %+v, want reconciled link", latest.LinkInstances)
 	}
@@ -871,7 +826,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},
 	}
-	service := newDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonService(rt, state, config, time.Second)
 	service.IPsecDriver = driver
 	service.XFRMDriver = driver
 

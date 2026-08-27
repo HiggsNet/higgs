@@ -16,6 +16,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -1132,23 +1133,32 @@ func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRou
 		return false, nil
 	}
 
-	_, err := d.StateStore.Update(func(state *stateFile) error {
-		changed, err := d.autoAnnounceAssignedIPsForState(state, ars)
-		if err != nil {
-			return err
-		}
-		if !changed {
-			return errAutoAnnounceNoChanges
-		}
-		return nil
-	})
-	if errors.Is(err, errAutoAnnounceNoChanges) {
+	state := d.currentState()
+	if state == nil || !state.ManagedZone.Valid() || state.ManagedZone.IsRoot() {
 		return false, nil
 	}
+	intents := make([]corestate.LocalIntent, 0, len(plan.announce)+len(plan.withdraw))
+	for _, prefix := range plan.announce {
+		intents = append(intents, corestate.AnnounceRouteIntent{Zone: state.ManagedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
+	}
+	for _, prefix := range plan.withdraw {
+		intents = append(intents, corestate.WithdrawRouteIntent{Zone: state.ManagedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
+	}
+	result, err := d.StateStore.ApplyCommonLocalIntents(context.Background(), intents, d.Sync.now())
 	if err != nil {
 		return false, err
 	}
-	return true, d.saveCommittedState()
+	if !result.Committed {
+		return false, nil
+	}
+	for _, prefix := range plan.announce {
+		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{"zone": state.ManagedZone, "prefix": prefix.String()})
+	}
+	for _, prefix := range plan.withdraw {
+		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{"zone": state.ManagedZone, "prefix": prefix.String()})
+	}
+	d.notifyStateChanged()
+	return true, nil
 }
 
 type autoAnnouncePlan struct {
@@ -1269,54 +1279,35 @@ func (d *DaemonService) putRouteAnnouncementForState(state *stateFile, path zone
 	return nil
 }
 
-func (d *DaemonService) publishRoutingNetnsRecordInState(state *stateFile) (bool, error) {
+func (d *DaemonService) routingNetnsProtocolIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
 	if d == nil || d.Sync == nil || state == nil || state.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return false, nil
+		return nil, nil
 	}
 	config := d.Sync.App.Config
 	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if len(config.Routing.Instances) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	netnsNames := routingNetnsNames(config.Routing)
 	if len(netnsNames) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	record := routing.RoutingNetnsRecord{Version: 1, Netns: netnsNames}
 	value, err := json.Marshal(record)
 	if err != nil {
-		return false, fmt.Errorf("marshal routing/netns record: %w", err)
+		return nil, fmt.Errorf("marshal routing/netns record: %w", err)
 	}
-	updated, err := putSignedRoutingNetnsRecord(state, state.ManagedZone, value, d.Sync.now())
-	if err != nil {
-		return false, fmt.Errorf("put routing/netns record: %w", err)
-	}
-	if updated {
-		d.logInfo("routing", "published_netns_record", map[string]any{
-			"zone":  state.ManagedZone,
-			"netns": netnsNames,
-		})
-	}
-	return updated, nil
-}
-
-func putSignedRoutingNetnsRecord(state *stateFile, path zone.ZonePath, value []byte, now time.Time) (bool, error) {
-	zs := state.Network.Zones[path]
-	if zs != nil {
-		if existing := zs.Records[routing.RecordKeyRoutingNetns]; existing != nil && bytesEqual(existing.Value, value) {
-			return false, nil
+	if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
+		if current := zs.Records[routing.RecordKeyRoutingNetns]; current != nil && bytesEqual(current.Value, value) {
+			return nil, nil
 		}
 	}
-	rec, err := buildSignedRecordAt(state, path, routing.RecordKeyRoutingNetns, value, routing.RecordTypeRoutingNetns, now)
-	if err != nil {
-		return false, err
-	}
-	if err := state.Network.Put(rec); err != nil {
-		return false, err
-	}
-	return true, nil
+	return &corestate.PutProtocolRecordIntent{
+		Kind: corestate.ProtocolRecordRoutingNetns, Zone: state.ManagedZone,
+		Key: routing.RecordKeyRoutingNetns, Type: routing.RecordTypeRoutingNetns, Value: value,
+	}, nil
 }
 
 func bytesEqual(a, b []byte) bool {

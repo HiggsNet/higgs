@@ -23,7 +23,7 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 func TestObserverLinkIDsPayload(t *testing.T) {
 	state := newTestStateFile()
 	state.LinkInstances = map[string]linkInstanceState{"link-b": {}, "link-a": {}}
-	d := &DaemonService{StateStore: NewDaemonStateStore(state)}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(state)}
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerLinkIDsPayload should return a map payload")
@@ -35,7 +35,7 @@ func TestObserverLinkIDsPayload(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayloadEmptyState(t *testing.T) {
-	d := &DaemonService{StateStore: NewDaemonStateStore(newTestStateFile())}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(newTestStateFile())}
 	if got := d.observerLinkIDsPayload(); got != nil {
 		t.Errorf("payload = %v, want nil with no link instances", got)
 	}
@@ -43,9 +43,9 @@ func TestObserverLinkIDsPayloadEmptyState(t *testing.T) {
 
 func TestObserverPeerIDsPayload(t *testing.T) {
 	state := newTestStateFile()
-	state.SyncPeers["peer-b"] = syncPeerState{}
-	state.SyncPeers["peer-a"] = syncPeerState{}
-	d := &DaemonService{StateStore: NewDaemonStateStore(state)}
+	state.SyncPeers["peer-b"] = syncPeerState{LastSyncUnix: 1}
+	state.SyncPeers["peer-a"] = syncPeerState{LastSyncUnix: 1}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(state)}
 	payload, ok := d.observerPeerIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerPeerIDsPayload should return a map payload")
@@ -93,10 +93,10 @@ func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
 func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 	state := newTestStateFile()
 	state.LinkInstances = map[string]linkInstanceState{"link-a": {}}
-	state.SyncPeers["peer-a"] = syncPeerState{}
+	state.SyncPeers["peer-a"] = syncPeerState{LastSyncUnix: 1}
 	hub := observer.NewHub()
 	d := &DaemonService{
-		StateStore:  NewDaemonStateStore(state),
+		StateStore:  newTestDaemonStateStore(state),
 		observerHub: hub,
 		// Sync is nil: layer reconciles early-return, only notifications matter.
 	}

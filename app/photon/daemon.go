@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -51,9 +53,6 @@ type DaemonService struct {
 	routingForceReload     bool
 	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
-	metadataCheckpointMu   sync.Mutex
-	metadataCheckpoint     metadataCheckpointState
-	metadataCheckpointSave func() error
 
 	hostRuntime       *corehost.Runtime
 	syncIngressRoutes map[string]syncIngressRoute
@@ -159,7 +158,7 @@ type daemonEventResult struct {
 	Error          error
 }
 
-func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
+func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config *syncConfigFile, interval time.Duration) *DaemonService {
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
@@ -167,6 +166,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
 	}
+	state, _ := stateStore.Snapshot()
 	if state != nil && state.Network != nil && state.Network.RecordVerifier == nil {
 		configureValidation(state.Network)
 	}
@@ -180,7 +180,7 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 		Events:            make(chan daemonEvent, 64),
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
-		StateStore:        NewDaemonStateStore(state),
+		StateStore:        stateStore,
 		PeerObservability: peerObservability,
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
@@ -195,6 +195,28 @@ func newDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, int
 	d.objectPullPool = newObjectPullPool(d.objectPullResults, 0)
 	d.configureHealthManager()
 	return d
+}
+
+func openDaemonService(rt *Runtime, interval time.Duration) (*DaemonService, *corestate.BoltStore, error) {
+	if rt == nil {
+		return nil, nil, errors.New("daemon runtime is nil")
+	}
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		return nil, nil, err
+	}
+	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, nil, err
+	}
+	state, _ := stateStore.Snapshot()
+	config, err := rt.SyncConfig(state)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, nil, err
+	}
+	return newDaemonServiceWithStore(rt, stateStore, config, interval), boltStore, nil
 }
 
 // configureHealthManager initializes the health probe manager from app config.
@@ -324,7 +346,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	nextIPsecReconcile := nextIPsecReconcileTime(d.Sync.now(), ipsecReconcileInterval)
 	routingReconcileInterval := d.routingReconcileInterval()
 	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
-	lastObservedDigests := d.zoneDigests()
 	d.updateDiscoveredPeers()
 	// Apply persisted lifecycle policy before startup recovery so stale signed
 	// records cannot recreate links that already exceeded cleanup_after.
@@ -341,7 +362,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.recoverFirewallOnStart(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
-	defer d.flushMetadataCheckpointOnShutdown()
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -374,20 +394,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			routingReconcileInterval = interval
 			nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 		}
-		if latest, changed, err := d.Sync.reloadStateIfChanged(lastObservedDigests); err != nil {
-			d.logWarn("daemon", "reload_failed", map[string]any{"error": err})
-		} else if changed {
-			rebasedPeerMetadata := d.rebasePendingPeerMetadata(latest)
-			d.replaceCommittedState(latest)
-			if rebasedPeerMetadata {
-				d.advanceMetadataCheckpointRevision(d.StateStore.Meta().Revision)
-			}
-			lastObservedDigests = corestate.ZoneDigests(latest.Network)
-			nextSync = now
-			forceSync = true
-			d.updateDiscoveredPeers()
-			d.notifyStateChanged()
-		}
 		if !now.Before(nextEndpointPublish) {
 			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
 			if result.Error != nil {
@@ -396,7 +402,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if triggerSync {
 				nextSync = now
 				forceSync = true
-				lastObservedDigests = d.zoneDigests()
 			}
 			interval := d.Sync.Config.ReflectorInterval
 			if interval <= 0 {
@@ -431,12 +436,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
 			}
 		}
-		if err := d.flushMetadataCheckpoint(false); err != nil {
-			d.logWarn("state", "metadata_checkpoint_failed", map[string]any{"error": err})
-		}
 		// Wait for the next event. Use a dedicated receiver goroutine so UDP
 		// reads block until a packet arrives instead of polling every 250 ms.
-		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile, d.metadataCheckpointDue())
+		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile, time.Time{})
 		if wait <= 0 {
 			continue
 		}
@@ -457,7 +459,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if triggerSync {
 				nextSync = d.Sync.now()
 				forceSync = true
-				lastObservedDigests = d.zoneDigests()
 			}
 		case packet := <-packetCh:
 			timer.Stop()
@@ -474,7 +475,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			timer.Stop()
 			event, ok := d.hostRuntime.GossipEventFor(hostEvent)
 			if ok && d.handleSyncEvent(ctx, event) {
-				lastObservedDigests = d.zoneDigests()
 			}
 		case result := <-d.objectPullResults:
 			timer.Stop()
@@ -1029,25 +1029,27 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 		if event.IPAM == nil {
 			return daemonEventResult{Error: errors.New("ipam mutation event is nil")}, false, false
 		}
-		result, err := d.handleRecordMutationEvent(event.IPAM.Zone, func(state *stateFile) (*recordMutationResult, error) {
-			return applyIPAMMutation(state, *event.IPAM, d.Sync.now())
-		})
+		intent, err := commonIPAMIntent(*event.IPAM)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		result, err := d.handleCommonRecordMutationEvent(intent, event.IPAM.DryRun)
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventRouteMutation:
 		if event.Route == nil {
 			return daemonEventResult{Error: errors.New("route mutation event is nil")}, false, false
 		}
-		result, err := d.handleRecordMutationEvent(event.Route.Zone, func(state *stateFile) (*recordMutationResult, error) {
-			return applyRouteMutation(state, *event.Route, d.Sync.now())
-		})
+		result, err := d.handleCommonRecordMutationEvent(commonRouteIntent(*event.Route), event.Route.DryRun)
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventServiceMutation:
 		if event.Service == nil {
 			return daemonEventResult{Error: errors.New("service mutation event is nil")}, false, false
 		}
-		result, err := d.handleRecordMutationEvent("", func(state *stateFile) (*recordMutationResult, error) {
-			return applyServiceMutation(state, *event.Service, d.Sync.now())
-		})
+		intent, err := commonServiceIntent(*event.Service)
+		if err != nil {
+			return daemonEventResult{Error: err}, false, false
+		}
+		result, err := d.handleCommonRecordMutationEvent(intent, event.Service.DryRun)
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventDelegateIssue:
 		result, err := d.handleDelegateIssueEvent(event.JoinRequest, event.Permissions)
@@ -1154,13 +1156,20 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
 		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
 	}
-	latest, err := loadStateAtWithConfig(statePath, config)
-	if err != nil {
-		return err
+	latest := d.currentState()
+	if latest == nil {
+		return errors.New("daemon state is not initialized")
 	}
 	currentIdentityKeyPath := d.StateStore.identityKeyPathProjection()
-	if currentIdentityKeyPath != "" && latest.IdentityKeyPath != "" && latest.IdentityKeyPath != currentIdentityKeyPath {
-		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, latest.IdentityKeyPath)
+	requestedIdentityKeyPath := config.Identity.KeyPath
+	if requestedIdentityKeyPath != "" {
+		requestedIdentityKeyPath, err = canonicalIdentityKeyPath(requestedIdentityKeyPath)
+		if err != nil {
+			return err
+		}
+	}
+	if currentIdentityKeyPath != "" && requestedIdentityKeyPath != "" && requestedIdentityKeyPath != currentIdentityKeyPath {
+		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
 	var ipsecDrivers configuredIPsecDrivers
@@ -1184,7 +1193,6 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	}
 	d.Log = newAppLogger(syncConfig)
 	d.ControlSocketPath = socketPath
-	d.replaceCommittedState(latest)
 	if d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
 	}
@@ -1194,109 +1202,123 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 }
 
 func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
-	var result *delegationIssueResult
-	err := d.runStateStoreWrite(func(state *stateFile) error {
-		var err error
-		result, err = issueDelegationInState(d.Sync.App, state, request, permissions)
-		return err
-	})
+	if err := validateJoinRequest(request); err != nil {
+		return nil, err
+	}
+	state := d.currentState()
+	parent := request.Zone.Parent()
+	parentState := state.Network.Zones[parent]
+	if parentState == nil || parentState.Authority == nil {
+		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	}
+	epoch := uint64(1)
+	if revoked := parentState.Revocations[request.Zone]; revoked != nil && revoked.RevokedAuthorityEpoch >= epoch {
+		epoch = revoked.RevokedAuthorityEpoch + 1
+	}
+	authority := &zone.ZoneAuthority{Zone: request.Zone, Epoch: epoch, Threshold: photoncrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{Key: append([]byte(nil), request.PublicKey...), Capabilities: delegationCapabilities(permissions)}}}
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), corestate.PutDelegationIntent{
+		Parent: parent, Authority: authority,
+	}, false, d.Sync.now())
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	bundle, err := joinBundleFromState(d.currentState(), request.Zone, d.Sync.now())
+	if err != nil {
+		return nil, err
+	}
+	if result.Committed {
+		d.updateDiscoveredPeers()
+		d.notifyStateChanged()
+	}
+	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
 }
 
 func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
-	var bundle *joinBundle
-	err := d.runStateStoreWrite(func(state *stateFile) error {
-		var err error
-		bundle, err = grantDelegationPermissionsInState(d.Sync.App, state, path, permissions)
-		return err
-	})
+	if !path.Valid() || len(permissions) == 0 {
+		return nil, errors.New("valid delegated zone and at least one permission are required")
+	}
+	state := d.currentState()
+	if state == nil || state.Network == nil || state.Network.Zones[path] == nil || state.Network.Zones[path].Authority == nil {
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	authority := cloneAuthorityForJoinBundle(state.Network.Zones[path].Authority)
+	grantPermissionsToAuthority(authority, permissions)
+	authority.Epoch++
+	var intent corestate.LocalIntent
+	if path.IsRoot() {
+		intent = corestate.UpdateRootAuthorityIntent{Authority: authority}
+	} else {
+		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
+	}
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, false, d.Sync.now())
 	if err != nil {
 		return nil, err
 	}
-	return bundle, nil
+	if result.Committed {
+		d.updateDiscoveredPeers()
+		d.notifyStateChanged()
+	}
+	if path.IsRoot() {
+		return nil, nil
+	}
+	return joinBundleFromState(d.currentState(), path, d.Sync.now())
+}
+
+func joinBundleFromState(state *stateFile, path zone.ZonePath, now time.Time) (*joinBundle, error) {
+	if state == nil || state.Network == nil {
+		return nil, errors.New("state is nil")
+	}
+	rootKey, err := rootPublicKey(state.Network)
+	if err != nil {
+		return nil, err
+	}
+	network, err := minimalNetworkForJoinBundle(state.Network, path)
+	if err != nil {
+		return nil, err
+	}
+	configureValidation(network)
+	if err := photoncrypto.VerifyChain(network, path, now); err != nil {
+		return nil, err
+	}
+	return &joinBundle{Version: 1, Zone: path, RootPublicKey: rootKey, Network: network}, nil
 }
 
 func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
-	var result *corestate.ApplyResult
-	var revocations int
-	_, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
-		var err error
-		result, err = applyRecoveryZoneSnapshot(d.Sync.App, state, snapshot)
-		if err != nil {
-			return false, err
-		}
-		revocations = 0
-		if zs := state.Network.Zones[result.Zone]; zs != nil {
-			revocations = len(zs.Revocations)
-		}
-		return result.NetworkChanged, nil
-	})
+	result, err := d.StateStore.ImportCommonRecovery(context.Background(), corestate.RecoveryImport{
+		Snapshot: snapshot,
+		Limits:   syncLimits(d.Sync.Config),
+	}, d.Sync.now())
 	if err != nil {
 		return nil, 0, err
 	}
-	return result, revocations, nil
+	if result.Committed {
+		d.updateDiscoveredPeers()
+		d.notifyStateChanged()
+	}
+	revocations := 0
+	if result.Apply != nil {
+		if current := d.currentState(); current != nil && current.Network != nil {
+			if zs := current.Network.Zones[result.Apply.Zone]; zs != nil {
+				revocations = len(zs.Revocations)
+			}
+		}
+	}
+	return result.Apply, revocations, nil
 }
 
 func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
-	return d.runStateStoreWrite(func(state *stateFile) error {
-		return revokeDelegationInState(d.Sync.App, state, path, reason)
-	})
-}
-
-func (d *DaemonService) runStateStoreWrite(fn func(*stateFile) error) error {
-	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
-		return errors.New("daemon service is not initialized")
-	}
-	if _, err := d.StateStore.Update(fn); err != nil {
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
+		Parent: path.Parent(), Child: path, Reason: reason,
+	}, false, d.Sync.now())
+	if err != nil {
 		return err
 	}
-	if err := d.saveCommittedState(); err != nil {
-		return err
-	}
-	if d.Sync.Transport != nil {
+	if result.Committed {
 		d.updateDiscoveredPeers()
+		d.notifyStateChanged()
 	}
-	d.notifyStateChanged()
 	return nil
-}
-
-// runStateStoreWriteIfChanged is like runStateStoreWrite, but the update
-// function reports whether the state actually changed. When it reports false,
-// the detached workspace is discarded without replacing the committed
-// snapshot, incrementing the revision, or notifying downstream layers. This avoids
-// duplicate IPsec/routing/firewall flushes when the endpoint timer (or similar
-// periodic writer) produces a no-op publish.
-func (d *DaemonService) runStateStoreWriteIfChanged(fn func(*stateFile) (bool, error)) (bool, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil || fn == nil {
-		return false, errors.New("daemon service is not initialized")
-	}
-	update, err := d.StateStore.BeginUpdate()
-	if err != nil {
-		return false, err
-	}
-	changed, err := fn(update.Workspace())
-	if err != nil {
-		return false, err
-	}
-	if !changed {
-		return false, nil
-	}
-	if _, committed, err := update.Commit(); err != nil {
-		return false, err
-	} else if !committed {
-		return false, errDaemonStateRevisionStale
-	}
-	if err := d.saveCommittedState(); err != nil {
-		return false, err
-	}
-	if d.Sync.Transport != nil {
-		d.updateDiscoveredPeers()
-	}
-	d.notifyStateChanged()
-	return true, nil
 }
 
 // handleRecoveryPurgeRevokedEvent runs the manual revoked-zone GC. It always
@@ -1307,25 +1329,34 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	if d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	if !apply {
-		return d.StateStore.purgePlanProjection(d.Sync.App.Now(), target)
-	}
-	var plan *purgePlan
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		var err error
-		plan, err = planPurgeRevokedZones(state, d.Sync.App.Now(), target)
-		if err != nil {
-			return err
-		}
-		if err := d.cleanupPurgePlanIPsecLinks(ctx, state, plan); err != nil {
-			return err
-		}
-		executePurgePlan(state, plan)
-		return nil
-	}); err != nil {
+	now := d.Sync.now()
+	commonPlan, err := d.StateStore.PlanCommonPurge(now, target)
+	if err != nil {
 		return nil, err
 	}
-	if err := d.saveCommittedState(); err != nil {
+	state, revision := d.StateStore.Snapshot()
+	plan := &purgePlan{Zones: append([]zone.ZonePath(nil), commonPlan.Zones...), SyncPeers: append([]string(nil), commonPlan.CheckpointPeers...), ManagedZoneSkipped: append([]zone.ZonePath(nil), commonPlan.ManagedZoneSkipped...)}
+	zoneSet := make(map[zone.ZonePath]bool, len(plan.Zones))
+	for _, path := range plan.Zones {
+		zoneSet[path] = true
+	}
+	for id, instance := range state.LinkInstances {
+		if zoneSet[instance.PeerZone] {
+			plan.LinkInstances = append(plan.LinkInstances, id)
+		}
+	}
+	slices.Sort(plan.LinkInstances)
+	if !apply {
+		return plan, nil
+	}
+	if err := d.cleanupPurgePlanIPsecLinks(ctx, state, plan); err != nil {
+		return nil, err
+	}
+	if _, _, err := d.StateStore.commitPurgeRuntimeIfRevision(revision, plan.LinkInstances, plan.SyncPeers); err != nil {
+		return nil, err
+	}
+	result, err := d.StateStore.PurgeCommon(ctx, now, target)
+	if err != nil {
 		return nil, err
 	}
 	for _, peerID := range plan.SyncPeers {
@@ -1334,7 +1365,9 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	if d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
 	}
-	d.notifyStateChanged()
+	if result.Committed || len(plan.LinkInstances) > 0 {
+		d.notifyStateChanged()
+	}
 	return plan, nil
 }
 
@@ -1368,26 +1401,33 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	var result *joinAcceptResult
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		candidate, prepared, err := prepareJoinAcceptedState(d.Sync.App, state, bundle, key)
+	if bundle == nil || bundle.Version != 1 || bundle.Network == nil {
+		return nil, errors.New("invalid join bundle")
+	}
+	if key == nil {
+		var err error
+		key, err = joinAcceptKeyFromStateFile(d.currentState(), bundle.Zone)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		installPreparedState(state, candidate)
-		result = prepared
-		return nil
-	}); err != nil {
+	}
+	if err := validatePrivateKeyFile(key); err != nil {
 		return nil, err
 	}
-	if err := d.saveCommittedState(); err != nil {
+	commit, err := d.StateStore.InstallCommonIdentity(context.Background(), corestate.IdentityInstall{
+		ManagedZone: bundle.Zone, Network: bundle.Network,
+		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
+	}, d.Sync.now())
+	if err != nil {
 		return nil, err
 	}
-	if d.Sync.Transport != nil {
+	if commit.Committed && d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
 	}
-	d.notifyStateChanged()
-	return result, nil
+	if commit.Committed {
+		d.notifyStateChanged()
+	}
+	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
 // processPacketEvent dispatches packet handling without a mutable stateFile
@@ -1405,12 +1445,6 @@ func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Con
 }
 
 func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
-	latest, err := d.Sync.loadState()
-	if err != nil {
-		return fmt.Errorf("daemon reload: %w", err)
-	}
-	d.replaceCommittedState(latest)
-	d.updateDiscoveredPeers()
 	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
@@ -1423,21 +1457,7 @@ func (d *DaemonService) zoneDigests() []corestate.ZoneDigest {
 
 func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
-	changed, err := d.runStateStoreWriteIfChanged(func(state *stateFile) (bool, error) {
-		endpointChanged, err := d.Sync.publishEndpointRecordInState(state)
-		if err != nil {
-			return false, err
-		}
-		ipsecChanged, err := d.Sync.publishIPsecRecordsInState(state)
-		if err != nil {
-			return false, err
-		}
-		routingChanged, err := d.publishRoutingNetnsRecordInState(state)
-		if err != nil {
-			return false, err
-		}
-		return endpointChanged || ipsecChanged || routingChanged, nil
-	})
+	changed, err := d.publishLocalProtocols(false)
 	if err != nil {
 		return false, err
 	}
@@ -1445,73 +1465,69 @@ func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	return changed, nil
 }
 
-// prepareStartupState folds admission diagnostics and all startup record
-// publishers into one isolated workspace. A changed startup performs one
-// commit and one save instead of one transaction per publisher.
 func (d *DaemonService) prepareStartupState() (bool, error) {
+	commit, authority, err := d.StateStore.RefreshCommonManagedAuthority(context.Background(), d.Sync.now())
+	if err != nil {
+		return false, err
+	}
+	if authority.Adopted || authority.Refreshed {
+		d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": d.currentState().ManagedZone})
+	}
+	published, err := d.publishLocalProtocols(true)
+	return commit.Committed || published, err
+}
+
+func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error) {
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
-	update, err := d.StateStore.BeginUpdate()
+	state, revision := d.StateStore.Snapshot()
+	if state == nil || state.Network == nil {
+		return false, errors.New("daemon state network is nil")
+	}
+	runtime := linuxRuntimeStateFromLegacy(state)
+	if updateAdmission {
+		updateAdmissionOnPending(state, d.Sync.now())
+		runtime.Admission = cloneAdmissionState(state.Admission)
+	}
+	var intents []corestate.LocalIntent
+	endpoint, err := d.Sync.endpointProtocolIntent(state)
+	if err != nil {
+		return false, fmt.Errorf("plan endpoint record: %w", err)
+	}
+	if endpoint != nil {
+		intents = append(intents, *endpoint)
+	}
+	ipsecPlan, err := d.Sync.ipsecProtocolPlan(state)
+	if err != nil {
+		return false, fmt.Errorf("plan IPsec records: %w", err)
+	}
+	intents = append(intents, ipsecPlan.Intents...)
+	if ipsecPlan.TransportKey != nil {
+		runtime.IPsecTransportKey = cloneIPsecTransportKeyState(ipsecPlan.TransportKey)
+	}
+	if ipsecPlan.PortRecord != nil {
+		runtime.IPsecPortRecord = cloneIPsecPortRecordState(ipsecPlan.PortRecord)
+	}
+	routingIntent, err := d.routingNetnsProtocolIntent(state)
+	if err != nil {
+		return false, fmt.Errorf("plan routing record: %w", err)
+	}
+	if routingIntent != nil {
+		intents = append(intents, *routingIntent)
+	}
+	result, err := d.StateStore.publishLocalProtocols(context.Background(), revision, intents, runtime, d.Sync.now())
 	if err != nil {
 		return false, err
 	}
-	state := update.Workspace()
-	if state == nil {
-		return false, errors.New("daemon startup state is nil")
+	changed := result.RuntimeCommitted || result.Common.Committed
+	if changed {
+		if d.Sync.Transport != nil {
+			d.updateDiscoveredPeers()
+		}
+		d.notifyStateChanged()
 	}
-	authorityRefreshed, err := tryRefreshManagedZoneAuthority(state, d.Sync.now())
-	if err != nil {
-		return false, fmt.Errorf("refresh managed zone authority at startup: %w", err)
-	}
-
-	var previousAdmission *admissionState
-	if state.Admission != nil {
-		value := *state.Admission
-		previousAdmission = &value
-	}
-	updateAdmissionOnPending(state, d.Sync.now())
-	changed := authorityRefreshed || !sameAdmissionState(previousAdmission, state.Admission)
-
-	endpointChanged, err := d.Sync.publishEndpointRecordInState(state)
-	if err != nil {
-		return false, fmt.Errorf("publish startup endpoint record: %w", err)
-	}
-	ipsecChanged, err := d.Sync.publishIPsecRecordsInState(state)
-	if err != nil {
-		return false, fmt.Errorf("publish startup IPsec records: %w", err)
-	}
-	routingChanged, err := d.publishRoutingNetnsRecordInState(state)
-	if err != nil {
-		return false, fmt.Errorf("publish startup routing record: %w", err)
-	}
-	changed = changed || endpointChanged || ipsecChanged || routingChanged
-	if !changed {
-		return false, nil
-	}
-
-	if _, committed, err := update.Commit(); err != nil {
-		return false, err
-	} else if !committed {
-		return false, errDaemonStateRevisionStale
-	}
-	if err := d.saveCommittedState(); err != nil {
-		return false, err
-	}
-	if authorityRefreshed {
-		d.logInfo("authority", "managed_zone_refreshed", map[string]any{
-			"zone": state.ManagedZone,
-			"via":  "startup",
-		})
-	}
-	return true, nil
-}
-
-func sameAdmissionState(a, b *admissionState) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
+	return changed, nil
 }
 
 func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
@@ -1524,39 +1540,31 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	if d.StateStore == nil {
 		return 0, errors.New("daemon service is not initialized")
 	}
-	workspace, rev := d.StateStore.networkZoneSnapshot(event.Zone)
-	if workspace == nil || workspace.Network == nil {
-		return 0, errors.New("daemon state network is nil")
+	result, err := d.handleCommonRecordMutationEvent(corestate.PutRecordIntent{
+		Zone: event.Zone, Key: event.Key, Type: event.Type, Value: append([]byte(nil), event.Value...),
+	}, false)
+	return recordMutationVersion(result), err
+}
+
+func (d *DaemonService) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
+	if d == nil || d.Sync == nil || d.StateStore == nil {
+		return nil, errors.New("daemon service is not initialized")
 	}
-	var version uint64
-	var recordCount int
-	record, err := buildSignedRecordAt(workspace, event.Zone, event.Key, event.Value, event.Type, d.Sync.now())
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, dryRun, d.Sync.now())
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	if err := workspace.Network.Put(record); err != nil {
-		return 0, err
+	out := &recordMutationResult{DryRun: dryRun}
+	if result.Record != nil {
+		out.Zone, out.Key, out.Version = result.Record.Zone, result.Record.Key, result.Record.Version
 	}
-	version = record.Version
-	if zs := workspace.Network.Zones[event.Zone]; zs != nil {
-		recordCount = len(zs.Records)
+	if result.Committed {
+		if d.Sync.Transport != nil {
+			d.updateDiscoveredPeers()
+		}
+		d.notifyStateChanged()
 	}
-	if _, committed := d.StateStore.commitNetworkCandidateIfRevision(rev, workspace.Network); !committed {
-		return 0, errDaemonStateRevisionStale
-	}
-	d.logInfo("daemon", "record_put_persist", map[string]any{
-		"zone":         event.Zone,
-		"key":          event.Key,
-		"record_count": recordCount,
-	})
-	if err := d.saveCommittedState(); err != nil {
-		return 0, err
-	}
-	if d.Sync.Transport != nil {
-		d.updateDiscoveredPeers()
-	}
-	d.notifyStateChanged()
-	return version, nil
+	return out, nil
 }
 
 func recordMutationVersion(result *recordMutationResult) uint64 {
@@ -1566,46 +1574,26 @@ func recordMutationVersion(result *recordMutationResult) uint64 {
 	return result.Version
 }
 
-func (d *DaemonService) handleRecordMutationEvent(targetZone zone.ZonePath, apply func(*stateFile) (*recordMutationResult, error)) (*recordMutationResult, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil || apply == nil {
-		return nil, errors.New("daemon service is not initialized")
-	}
-	workspace, rev := d.StateStore.networkZoneSnapshot(targetZone)
-	if workspace == nil || workspace.Network == nil {
-		return nil, errors.New("daemon state network is nil")
-	}
-	result, err := apply(workspace)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, errors.New("authoritative mutation returned no result")
-	}
-	if result.DryRun {
-		return result, nil
-	}
-	if _, committed := d.StateStore.commitNetworkCandidateIfRevision(rev, workspace.Network); !committed {
-		return nil, errDaemonStateRevisionStale
-	}
-	if err := d.saveCommittedState(); err != nil {
-		return nil, err
-	}
-	if d.Sync.Transport != nil {
-		d.updateDiscoveredPeers()
-	}
-	d.notifyStateChanged()
-	return result, nil
-}
-
 func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
-	var result *manualPortRotateResult
-	err := d.runStateStoreWrite(func(state *stateFile) error {
-		var err error
-		result, err = forceLocalIPsecPortRotate(d.Sync.App.Config, state, d.Sync.now())
-		return err
-	})
+	state, revision := d.StateStore.Snapshot()
+	record, portRuntime, result, err := planLocalIPsecPortRotation(d.Sync.App.Config, state, d.Sync.now())
 	if err != nil {
 		return nil, err
+	}
+	value, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	runtime := linuxRuntimeStateFromLegacy(state)
+	runtime.IPsecPortRecord = portRuntime
+	committed, err := d.StateStore.publishLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
+		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: state.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
+	}, runtime, d.Sync.now())
+	if err != nil {
+		return nil, err
+	}
+	if committed.RuntimeCommitted || committed.Common.Committed {
+		d.notifyStateChanged()
 	}
 	return result, nil
 }
@@ -1628,14 +1616,6 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 	}
 	response.Dirty = meta.Dirty
 	response.ReconcileProgress = meta.ReconcileProgress
-}
-
-func (d *DaemonService) replaceCommittedState(state *stateFile) {
-	if d == nil || d.StateStore == nil {
-		return
-	}
-	d.StateStore.ReplaceCommitted(state)
-	d.publishStateStoreRuntimeFlags()
 }
 
 func (d *DaemonService) notifyStateChanged() {
@@ -1716,12 +1696,22 @@ func (d *DaemonService) flushRevocationCleanup() {
 	}
 	d.noteReconcileFlush("revocation_cleanup")
 	if projection.needsStateCleanup {
-		if _, err := d.StateStore.Update(func(state *stateFile) error {
-			// Recompute inside the transaction in case a newer state was committed
-			// after the read-only fast-path check.
-			d.flushRevocationCleanupLocked(state)
-			return nil
-		}); err != nil {
+		patches := make(map[string]corestate.PeerCheckpointPatch)
+		for path := range projection.revokedZones {
+			peerID := path.String()
+			patches[peerID] = corestate.PeerCheckpointPatch{
+				DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
+				ObservedEndpoint: corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
+				ObservedLastUnix: corestate.PatchField[int64]{Set: true}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true},
+				ObservedUntilUnix: corestate.PatchField[int64]{Set: true}, ObservedFailures: corestate.PatchField[int]{Set: true},
+				ObservedGrace:    corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
+				BackoffUntilUnix: corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
+				LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
+					Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: d.Sync.now().Unix(),
+				}},
+			}
+		}
+		if _, err := d.StateStore.UpdateCommonPeerCheckpoints(context.Background(), patches); err != nil {
 			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 			return
 		}
@@ -1731,18 +1721,6 @@ func (d *DaemonService) flushRevocationCleanup() {
 			d.PeerObservability.Delete(peerID)
 		}
 	}
-}
-
-func (d *DaemonService) flushRevocationCleanupLocked(state *stateFile) {
-	if d == nil || d.Sync == nil || state == nil || state.Network == nil {
-		return
-	}
-	now := d.Sync.now()
-	revokedZones := CollectAllRevokedZones(state, now)
-	if len(revokedZones) == 0 {
-		return
-	}
-	CleanupRevokedPeerCache(state, revokedZones)
 }
 
 func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
@@ -1974,15 +1952,11 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	service, boltStore, err := openDaemonService(rt, interval)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
-	}
-	service := newDaemonService(rt, state, config, interval)
+	defer boltStore.Close()
 	if err := service.configureIPsecDriversFromConfig(); err != nil {
 		return err
 	}

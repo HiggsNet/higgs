@@ -213,7 +213,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	service := newDaemonService(rt, loaded, config, time.Minute)
+	service := newTestDaemonService(rt, loaded, config, time.Minute)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
 	if result.Error != nil {
@@ -222,10 +222,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(latest): %v", err)
-	}
+	latest := service.currentState()
 	record := latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if record.Version != oldRecord.Version+1 {
 		t.Fatalf("profile version = %d, want %d", record.Version, oldRecord.Version+1)

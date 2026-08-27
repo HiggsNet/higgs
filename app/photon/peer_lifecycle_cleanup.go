@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -180,16 +181,18 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	if !d.StateStore.peerLifecycleCleanupProjection(now, cfg) {
 		return false
 	}
-	var removed []string
-	if _, err := d.StateStore.Update(func(state *stateFile) error {
-		removed, _ = applyPeerLifecycleCleanup(state, now, cfg)
-		return nil
-	}); err != nil {
+	state, revision := d.StateStore.Snapshot()
+	removed, changed := applyPeerLifecycleCleanup(state, now, cfg)
+	if !changed {
+		return false
+	}
+	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(revision, state.PeerCleanups); err != nil {
 		d.logWarn("peer_lifecycle", "cleanup_commit_failed", map[string]any{"error": err})
 		return false
 	}
-	if err := d.saveCommittedState(); err != nil {
-		d.logWarn("peer_lifecycle", "cleanup_save_failed", map[string]any{"error": err})
+	if _, err := d.StateStore.DeleteCommonPeerCheckpoints(context.Background(), removed); err != nil {
+		d.logWarn("peer_lifecycle", "checkpoint_cleanup_failed", map[string]any{"error": err})
+		return false
 	}
 	for _, peerID := range removed {
 		d.PeerObservability.Delete(peerID)
