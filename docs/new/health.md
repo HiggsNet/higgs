@@ -52,7 +52,7 @@ daemon event loop
             ├─ healthTargetsFromState   # 从 stateFile 推导 ProbeTarget
             ├─ Manager.SetTargets       # 全量替换 target 集合
             ├─ Manager.Tick             # 同步探测所有到期 target
-            └─ appendHealthSpool        # 有探测发生时写 JSONL 样本
+            └─ healthspool.Store.Append # completion 后写 JSONL 样本
 
 routing reconcile
   └─ observeBirdForHealth           # app/photon/routing_reconcile.go
@@ -196,11 +196,15 @@ type Prober interface {
 
 `ProbeResult` 携带 `RTT`、`Success` 和原始 `Error` 字符串；`Error` 只进入 debug 展示和 reason 分类，**不作为 metrics label**。每次 `Probe` 调用（含整个 burst）只产生 rolling window 中的一条样本。
 
-daemon 在 `configureHealthManager`（`app/photon/daemon.go`）中优先注入 raw-ICMP prober：
+唯一 `photonlinux.Runtime` 初始化并持有 Linux raw-ICMP prober，daemon 只把公共
+`health.Prober` 接口注入 manager：
 
 ```go
-d.health = newHealthManager(cfg,
-    health.NewRawICMProber(health.NewICMProber(nil, health.NewUDPProber(nil))))
+// internal/photonlinux/health.go
+r.healthProber = healthprobe.NewRawICMProber(healthprobe.NewICMProber(nil))
+
+// app/photon/daemon.go
+d.health = newHealthManager(cfg, d.linuxRuntime.HealthProber())
 ```
 
 ### 4.2 RawICMProber（默认）
@@ -231,7 +235,8 @@ reply。steady state 不再执行 `ip netns exec`、fork `ping` 或创建临时 
 
 ### 4.3 ICMProber（权限受限时回退）
 
-`pkg/health/probe_impl.go`。当前**唯一接线**的 prober，通过 `ip netns exec` 调系统 `ping`：
+`internal/photonlinux/healthprobe/exec_icmp.go`。这是 raw ICMP 在权限或 namespace setup
+不可用时的 Linux fallback，通过 `ip netns exec` 调系统 `ping`：
 
 ```text
 ip netns exec <netns> ping [-6] -n -c <burst> [-I <local tunnel addr>] <peer tunnel addr>
@@ -242,17 +247,15 @@ ip netns exec <netns> ping [-6] -n -c <burst> [-I <local tunnel addr>] <peer tun
 `ip netns exec`。这样保留多数成功的聚合语义，同时避免重复 fork、进入
 network namespace 和 mount setup。
 
-- 单次 ping 用 context deadline 控制 `timeout`；RTT 取整个命令的 wall time——包含 `ip`/`ping` 进程创建开销，因此是偏粗的测量，亚毫秒级 LAN RTT 会被进程开销淹没。
+- 单次 ping 用 context deadline 控制 `timeout`；RTT 从 ping 输出取最后一个成功回复的 RTT。
 - IPv6 link-local 地址自动补 `%<interface>` scope（目标和源都补）；若 ping 报 `bind icmp socket: Invalid argument`，去掉 `-I` 源地址重试一次。
 - burst 聚合：burst 次 ping 中全部失败 → 返回最后一次错误；部分失败 → `Success = 成功数 > 失败数`（过半才记成功），RTT 取最后一个成功样本。
 - `PeerTunnelAddr` 无效时直接返回 `peer address missing` 错误。
 - 需要 `ping` 二进制可用且具有相应权限（setuid 或 cap_net_raw）；权限不足时错误归入 `probe_error`。
 
-### 4.4 UDPProber
+原先未实际接线的 UDP prober 已删除：UDP write 成功不能证明对端或 overlay 链路健康，不应作为 fallback 证据。
 
-`NewUDPProber` 存在但**未被 daemon 使用**（仅作为 `NewICMProber` 的兼容参数传入，ICMP 失败不会 fallback 到 UDP）。其语义也很弱：向 `<peer tunnel addr>:33434` 写入带 `PHOTON-HC` magic 和 nonce 的 UDP 包，write 成功即视为 L3 可达，不校验任何回复。不要把它当作可靠健康证据。
-
-### 4.5 nopProber
+### 4.4 nopProber
 
 `NewManager` 传入 nil prober 时使用；所有探测返回 `no prober configured` 错误，全部 link 收敛到 `probe_error`。只用于测试。
 
@@ -449,7 +452,7 @@ Observer 启用且 `health.metrics.enabled: true` 时，`GET /metrics` 以 OpenM
 
 ### 8.3 时序查询
 
-`queryHealthSpoolSeries`（`app/photon/health_spool.go`）从 spool 聚合单条 link 的时序：
+`healthspool.Store.Query`（`internal/observability/healthspool`）从 spool 聚合单条 link 的时序：
 
 - `metric`：`rtt`（ms，仅正值样本）/ `loss`（百分比）/ `jitter`（ms，仅正值样本）/ `state`（状态编码）。`babel_rtt`、`babel_metric` 显式返回"not available in the local health spool yet"。
 - `range`：默认 1h，上限被 clamp 到 `local_spool_max_age`。
@@ -499,10 +502,12 @@ Observer web UI 展示健康状态与最近窗口；health 变化通过 SSE `hea
 
 ### 9.4 测试入口
 
-- `go test ./pkg/health/`：rolling window、状态机迟滞、probe 聚合、metrics 渲染等单元测试。
+- `go test ./pkg/health/`：rolling window、状态机迟滞和 metrics 等公共策略单元测试。
+- `go test ./internal/photonlinux/healthprobe/`：exec/raw ICMP、setns worker、burst 聚合与 fallback 单元测试。
 - `sudo env PATH="$PATH" make health-smoke`：除 manager/metrics 单测外，还会在
   两个真实 named netns 的 veth 链路上运行 raw-ICMP、BIRD cutover 和 `tc netem`
   故障/恢复验证；需要 root、`ip`、`bird`/`birdc`、`nft`、`tc` 与 daemon 所需 capability。
+- `internal/observability/healthspool`：本地 JSONL、保留期裁剪和 series query 实现与单测。
 - `app/photon/health_config_test.go`、`health_reconcile_test.go`：配置解析与 daemon 级集成测试。
 - `app/photon/bird_root_smoke_test.go` 含 cutover gate 的 root smoke 用例。
 

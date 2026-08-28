@@ -823,7 +823,7 @@ package dependency: app -> host -> gossip -> state -> zone
     bucket 的迁移仍由 `loadAndMigrateLinuxState -> migrateLegacyRuntimeStateTx` 在启动事务内单向执行，属于必须保留的数据库迁移，
     不再把它误删成在线兼容层。最终复核覆盖全部 74 个非测试 Go 文件，production staticcheck 清零；迁移报告已
     区分永久 composition、待下沉 Linux controller/driver 和必须保留的数据库迁移，未发现测试保活或在线双路径 wrapper。
-  - [ ] E2g：继续把 Linux controller 的实际 observe/apply 边界从 daemon 下沉到唯一 `photonlinux.Runtime`，
+  - [x] E2g：继续把 Linux controller 的实际 observe/apply 边界从 daemon 下沉到唯一 `photonlinux.Runtime`，
     但不预建统一 `PlatformCapabilities`/Controller 接口；公共侧保留 desired policy、调度、事件顺序与 completion commit。
     - [x] firewall backend preflight/选择、netns alias 解析、nftables/iptables driver 构造及 owned observe/plan/apply
       已整组迁入 Linux runtime。daemon 只构造 verified-derived desired state 与 owner，消费 apply result 后提交
@@ -833,8 +833,16 @@ package dependency: app -> host -> gossip -> state -> zone
     - [x] BIRD 配置文件写入、per-netns process manager、start/stop/status/exit observation 和 birdc
       configure/status/raw 已迁入 Linux runtime。daemon 保留 managed/external 决策、restart backoff 和 runtime
       summary 更新；原 BIRD manager map、client factory 与 app 私有接口均已删除，测试通过同一 runtime 注入。
-    - [ ] 按真实调用链继续处理 health probe 的 Linux 执行部分；每一刀
-      都先删除旧 app 入口再进入下一项，避免以迁移名义保留双路径或一次调用 wrapper。
+    - [x] health 的 raw ICMP socket、per-netns setns worker 与 `ip netns exec ping` fallback 已从公共
+      `pkg/health` 迁入 `internal/photonlinux/healthprobe`，由唯一 Linux runtime 初始化、注入并关闭；daemon
+      只把平台 prober 交给公共 manager。旧公共构造入口和未实际接线、语义不可靠的 UDP write prober 已删除，
+      实现级测试随 owner 迁移。target 组合、manager policy 和 completion 仍非平台执行，不能借 E2g 一并下沉。
+  - [ ] E2h：收口 health 剩余 runtime 边界：将一秒 probe tick/completion 唤醒接入公共 HostRuntime scheduler/queue，
+    Linux link/IPsec runtime 到 ProbeTarget 的组合随 link output DTO 下沉；spool、observer/control 展示分别归各自 owner。
+    不把 `health.Manager` 状态机塞入 Linux runtime，也不为过渡新增 daemon wrapper。
+    - [x] JSONL spool 的配置、并发写入、保留期裁剪和 series query 已整体迁入
+      `internal/observability/healthspool`；Observer 直接查询该 owner，daemon 只把 health snapshot 转为 Sample。
+      app 私有 `health_spool.go` 已删除，纯 spool 测试随实现迁移。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

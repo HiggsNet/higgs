@@ -6,9 +6,9 @@ import (
 	"os"
 
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/health"
 )
 
 // debugPing resolves the IPsec link targets for a peer zone and pings each one
@@ -36,7 +36,7 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	resolved := pingdebug.ResolveOptions(opts)
 	selected := pingdebug.SelectTargetsResolved(targets, string(peerZone), resolved)
 
-	prober := health.NewICMProber(nil, nil)
+	prober := healthprobe.NewICMProber(nil)
 	outcomes := pingdebug.Run(ctx, prober, selected, resolved.ProbeConfig())
 	view := pingdebug.BuildDebugView(string(peerZone), outcomes, pingdebug.DistinctPeerZones(targets), resolved.Count, resolved.Timeout)
 	return inspecttext.WritePingDebug(os.Stdout, view)

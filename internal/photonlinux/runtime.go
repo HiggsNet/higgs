@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -29,6 +30,9 @@ type Runtime struct {
 	birdProcesses     map[string]bird.ProcessManager
 	birdClientFactory func(string, time.Duration) BirdClient
 	birdMu            sync.Mutex
+	healthProber      health.Prober
+	healthFallbackMu  sync.Mutex
+	healthFallback    map[string]healthFallbackLogState
 	close             func() error
 	logger            Logger
 	closeOnce         sync.Once
@@ -50,6 +54,7 @@ type RuntimeOptions struct {
 	BirdProcess       bird.ProcessManager
 	BirdProcesses     map[string]bird.ProcessManager
 	BirdClientFactory func(string, time.Duration) BirdClient
+	HealthProber      health.Prober
 	Close             func() error
 	Logger            Logger
 }
@@ -69,7 +74,7 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 	if upstreamRoutes == nil {
 		upstreamRoutes = newExecUpstreamRouteManager()
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		ipsecDriver:       options.IPsecDriver,
 		xfrmDriver:        options.XFRMDriver,
 		firewallDriver:    options.FirewallDriver,
@@ -79,9 +84,12 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 		birdProcess:       options.BirdProcess,
 		birdProcesses:     cloneBirdProcesses(options.BirdProcesses),
 		birdClientFactory: options.BirdClientFactory,
+		healthProber:      options.HealthProber,
 		close:             options.Close,
 		logger:            options.Logger,
-	}, nil
+	}
+	runtime.initializeHealthProber()
+	return runtime, nil
 }
 
 func cloneBirdProcesses(source map[string]bird.ProcessManager) map[string]bird.ProcessManager {
@@ -134,6 +142,9 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		if closer, ok := r.healthProber.(interface{ Close() }); ok {
+			closer.Close()
+		}
 		if r.close != nil {
 			r.closeErr = r.close()
 		}

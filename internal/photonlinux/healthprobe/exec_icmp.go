@@ -1,10 +1,8 @@
-package health
+package healthprobe
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"net"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -39,10 +37,8 @@ var (
 	pingReceivedPattern  = regexp.MustCompile(`(?:^|[,\s])(\d+)\s+(?:packets?\s+)?received(?:[,\s]|$)`)
 )
 
-// NewICMProber creates an ICMP prober. The fallback argument is retained for
-// API compatibility, but ICMP failures are reported directly because UDP probe
-// requires an explicit peer listener/capability to avoid false positives.
-func NewICMProber(runner CommandRunner, _ Prober) *ICMProber {
+// NewICMProber creates the portable Linux exec-based ICMP prober.
+func NewICMProber(runner CommandRunner) *ICMProber {
 	if runner == nil {
 		runner = ExecRunner{}
 	}
@@ -208,58 +204,4 @@ func pingSourceAddress(target ProbeTarget) string {
 		return addr
 	}
 	return target.InterfaceName
-}
-
-// udpMagic is a fixed magic header for Photon UDP keepalive probes.
-var udpMagic = []byte("PHOTON-HC")
-
-// UDPProber implements Prober using UDP keepalive packets. It does not require
-// CAP_NET_RAW but requires the peer to run a Photon UDP probe listener (or any
-// UDP service that replies with ICMP port unreachable).
-type UDPProber struct {
-	runner CommandRunner
-}
-
-// NewUDPProber creates a UDP prober.
-func NewUDPProber(runner CommandRunner) *UDPProber {
-	return &UDPProber{runner: runner}
-}
-
-func (p *UDPProber) Type() string { return ProbeTypeUDP }
-
-func (p *UDPProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig) ProbeResult {
-	if !target.PeerTunnelAddr.IsValid() {
-		return ProbeResult{InstanceID: target.InstanceID, Error: "peer address missing"}
-	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = time.Second
-	}
-	// Use a UDP "probe" that just attempts to connect; if the peer doesn't
-	// respond, we treat a fast ICMP port-unreachable as "host reachable" only
-	// if we receive any ICMP. In practice, for overlay health, we use the
-	// tunnel address and rely on the existing gossip UDP socket. For the first
-	// version, we use a connect+write and measure success by absence of an
-	// immediate error.
-	addr := net.JoinHostPort(target.PeerTunnelAddr.String(), "33434")
-	conn, err := net.DialTimeout("udp", addr, timeout)
-	if err != nil {
-		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
-	}
-	defer conn.Close()
-	pkt := make([]byte, 0, len(udpMagic)+16)
-	pkt = append(pkt, udpMagic...)
-	idBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(idBytes, uint64(time.Now().UnixNano()))
-	pkt = append(pkt, idBytes...)
-	start := time.Now()
-	_ = conn.SetDeadline(start.Add(timeout))
-	if _, err := conn.Write(pkt); err != nil {
-		// A "port unreachable" ICMP is actually evidence the host is reachable
-		// at L3; but for UDP health we treat write errors as failures.
-		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
-	}
-	// We don't expect a reply; treat successful write as reachability evidence.
-	rtt := time.Since(start)
-	return ProbeResult{InstanceID: target.InstanceID, Sent: 1, Received: 1, RTT: rtt, Success: true}
 }

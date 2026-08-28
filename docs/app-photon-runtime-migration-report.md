@@ -1,6 +1,6 @@
 # `app/photon` Runtime 迁移盘点
 
-> 盘点基线：`3aa43fb`（2026-08-27）  
+> 初始盘点基线：`3aa43fb`（2026-08-27）；进度复核：2026-08-28 E2g
 > 范围：`app/photon` 下 76 个非测试 Go 文件  
 > 目标：说明每个文件当前职责、最终归属，以及 verified state、gossip runtime、checkpoint、Linux platform runtime、observability 和 presentation 之间的边界。
 
@@ -154,8 +154,8 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
-| `health_reconcile.go` | probe target、manager、事件和状态 | 算法留 `pkg/health`；Linux target/observation 进 Linux health；事件回 host |
-| `health_spool.go` | JSONL health 历史和查询 | `internal/observability/healthspool`；不属于 state/checkpoint |
+| `health_reconcile.go` | probe target、manager、事件和状态 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 已进 `internal/photonlinux/healthprobe` 并由唯一 Linux runtime 持有；app 暂留 target 组合、事件和调度 |
+| `health_spool.go` | JSONL health 历史和查询 | 已整体迁入 `internal/observability/healthspool` 并删除 app 文件；不属于 state/checkpoint |
 | `identity_bootstrap.go` | identity key/config、auto-join adoption 和 refresh | 文件处理进 config/CLI；安装和 refresh 留 state；调度进 host；旧 stateFile mutation 删除 |
 | `init.go` | root 初始化 | 公共初始化事务进 state；文件/CLI 进 photoncli |
 | `inspect_links.go` | Linux link 到 inspect input | Linux controller 输出稳定 DTO，view 进 inspect |
@@ -214,13 +214,43 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 迁移过程中不再为单个调用点增加新的 stateFile wrapper。需要过渡时只允许 detached typed DTO，并在同一任务中写明删除条件。
 
-## 5. E2f 收口复核
+## 5. E2f/E2g 收口复核
 
-当前 `app/photon` 有 74 个非测试 Go 文件，均已在本报告逐项归类；历史上已删除的
-`daemon_state_projection.go` 与 `objectpull.go` 不再作为当前文件列出。production staticcheck 已清零。
+E2f 盘点时 `app/photon` 有 74 个非测试 Go 文件；当前为 72 个。历史上已删除或迁出的
+`daemon_state_projection.go`、`objectpull.go`、`routing_upstream_routes.go` 和 `health_spool.go` 不再作为当前文件列出。
+production staticcheck 已清零。
 
 这次复核确认可以继续保留的只有三类代码：可执行程序装配和 Linux control transport、尚待下沉的 Linux
 controller/driver 实现、以及旧数据库单向迁移。后两类“仍有生产调用”不代表最终永久留在 app：例如
-`firewall_reconcile.go` 的策略输入和调度归公共 HostRuntime，nftables/iptables/netns 观测与 apply 最终进入
-`photonlinux`；`gossip_checkpoint_migration.go` 和 `runtime_state_migration.go` 则只在启动事务读取旧 schema。
+`firewall_reconcile.go` 的策略输入和调度归公共 HostRuntime，nftables/iptables/netns 观测与 apply 已进入
+`photonlinux`；BIRD process/client、upstream veth/route 以及 Linux health probe 执行也已下沉。
+`gossip_checkpoint_migration.go` 和 `runtime_state_migration.go` 则只在启动事务读取旧 schema。
 未再发现仅为测试或旧在线双路径保留的 production wrapper。
+
+### 5.1 E2g 后还留在 app 的原因
+
+本轮将原 `pkg/health` 中混入的 Linux raw socket、`setns` worker、`ip netns exec ping` fallback
+及其实现级测试整体迁入 `internal/photonlinux/healthprobe`。唯一 `photonlinux.Runtime` 在初始化时选择
+真实或注入 prober，在关闭/替换 runtime 时一并关闭 raw socket worker。daemon 不再构造、记录或关闭
+Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧入口；语义不可靠且从未真正接线的
+“UDP write 成功即健康” prober 同时删除。
+
+当前 `health_reconcile.go` 仍留 app，不是因为平台执行未迁完，而是它还混有三类尚待继续拆分的职责：
+
+1. 从 Linux link/IPsec runtime DTO 组合 probe target；这要跟 `link_outputs.go` 和 Linux runtime state model 一起迁；
+2. `health.Manager` 的一秒异步 tick、completion coalesce 和 daemon event loop 接线；调度应归公共 HostRuntime；
+3. control/observer 输出；分别应归 inspect 和 observer。spool 文件、裁剪和 series query 已整体进入
+   `internal/observability/healthspool`，daemon 只转换公开的 health snapshot DTO。
+
+### 5.2 测试是否可以迁走
+
+测试跟随被测 owner，而不是为了减少 `app/photon` 文件数整批搬迁：
+
+- raw ICMP、setns、exec ping 的 700 多行实现级测试已随代码迁入 `internal/photonlinux/healthprobe`；
+- health spool 的文件、裁剪、packet count 与 rotate series 测试已迁入 `internal/observability/healthspool`；
+- firewall/BIRD/upstream 等平台实现测试应继续随实现留在 `internal/photonlinux`；
+- `app/photon` 的 CLI flag、Unix control、composition、完整 daemon 顺序和 root smoke 测试仍属于 executable 集成边界，不能迁成底层包单测；
+- 大量使用 `stateFile` fixture 的测试会在 typed owner 输入落地时逐批迁移或删除，不能先搬走测试再保留生产聚合状态。
+
+进入 F 前优先继续拆 `health_reconcile.go` 的公共调度、`link_outputs.go` 的 Linux DTO 组合，以及仍依赖
+聚合 `stateFile` 的 daemon/composition 入口。CLI/展示文件数量较多，但不应阻塞 runtime/state 唯一真相收口。

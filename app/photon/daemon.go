@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -19,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -42,8 +41,9 @@ type DaemonService struct {
 	linuxRuntime           *photonlinux.Runtime
 	ipsecDNSResolver       ipsec.DNSResolver
 	health                 *health.Manager
+	healthRuntimeManaged   bool
 	healthUpdates          <-chan struct{}
-	healthSpoolMu          sync.Mutex
+	healthSpool            *healthspool.Store
 	observerHub            *observer.Hub
 	Log                    *appLogger
 	LogLimiter             *repeatedLogLimiter
@@ -73,7 +73,6 @@ const (
 	defaultReconcileOperationTimeout                 = 20 * time.Second
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
-	rawICMPFallbackLogInterval                       = 10 * time.Minute
 	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
 	defaultPeerObservabilityTTL                      = 24 * time.Hour
 	defaultPeerObservabilityLimit                    = 2048
@@ -171,6 +170,10 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		configureValidation(state.Network)
 	}
 	peerObservability := observability.NewPeerObservabilityStore(defaultPeerObservabilityLimit, defaultPeerObservabilityTTL)
+	spoolConfig := healthspool.Config{}
+	if rt != nil && rt.Config != nil {
+		spoolConfig = rt.Config.Health.spoolConfig()
+	}
 	syncRuntime := newSyncRuntime(config, nil, rt)
 	syncRuntime.Observability = peerObservability
 	d := &DaemonService{
@@ -182,6 +185,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        stateStore,
 		PeerObservability: peerObservability,
+		healthSpool:       healthspool.New(spoolConfig),
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
 		Now: d.Sync.now,
@@ -192,7 +196,6 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
-	d.configureHealthManager()
 	return d
 }
 
@@ -222,6 +225,10 @@ func openDaemonService(rt *Runtime, interval time.Duration) (*DaemonService, *co
 // When health probing is disabled (the default), d.health remains nil and all
 // health-related operations become no-ops.
 func (d *DaemonService) configureHealthManager() {
+	if d != nil {
+		d.health = nil
+		d.healthRuntimeManaged = false
+	}
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return
 	}
@@ -229,40 +236,11 @@ func (d *DaemonService) configureHealthManager() {
 	if !cfg.Enabled {
 		return
 	}
-	// Prefer the in-process raw-ICMP prober. It keeps one locked OS thread per
-	// network namespace and reuses raw sockets, avoiding the steady-state
-	// fork/exec and mount work of `ip netns exec ping`. When the service lacks
-	// the required capabilities it automatically falls back to the portable
-	// exec prober.
-	fallbackLogLimiter := newRepeatedLogLimiter(rawICMPFallbackLogInterval)
-	reportFallback := func(target health.ProbeTarget, rawErr error) {
-		netns := strings.TrimSpace(target.NetNS)
-		if netns == "" {
-			netns = "host"
-		}
-		key := netns
-		if rawErr != nil {
-			key += "\x00" + rawErr.Error()
-		}
-		suppressed, ok := fallbackLogLimiter.Allow(key, time.Now())
-		if !ok {
-			return
-		}
-		fields := map[string]any{
-			"netns":     netns,
-			"interface": target.InterfaceName,
-			"fallback":  "exec_ping",
-			"error":     rawErr,
-		}
-		if suppressed > 0 {
-			fields["suppressed"] = suppressed
-		}
-		d.logWarn("health", "raw_icmp_fallback", fields)
+	if d.linuxRuntime == nil {
+		return
 	}
-	d.health = newHealthManager(cfg, health.NewRawICMProber(
-		health.NewICMProber(nil, health.NewUDPProber(nil)),
-		reportFallback,
-	))
+	d.health = newHealthManager(cfg, d.linuxRuntime.HealthProber())
+	d.healthRuntimeManaged = d.health != nil
 }
 
 func (d *DaemonService) Run(ctx context.Context) error {
@@ -2174,6 +2152,9 @@ func (d *DaemonService) installLinuxRuntime(runtime *photonlinux.Runtime) error 
 		return err
 	}
 	d.linuxRuntime = runtime
+	if d.health == nil || d.healthRuntimeManaged {
+		d.configureHealthManager()
+	}
 	return nil
 }
 

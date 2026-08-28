@@ -4,8 +4,21 @@ import (
 	"context"
 	"testing"
 
+	"github.com/HiggsNet/photon/pkg/health"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+type closeTrackingHealthProber struct {
+	closed int
+}
+
+func (*closeTrackingHealthProber) Type() string { return health.ProbeTypeICMP }
+
+func (*closeTrackingHealthProber) Probe(context.Context, health.ProbeTarget, health.ProbeConfig) health.ProbeResult {
+	return health.ProbeResult{}
+}
+
+func (p *closeTrackingHealthProber) Close() { p.closed++ }
 
 type lifecycleDriver struct {
 	transportipsec.DryRunDriver
@@ -39,8 +52,9 @@ func TestRuntimeOwnsIPsecCleanupDependencies(t *testing.T) {
 
 func TestRuntimeClosesOwnedDependenciesOnce(t *testing.T) {
 	closed := 0
+	prober := &closeTrackingHealthProber{}
 	driver := &transportipsec.DryRunDriver{}
-	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver, Close: func() error {
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver, HealthProber: prober, Close: func() error {
 		closed++
 		return nil
 	}})
@@ -53,6 +67,24 @@ func TestRuntimeClosesOwnedDependenciesOnce(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("close calls = %d, want 1", closed)
 	}
+	if prober.closed != 1 {
+		t.Fatalf("health prober close calls = %d, want 1", prober.closed)
+	}
+}
+
+func TestRuntimeOwnsHealthProber(t *testing.T) {
+	driver := &transportipsec.DryRunDriver{}
+	injected := &closeTrackingHealthProber{}
+	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver, HealthProber: injected})
+	if runtime.HealthProber() != injected {
+		t.Fatal("runtime did not expose its injected health prober")
+	}
+	defaultRuntime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
+	if defaultRuntime.HealthProber() == nil {
+		t.Fatal("runtime did not construct the default Linux health prober")
+	}
+	_ = runtime.Close()
+	_ = defaultRuntime.Close()
 }
 
 func TestRuntimeOwnsIPsecObservationAndLifecycleSubscription(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
@@ -446,7 +447,7 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 		return nil, observer.Errorf(http.StatusNotFound, "health data not found for link %s", linkFilter)
 	}
 	return inspecthttp.HealthResponse{
-		Datasource: healthDatasourceInfo(observerAppConfig(d)),
+		Datasource: daemonHealthDatasource(d),
 		Links:      contextualLinks,
 	}, nil
 }
@@ -489,24 +490,34 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	result, err := queryHealthSpoolSeries(config, linkID, healthSeriesQuery{
+	if p.daemon == nil || p.daemon.healthSpool == nil {
+		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
+	}
+	result, err := p.daemon.healthSpool.Query(linkID, healthspool.SeriesQuery{
 		Metric:    query["metric"],
 		ProbeRole: query["probe_role"],
 		Range:     rng,
 		Step:      step,
 		Now:       observerNow(p.daemon),
 	})
-	if errors.Is(err, errHealthSpoolNotConfigured) {
+	if errors.Is(err, healthspool.ErrNotConfigured) {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
 	}
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
 	return inspecthttp.HealthSeriesResponse{
-		Datasource: healthDatasourceInfo(config),
+		Datasource: p.daemon.healthSpool.Config().Datasource(),
 		LinkID:     linkID,
 		Series:     result,
 	}, nil
+}
+
+func daemonHealthDatasource(d *DaemonService) map[string]any {
+	if d == nil || d.healthSpool == nil {
+		return healthspool.Config{}.Datasource()
+	}
+	return d.healthSpool.Config().Datasource()
 }
 
 func observerAppConfig(d *DaemonService) *appConfig {

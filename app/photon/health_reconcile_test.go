@@ -202,6 +202,9 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 			App: &Runtime{Config: &appConfig{Health: cfg}},
 		},
 	}
+	driver := &ipsec.DryRunDriver{}
+	d.linuxRuntime = newTestLinuxRuntime(driver, driver)
+	t.Cleanup(func() { _ = d.closeLinuxRuntime() })
 	d.configureHealthManager()
 	if d.health == nil {
 		t.Fatal("health manager was not configured")
@@ -227,7 +230,7 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	}
 }
 
-func TestHealthStatusAndSpoolUsePacketCounts(t *testing.T) {
+func TestHealthStatusAndMetricsUsePacketCounts(t *testing.T) {
 	now := time.Unix(1500, 0)
 	cfg := defaultHealthConfig()
 	cfg.MetricsEnabled = true
@@ -271,74 +274,6 @@ func TestHealthStatusAndSpoolUsePacketCounts(t *testing.T) {
 			t.Fatalf("OpenMetrics missing %q:\n%s", want, metrics)
 		}
 	}
-	if err := d.appendHealthSpool(now, links); err != nil {
-		t.Fatalf("appendHealthSpool: %v", err)
-	}
-	samples, err := readAllHealthSpoolSamples(healthSpoolFile(d.Sync.App.Config))
-	if err != nil {
-		t.Fatalf("readAllHealthSpoolSamples: %v", err)
-	}
-	if len(samples) != 1 || samples[0].Sent != 3 || samples[0].Received != 2 || samples[0].Lost != 1 || samples[0].LossRatioPct != 33 {
-		t.Fatalf("health spool = %+v, want packet counts 3/2/1 and 33%% loss", samples)
-	}
-}
-
-func TestHealthLocalSpoolQuerySeries(t *testing.T) {
-	cfg := defaultHealthConfig()
-	cfg.MetricsEnabled = true
-	cfg.LocalSpoolPath = t.TempDir()
-	cfg.LocalSpoolMaxAge = time.Hour
-	appCfg := &appConfig{Health: cfg}
-	d := &DaemonService{
-		Sync: &SyncRuntime{
-			App: &Runtime{Config: appCfg},
-		},
-	}
-	now := time.Unix(2000, 0)
-	if err := d.appendHealthSpool(now.Add(-10*time.Minute), []healthLinkJSON{{
-		InstanceID: "link-1",
-		State:      "healthy",
-		ProbeType:  "icmp",
-		LastRTTMs:  10,
-		LossRatio:  0,
-		JitterMs:   1,
-		Sent:       3,
-		Received:   3,
-	}}); err != nil {
-		t.Fatalf("appendHealthSpool old: %v", err)
-	}
-	if err := d.appendHealthSpool(now, []healthLinkJSON{{
-		InstanceID: "link-1",
-		State:      "degraded",
-		ProbeType:  "icmp",
-		LastRTTMs:  20,
-		LossRatio:  25,
-		JitterMs:   2,
-		Sent:       4,
-		Received:   3,
-		Lost:       1,
-	}}); err != nil {
-		t.Fatalf("appendHealthSpool current: %v", err)
-	}
-
-	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
-		Metric: "rtt",
-		Range:  30 * time.Minute,
-		Step:   time.Minute,
-		Now:    now,
-	})
-	if err != nil {
-		t.Fatalf("queryHealthSpoolSeries: %v", err)
-	}
-	if series.Metric != "rtt" || series.Unit != "ms" {
-		t.Fatalf("series metadata = %s/%s, want rtt/ms", series.Metric, series.Unit)
-	}
-	if len(series.Points) != 2 {
-		t.Fatalf("points = %#v, want 2 points", series.Points)
-	}
-	if got := series.Points[1].Value; got != 20 {
-		t.Fatalf("latest rtt point = %v, want 20", got)
-	}
 }
 
 type packetCountHealthProber struct{}
@@ -355,60 +290,3 @@ func (packetCountHealthProber) Probe(_ context.Context, target health.ProbeTarge
 }
 
 func (packetCountHealthProber) Type() string { return health.ProbeTypeICMP }
-
-func TestHealthLocalSpoolQueryKeepsRotateProbeLines(t *testing.T) {
-	cfg := defaultHealthConfig()
-	cfg.MetricsEnabled = true
-	cfg.LocalSpoolPath = t.TempDir()
-	cfg.LocalSpoolMaxAge = time.Hour
-	appCfg := &appConfig{Health: cfg}
-	now := time.Unix(4000, 0)
-	d := &DaemonService{
-		Sync: &SyncRuntime{
-			App: &Runtime{Config: appCfg},
-		},
-	}
-	if err := d.appendHealthSpool(now, []healthLinkJSON{
-		{
-			ProbeID:    "link-1#old",
-			InstanceID: "link-1",
-			ProbeRole:  "old",
-			State:      "healthy",
-			ProbeType:  "icmp",
-			LastRTTMs:  30,
-		},
-		{
-			ProbeID:    "link-1#staged",
-			InstanceID: "link-1",
-			ProbeRole:  "staged",
-			State:      "healthy",
-			ProbeType:  "icmp",
-			LastRTTMs:  12,
-		},
-	}); err != nil {
-		t.Fatalf("appendHealthSpool: %v", err)
-	}
-
-	series, err := queryHealthSpoolSeries(appCfg, "link-1", healthSeriesQuery{
-		Metric: "rtt",
-		Range:  time.Minute,
-		Step:   time.Minute,
-		Now:    now,
-	})
-	if err != nil {
-		t.Fatalf("queryHealthSpoolSeries: %v", err)
-	}
-	if len(series.Lines) != 2 {
-		t.Fatalf("lines = %#v, want old and staged", series.Lines)
-	}
-	got := map[string]float64{}
-	for _, line := range series.Lines {
-		if len(line.Points) != 1 {
-			t.Fatalf("line %#v points = %d, want 1", line, len(line.Points))
-		}
-		got[line.ProbeRole] = line.Points[0].Value
-	}
-	if got["old"] != 30 || got["staged"] != 12 {
-		t.Fatalf("line values = %#v, want old=30 staged=12", got)
-	}
-}

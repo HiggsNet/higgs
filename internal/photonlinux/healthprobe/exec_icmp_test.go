@@ -1,4 +1,4 @@
-package health
+package healthprobe
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 
 func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 	runner := &recordingCommandRunner{}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
 		NetNS:           "photontesth2",
@@ -55,7 +55,7 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 		out: []byte("connect: Network is unreachable\n"),
 		err: errors.New("exit status 2"),
 	}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{
 		InstanceID:     "link-1",
 		NetNS:          "photontesth2",
@@ -86,7 +86,7 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 			{},
 		},
 	}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{
 		InstanceID:      "link-1",
 		NetNS:           "photontesth2",
@@ -129,7 +129,7 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 64 bytes from 192.0.2.2: icmp_seq=3 ttl=64 time=3.75 ms
 3 packets transmitted, 3 received, 0% packet loss
 `)}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{
 		InstanceID:     "link-1",
 		NetNS:          "photontesth2",
@@ -157,7 +157,7 @@ func TestICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 		out: []byte("3 packets transmitted, 0 received, 100% packet loss, time 2040ms\n"),
 		err: errors.New("exit status 1"),
 	}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{InstanceID: "link-1", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"), State: "up"}
 
 	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
@@ -176,7 +176,7 @@ func TestICMProberBurstRequiresMajorityOfReplies(t *testing.T) {
 `),
 		err: errors.New("exit status 1"),
 	}
-	prober := NewICMProber(runner, nil)
+	prober := NewICMProber(runner)
 	target := ProbeTarget{InstanceID: "link-1", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"), State: "up"}
 
 	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
@@ -211,7 +211,7 @@ func TestICMProberReportsPacketCountsForEveryBurstOutcome(t *testing.T) {
 				runErr = errors.New("exit status 1")
 			}
 			runner := &recordingCommandRunner{out: []byte(output.String()), err: runErr}
-			prober := NewICMProber(runner, nil)
+			prober := NewICMProber(runner)
 			result := prober.Probe(context.Background(), ProbeTarget{
 				InstanceID:     "link-1",
 				PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),

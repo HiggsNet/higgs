@@ -9,6 +9,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -204,10 +205,31 @@ func (d *DaemonService) handleHealthUpdate(now time.Time) {
 	if d == nil || d.health == nil {
 		return
 	}
-	if err := d.appendHealthSpool(now, d.healthStatusResponse()); err != nil && !errors.Is(err, errHealthSpoolNotConfigured) {
+	if err := d.healthSpool.Append(now, healthSpoolSamples(d.healthStatusResponse())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
 		d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 	}
 	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
+}
+
+func healthSpoolSamples(links []healthLinkJSON) []healthspool.Sample {
+	samples := make([]healthspool.Sample, 0, len(links))
+	for _, link := range links {
+		samples = append(samples, healthspool.Sample{
+			ProbeID:       link.ProbeID,
+			InstanceID:    link.InstanceID,
+			ProbeRole:     link.ProbeRole,
+			InterfaceName: link.InterfaceName,
+			State:         link.State,
+			ProbeType:     link.ProbeType,
+			RTTMs:         link.LastRTTMs,
+			LossRatioPct:  link.LossRatio,
+			JitterMs:      link.JitterMs,
+			Sent:          link.Sent,
+			Received:      link.Received,
+			Lost:          link.Lost,
+		})
+	}
+	return samples
 }
 
 // healthStatusResponse builds the control API response for `health_status`.

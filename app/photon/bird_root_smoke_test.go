@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -331,7 +332,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 		// This smoke deliberately has no exec fallback: a pass proves raw ICMP
 		// and setns both worked in the real named network namespace. Capability
 		// fallback is covered independently by RawICMProber unit tests.
-		health.NewRawICMProber(nil),
+		healthprobe.NewRawICMProber(nil),
 	)
 	manager.UpsertTarget(health.ProbeTarget{
 		ProbeID:         healthProbeID("link-1", "staged"),
@@ -463,7 +464,7 @@ func healthSmokePacketLossRates(t *testing.T, ctx context.Context, sourceNetNS, 
 				}
 			}
 
-			rawProber := health.NewRawICMProber(nil)
+			rawProber := healthprobe.NewRawICMProber(nil)
 			t.Cleanup(rawProber.Close)
 			probeManager := health.NewManager(
 				health.ProbeConfig{Interval: -time.Second, Timeout: 250 * time.Millisecond, Burst: 10, LossWindow: 20, MaxConcurrent: 1},

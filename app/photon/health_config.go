@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/pkg/health"
 )
 
@@ -27,6 +28,14 @@ type healthConfig struct {
 	RemoteWriteQueue   int
 	LocalSpoolPath     string
 	LocalSpoolMaxAge   time.Duration
+}
+
+func (c healthConfig) spoolConfig() healthspool.Config {
+	return healthspool.Config{
+		Enabled: c.MetricsEnabled,
+		Path:    c.LocalSpoolPath,
+		MaxAge:  c.LocalSpoolMaxAge,
+	}
 }
 
 // healthConfigYAML is the YAML representation of healthConfig.

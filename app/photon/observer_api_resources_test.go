@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -525,16 +526,17 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	cfg.LocalSpoolPath = t.TempDir()
 	cfg.LocalSpoolMaxAge = time.Hour
 	srv.daemon.Sync.App.Config.Health = cfg
+	srv.daemon.healthSpool = healthspool.New(cfg.spoolConfig())
 	now := time.Unix(3000, 0)
 	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	if err := srv.daemon.appendHealthSpool(now, []healthLinkJSON{{
+	if err := srv.daemon.healthSpool.Append(now, healthSpoolSamples([]healthLinkJSON{{
 		InstanceID: "link-1",
 		State:      "healthy",
 		ProbeType:  "icmp",
 		LastRTTMs:  42,
 		LossRatio:  0,
 		JitterMs:   3,
-	}}); err != nil {
+	}})); err != nil {
 		t.Fatalf("appendHealthSpool: %v", err)
 	}
 

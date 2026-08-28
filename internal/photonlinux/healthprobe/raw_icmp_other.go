@@ -1,6 +1,6 @@
 //go:build !linux
 
-package health
+package healthprobe
 
 // NewRawICMProber falls back to the portable implementation on platforms that
 // do not expose Linux network namespaces and raw ICMP socket primitives.

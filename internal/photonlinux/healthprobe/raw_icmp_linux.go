@@ -1,6 +1,6 @@
 //go:build linux
 
-package health
+package healthprobe
 
 import (
 	"context"
