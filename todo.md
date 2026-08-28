@@ -853,12 +853,19 @@ package dependency: app -> host -> gossip -> state -> zone
     - [x] 增加同一写入边界内直接克隆 common view 与 Linux runtime 的内部读取，返回两个真实 owner 而不构造第三套状态；
       IPsec cleanup、revoked purge、Endpoint ACL、state GC、IPsec error completion 与 Firewall completion 已改用该边界。
       同时删除仅服务聚合状态的 IPsec cleanup wrappers，join key 恢复与 recovery revocation 统计直接读取 common verified state。
-    - [ ] 将 IPsec、routing、firewall 主 reconcile planner 输入和 `publishLocalProtocols` 从聚合 Snapshot 改为明确的
+    - [x] 将 IPsec、routing、firewall 主 reconcile planner 输入和 `publishLocalProtocols` 从聚合 Snapshot 改为明确的
       common verified/checkpoint 与 Linux runtime 输入；随后删除 daemon `currentState()` 以及仅剩 hook/composition 所需的完整 Snapshot。
+      IPsec 主 reconcile 已完成：desired link、contact-point quality、peer cleanup/revocation、transport key、link instance、
+      diagnostic prefix 与 completion commit 均直接读取各自 owner，主执行路径及其 planner helper 不再接收 `stateFile`。
+      Routing 主 reconcile 也已完成：authorized routes/auto-announce 刷新只读取 common verified，BIRD instance、IPsec link output、
+      rotation metric 与 completion 只读取和提交 Linux runtime；剩余聚合读取限于 control/debug 与 hook/composition。
       Firewall 主 reconcile 已完成：planner 直接接收 `VerifiedState` 与 `linuxRuntimeState`，删除不读取参数的
       `firewallCharonPorts` wrapper，并把端口 record 的时间显式作为输入，不再依赖可变全局测试时钟。
       `publishLocalProtocols` 也已完成：endpoint、IPsec key/port、routing/netns 与 admission 规划分别读取 verified
       和 Linux runtime owner，启动发布不再构造聚合 Snapshot；相关 helper 与测试同步改为 owner 参数。
+      随后 sync/peer/zone/BIRD control read model、配置 reload、手动 IPsec port rotate 与 state-changed hook 也已切走，
+      production `currentState()` 已删除；线上 daemon/controller/composition 不再调用聚合 `Snapshot()`，完整组合读取仅剩
+      `state.go` 的离线 CLI/旧数据库读取入口，测试断言 helper 只存在于 `_test.go`。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

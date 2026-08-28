@@ -187,7 +187,7 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	config := syncConfigFromAppConfig(appConfig, state)
+	config := syncConfigFromAppConfig(appConfig, verifiedStateForTest(state))
 	service := newTestDaemonService(rt, state, config, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)

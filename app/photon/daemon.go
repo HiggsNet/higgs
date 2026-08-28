@@ -62,7 +62,7 @@ type DaemonService struct {
 }
 
 type DaemonHooks struct {
-	OnStateChanged   func(*stateFile)
+	OnStateChanged   func()
 	OnReconcileFlush func(layer string)
 }
 
@@ -165,10 +165,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
 	}
-	state, _ := stateStore.Snapshot()
-	if state != nil && state.Network != nil && state.Network.RecordVerifier == nil {
-		configureValidation(state.Network)
-	}
+	_, runtime := stateStore.readCommonAndRuntime()
 	peerObservability := observability.NewPeerObservabilityStore(defaultPeerObservabilityLimit, defaultPeerObservabilityTTL)
 	spoolConfig := healthspool.Config{}
 	if rt != nil && rt.Config != nil {
@@ -190,8 +187,8 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
 		Now: d.Sync.now,
 	})
-	if state != nil && state.RoutingReconcile != nil {
-		d.routingLastRunUnix.Store(state.RoutingReconcile.LastRunUnix)
+	if runtime != nil && runtime.RoutingReconcile != nil {
+		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
@@ -212,12 +209,12 @@ func openDaemonService(rt *Runtime, interval time.Duration) (*DaemonService, *co
 		_ = boltStore.Close()
 		return nil, nil, err
 	}
-	state, _ := stateStore.Snapshot()
-	config, err := rt.SyncConfig(state)
-	if err != nil {
+	common := startup.Common.ReadView()
+	if common.State == nil {
 		_ = boltStore.Close()
-		return nil, nil, err
+		return nil, nil, errors.New("daemon common state is not initialized")
 	}
+	config := syncConfigFromAppConfig(rt.Config, common.State)
 	return newDaemonServiceWithStore(rt, stateStore, config, interval), boltStore, nil
 }
 
@@ -247,7 +244,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.Config == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if initialState, _ := d.StateStore.Snapshot(); initialState == nil {
+	if initial := d.StateStore.common.ReadView(); initial.State == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
 	if d.linuxRuntime == nil {
@@ -702,31 +699,39 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		records := inspect.BuildRecordsDebug(inspect.RecordsDebugInput{Network: network, Path: path})
 		writeControlResponse(conn, controlResponse{OK: true, Records: &records})
 	case "sync_view":
-		state := d.currentState()
-		if state == nil {
+		common, _ := d.StateStore.readCommonAndRuntime()
+		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := buildSyncStatusView(state, d.Sync.Config, d.Sync.now(), request.Verbose)
+		view := buildSyncStatusView(common.State.Network, syncPeerReadView(common.Gossip), d.Sync.Config, d.Sync.now(), request.Verbose)
 		writeControlResponse(conn, controlResponse{OK: true, SyncStatus: &view})
 	case "peer_debug":
-		state := d.currentState()
-		view, err := buildDebugPeerView(state, d.Sync.Config, request.Zone, d.Sync.now())
+		common, _ := d.StateStore.readCommonAndRuntime()
+		if common.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		view, err := buildDebugPeerView(common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), d.Sync.Config, request.Zone, d.Sync.now())
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, PeerDebug: &view})
 	case "zone_debug":
-		state := d.currentState()
+		common := d.StateStore.common.ReadView()
+		if common.State == nil || common.State.Network == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
 		path := zone.ZonePath(request.Zone)
-		debugView, err := buildDebugZoneView(state, path, d.Sync.now())
+		debugView, err := buildDebugZoneView(common.State.Network, path, d.Sync.now())
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
 		detail := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path: path, State: state.Network.Zones[path], Network: state.Network, Now: d.Sync.now(), IncludeHistory: request.History > 0,
+			Path: path, State: common.State.Network.Zones[path], Network: common.State.Network, Now: d.Sync.now(), IncludeHistory: request.History > 0,
 		})
 		writeControlResponse(conn, controlResponse{OK: true, ZoneDebug: &debugView, ZoneDetail: &detail})
 	case "verify_chain":
@@ -1284,16 +1289,11 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
 		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
 	}
-	latest := d.currentState()
-	if latest == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
 		return errors.New("daemon state is not initialized")
 	}
-	d.StateStore.mu.RLock()
-	currentIdentityKeyPath := ""
-	if d.StateStore.runtime != nil {
-		currentIdentityKeyPath = d.StateStore.runtime.IdentityKeyPath
-	}
-	d.StateStore.mu.RUnlock()
+	currentIdentityKeyPath := runtime.IdentityKeyPath
 	requestedIdentityKeyPath := config.Identity.KeyPath
 	if requestedIdentityKeyPath != "" {
 		requestedIdentityKeyPath, err = canonicalIdentityKeyPath(requestedIdentityKeyPath)
@@ -1304,7 +1304,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if currentIdentityKeyPath != "" && requestedIdentityKeyPath != "" && requestedIdentityKeyPath != currentIdentityKeyPath {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
 	}
-	syncConfig := syncConfigFromAppConfig(config, latest)
+	syncConfig := syncConfigFromAppConfig(config, common.State)
 	nextLogger := newAppLogger(syncConfig)
 	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, config.Netns.Names, nextLogger)
 	if err != nil {
@@ -1666,8 +1666,12 @@ func recordMutationVersion(result *recordMutationResult) uint64 {
 }
 
 func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
-	state, revision := d.StateStore.Snapshot()
-	record, portRuntime, result, err := planLocalIPsecPortRotation(d.Sync.App.Config, state, d.Sync.now())
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
+		return nil, errors.New("daemon state is not initialized")
+	}
+	revision := uint64(common.Revision)
+	record, portRuntime, result, err := planLocalIPsecPortRotation(d.Sync.App.Config, common.State, runtime, d.Sync.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1675,10 +1679,9 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 	if err != nil {
 		return nil, err
 	}
-	runtime := linuxRuntimeStateFromLegacy(state)
 	runtime.IPsecPortRecord = portRuntime
 	committed, err := d.StateStore.publishLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
-		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: state.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
+		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
 	}, runtime, d.Sync.now())
 	if err != nil {
 		return nil, err
@@ -1687,14 +1690,6 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 		d.notifyStateChanged()
 	}
 	return result, nil
-}
-
-func (d *DaemonService) currentState() *stateFile {
-	if d == nil || d.StateStore == nil {
-		return nil
-	}
-	state, _ := d.StateStore.Snapshot()
-	return state
 }
 
 func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
@@ -1711,8 +1706,7 @@ func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
 
 func (d *DaemonService) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
-		state, _ := d.StateStore.Snapshot()
-		d.Hooks.OnStateChanged(state)
+		d.Hooks.OnStateChanged()
 	}
 	// Phase 6.7: notify the read-only observer so it can push SSE events.
 	d.notifyObserver("state_changed", nil)

@@ -294,7 +294,7 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	now := time.Unix(2000, 0)
 
 	// Before revocation: no revoked peers.
-	revoked := collectRevokedPeerZones(state, now)
+	revoked := collectRevokedPeerZones(state.Network, state.LinkInstances, state.SyncPeers, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked zones, got %d", len(revoked))
 	}
@@ -307,7 +307,7 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	state.SyncPeers["node-b.catofes."] = syncPeerState{}
 
 	// Still no revoked zones.
-	revoked = collectRevokedPeerZones(state, now)
+	revoked = collectRevokedPeerZones(state.Network, state.LinkInstances, state.SyncPeers, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked zones before revocation, got %d", len(revoked))
 	}
@@ -316,7 +316,7 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
 
 	// Now node-b should be in the revoked set (from both LinkInstances and SyncPeers).
-	revoked = collectRevokedPeerZones(state, now)
+	revoked = collectRevokedPeerZones(state.Network, state.LinkInstances, state.SyncPeers, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. in revoked set, got %v", revoked)
 	}
@@ -485,7 +485,7 @@ func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
 	state.SyncPeers["node-b.catofes."] = syncPeerState{}
 
 	// Before revocation: no revoked peers.
-	revoked := revokedLinkPeers(state, now)
+	revoked := revokedLinkPeers(state.Network, state.LinkInstances, state.SyncPeers, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked, got %d", len(revoked))
 	}
@@ -494,7 +494,7 @@ func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
 	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", catofesPriv, now)
 
 	// After revocation: node-b should be in revoked set even without LinkInstance.
-	revoked = revokedLinkPeers(state, now)
+	revoked = revokedLinkPeers(state.Network, state.LinkInstances, state.SyncPeers, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. in revoked set from SyncPeers, got %v", revoked)
 	}

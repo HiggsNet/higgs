@@ -195,7 +195,7 @@ func recoveryImportZone(input string, direct bool) error {
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, &stateFile{ManagedZone: view.State.ManagedZone})
+	config := syncConfigFromAppConfig(rt.Config, view.State)
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
 	imported, err := startup.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
@@ -268,7 +268,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, &stateFile{ManagedZone: view.State.ManagedZone})
+	config := syncConfigFromAppConfig(rt.Config, view.State)
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
 

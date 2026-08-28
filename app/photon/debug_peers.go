@@ -47,7 +47,7 @@ func showPeers(filter string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteGossipPeers(os.Stdout, buildGossipPeerViews(state, config, rt.Now()), filter, verbose)
+	return inspecttext.WriteGossipPeers(os.Stdout, buildGossipPeerViews(state.ManagedZone, state.Network, state.SyncPeers, config, rt.Now()), filter, verbose)
 }
 
 // writeDebugPeers writes the peer status table to w. It is separated from

@@ -34,40 +34,40 @@ func debugPeer(peerID string) error {
 		return err
 	}
 	now := rt.Now()
-	view, err := buildDebugPeerView(state, config, peerID, now)
+	view, err := buildDebugPeerView(state.ManagedZone, state.Network, state.SyncPeers, config, peerID, now)
 	if err != nil {
 		return err
 	}
 	return inspecttext.WritePeerDebug(os.Stdout, view)
 }
 
-func buildDebugPeerView(state *stateFile, config *syncConfigFile, peerID string, now time.Time) (inspect.PeerDebugView, error) {
-	if state == nil {
-		return inspect.PeerDebugView{}, fmt.Errorf("state is nil")
+func buildDebugPeerView(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, peerID string, now time.Time) (inspect.PeerDebugView, error) {
+	if network == nil {
+		return inspect.PeerDebugView{}, fmt.Errorf("network is nil")
 	}
-	if !inspect.PeerKnown(inspectPeerSetInput(state.ManagedZone, state.Network, state.SyncPeers, config, now), peerID) {
+	if !inspect.PeerKnown(inspectPeerSetInput(managedZone, network, peers, config, now), peerID) {
 		return inspect.PeerDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
 	}
-	return buildGossipPeerView(state, config, peerID, now), nil
+	return buildGossipPeerView(network, peers, config, peerID, now), nil
 }
 
-func buildGossipPeerViews(state *stateFile, config *syncConfigFile, now time.Time) []inspect.PeerDebugView {
-	if state == nil {
+func buildGossipPeerViews(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time) []inspect.PeerDebugView {
+	if network == nil {
 		return nil
 	}
-	peerIDs := inspect.BuildPeerIDs(inspectPeerSetInput(state.ManagedZone, state.Network, state.SyncPeers, config, now))
+	peerIDs := inspect.BuildPeerIDs(inspectPeerSetInput(managedZone, network, peers, config, now))
 	views := make([]inspect.PeerDebugView, 0, len(peerIDs))
 	for _, peerID := range peerIDs {
-		views = append(views, buildGossipPeerView(state, config, peerID, now))
+		views = append(views, buildGossipPeerView(network, peers, config, peerID, now))
 	}
 	return views
 }
 
-func buildGossipPeerView(state *stateFile, config *syncConfigFile, peerID string, now time.Time) inspect.PeerDebugView {
+func buildGossipPeerView(network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, peerID string, now time.Time) inspect.PeerDebugView {
 	known := configuredKnownPeers(config)
-	peerState := state.SyncPeers[peerID]
+	peerState := peers[peerID]
 	source, configuredAddr := gossipPeerSource(config, peerID, peerState)
-	endpoints := inspectPeerEndpoints(peerID, peerState, observability.PeerDiagnostics{}, config, state.Network, now)
+	endpoints := inspectPeerEndpoints(peerID, peerState, observability.PeerDiagnostics{}, config, network, now)
 	resolved := "-"
 	if addr := known[peerID]; addr != nil {
 		resolved = addr.String()

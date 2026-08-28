@@ -323,7 +323,7 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	}
 
 	notifications := 0
-	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	service.Hooks.OnStateChanged = func() { notifications++ }
 	session.State = SyncSessionCompleted
 	service.hostRuntime.Gossip.SetSession(session.PeerID, session)
 	service.completeSyncSessionAfterPeerState(session, changed)
@@ -535,7 +535,7 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 	_, _ = session.OnEvent(&ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Err: errors.New("tcp unavailable")}, now)
 	service.hostRuntime.Gossip.SetSession(peerID, session)
 	notifications := 0
-	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	service.Hooks.OnStateChanged = func() { notifications++ }
 	beforeRev := service.StateStore.Meta().Revision
 
 	chunkSize := len(data) / 2

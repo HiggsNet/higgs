@@ -264,7 +264,8 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。
 3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
 4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
-   state GC、reconcile completion 以及 Firewall 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
-   本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner。IPsec/routing 主 reconcile planner、
-   少量 control/hook 及只读 CLI 仍依赖聚合形状，这是当前主线。
+   state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
+   本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
+   在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
+   聚合 `Snapshot()` 目前只剩 `state.go` 的离线 CLI/旧数据库读取入口；下一步是逐项迁移只读 CLI，再删除组合 view 与旧 loader。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。

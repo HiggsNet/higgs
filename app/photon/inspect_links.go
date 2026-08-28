@@ -7,6 +7,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -165,12 +166,15 @@ func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.Desire
 	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
 		Now:           rt.Now(),
 		DNSResolver:   net.DefaultResolver,
-		ExcludedPeers: peerLifecycleExcludedPeers(state, rt.Now(), rt.Config.PeerLifecycle),
+		ExcludedPeers: peerLifecycleExcludedPeers(state.PeerCleanups, state.SyncPeers, rt.Now(), rt.Config.PeerLifecycle),
 	})
 	if err != nil {
 		return nil, specs, err
 	}
-	desired := injectIPsecKeyMaterial(state, plan.Desired)
+	desired := injectIPsecKeyMaterial(&corestate.VerifiedState{
+		ManagedZone: state.ManagedZone,
+		Network:     state.Network,
+	}, state.IPsecTransportKey, plan.Desired)
 	out := make([]inspect.DesiredLink, 0, len(desired))
 	for _, spec := range desired {
 		item := desiredLinkState{

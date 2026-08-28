@@ -36,6 +36,14 @@ func (d *DaemonService) setState(state *stateFile) {
 	d.StateStore = replacement.StateStore
 }
 
+func (d *DaemonService) currentState() *stateFile {
+	if d == nil || d.StateStore == nil {
+		return nil
+	}
+	state, _ := d.StateStore.Snapshot()
+	return state
+}
+
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 	plan, err := sr.ipsecProtocolPlan(verifiedStateForTest(state), linuxRuntimeStateFromLegacy(state))
 	if err != nil {
@@ -78,7 +86,7 @@ func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string,
 		return
 	}
 	readCommittedForTest(d.StateStore, func(state *stateFile) {
-		d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
+		d.recordBirdHealthObservationUnavailableForLinks(state.LinkInstances, state.IPsecReconcile, netnsName, overlays)
 	})
 }
 
@@ -87,7 +95,7 @@ func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays [
 		return
 	}
 	readCommittedForTest(d.StateStore, func(state *stateFile) {
-		d.recordBirdHealthObservationForState(state, netnsName, overlays, observed)
+		d.recordBirdHealthObservationForLinks(state.LinkInstances, state.IPsecReconcile, netnsName, overlays, observed)
 	})
 }
 

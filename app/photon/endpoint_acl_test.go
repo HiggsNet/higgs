@@ -94,7 +94,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	installTestFirewallDriver(service, driver)
 	beforeRevision := service.StateStore.Meta().Revision
 	notifications := 0
-	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	service.Hooks.OnStateChanged = func() { notifications++ }
 
 	// Validation canonicalizes selector order, so the differently ordered input
 	// must still be recognized as the same committed ACL.
@@ -120,7 +120,7 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, &syncConfigFile{}, time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 	notifications := 0
-	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	service.Hooks.OnStateChanged = func() { notifications++ }
 
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventEndpointACLRemove, Key: "missing"})
 	if result.Error != nil {

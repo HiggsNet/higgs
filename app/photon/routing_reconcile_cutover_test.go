@@ -139,7 +139,7 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 		instance := state.LinkInstances["link-1"]
 		instance.RotatePhase = phase
 		state.LinkInstances["link-1"] = instance
-		got := birdRotateInterfacePolicies(state, "photon", []string{"main"}, routingInst)
+		got := birdRotateInterfacePolicies(state.LinkInstances, state.IPsecReconcile, "photon", []string{"main"}, routingInst)
 		gotMap := make(map[string]uint, len(got))
 		for _, policy := range got {
 			gotMap[policy.InterfaceName] = policy.Metric

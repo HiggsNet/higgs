@@ -34,17 +34,14 @@ func peerLifecycleCleanupDue(peer syncPeerState, now time.Time, cfg inspect.Peer
 // peerLifecycleExcludedPeers returns local data-plane suppressions. A marked
 // peer remains available to gossip so a successful sync can clear the marker,
 // but IPsec must not recreate its owner-managed link from stale Zone records.
-func peerLifecycleExcludedPeers(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) map[zone.ZonePath]string {
+func peerLifecycleExcludedPeers(cleanups map[string]peerLifecycleCleanupState, peers map[string]syncPeerState, now time.Time, cfg inspect.PeerLifecycleConfig) map[zone.ZonePath]string {
 	out := make(map[zone.ZonePath]string)
-	if state == nil {
-		return out
-	}
-	for peerID, cleanup := range state.PeerCleanups {
+	for peerID, cleanup := range cleanups {
 		if cleanup.Reason == peerCleanupReasonOffline {
 			out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
 		}
 	}
-	for peerID, peer := range state.SyncPeers {
+	for peerID, peer := range peers {
 		if peerLifecycleCleanupDue(peer, now, cfg) {
 			out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
 		}

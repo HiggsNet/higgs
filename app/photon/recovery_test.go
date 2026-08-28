@@ -37,7 +37,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 		t.Fatalf("handleRecoveryImportZoneEvent(first): %v", err)
 	}
 	notifications := 0
-	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }
+	service.Hooks.OnStateChanged = func() { notifications++ }
 	beforeRevision := service.StateStore.Meta().Revision
 	result, _, err := service.handleRecoveryImportZoneEvent(snapshot)
 	if err != nil {

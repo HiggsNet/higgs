@@ -19,7 +19,7 @@ func TestBuildDebugPeerViewRejectsUnknownZone(t *testing.T) {
 	}
 	config := &syncConfigFile{PeerID: "node-a.catofes."}
 
-	_, err := buildDebugPeerView(state, config, "ss", now)
+	_, err := buildDebugPeerView(state.ManagedZone, state.Network, state.SyncPeers, config, "ss", now)
 	if !errors.Is(err, zone.ErrZoneNotFound) {
 		t.Fatalf("buildDebugPeerView error = %v, want ErrZoneNotFound", err)
 	}
@@ -47,7 +47,7 @@ func TestSyncStatusAdapterDoesNotProjectEphemeralDiagnosticsFromState(t *testing
 			Addr: "127.0.0.1:9999",
 		}},
 	}
-	view := buildSyncStatusView(state, config, now, true)
+	view := buildSyncStatusView(state.Network, state.SyncPeers, config, now, true)
 
 	if len(view.Bootstrap) != 1 {
 		t.Fatalf("bootstrap peers = %+v, want one", view.Bootstrap)
@@ -75,7 +75,7 @@ func TestSyncStatusGroupsZonesByDotAndHyphenSuffix(t *testing.T) {
 		network.Zones[path] = zone.NewZoneState(path, nil)
 	}
 	view := buildSyncStatusView(
-		&stateFile{Network: network, SyncPeers: map[string]syncPeerState{}},
+		network, map[string]syncPeerState{},
 		&syncConfigFile{},
 		time.Unix(1700000000, 0),
 		false,

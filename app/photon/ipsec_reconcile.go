@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -20,12 +21,15 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev := d.StateStore.Snapshot()
-	if snapshot == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
 		return nil
 	}
+	rev := uint64(common.Revision)
+	verified := common.State
+	peers := syncPeerReadView(common.Gossip)
 	groups := append([]ipsec.LinkGroupSpec(nil), d.Sync.App.Config.IPsec.LinkGroups...)
-	if snapshot.ManagedZone.IsRoot() || !snapshot.ManagedZone.Valid() {
+	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
 		return nil
 	}
 	now := d.Sync.now()
@@ -33,17 +37,17 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	plan := ipsec.LinkPlan{}
 	if len(groups) > 0 {
 		var err error
-		plan, err = ipsec.PlanTransportLinks(ctx, snapshot.Network, snapshot.ManagedZone, groups, ipsec.LinkPlannerOptions{
+		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
 			DNSResolver:         dnsResolver,
-			ContactPointQuality: d.buildIPsecContactPointQuality(snapshot, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(snapshot, now, d.Sync.App.Config.PeerLifecycle),
+			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
+			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, peers, now, d.Sync.App.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
 			return err
 		}
-		plan.Desired = injectIPsecKeyMaterial(snapshot, plan.Desired)
+		plan.Desired = injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)
 	}
 	if d.linuxRuntime == nil {
 		err := errors.New("linux runtime is not configured")
@@ -56,13 +60,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
-	instances := linkInstancesToIPsec(snapshot.LinkInstances)
+	instances := linkInstancesToIPsec(runtime.LinkInstances)
 	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.Sync.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
 	d.logDebug("ipsec", "reconcile_observed", map[string]any{
-		"managed_zone": snapshot.ManagedZone.String(),
+		"managed_zone": verified.ManagedZone.String(),
 		"groups":       len(groups),
 		"desired":      len(plan.Desired),
 		"instances":    len(instances),
@@ -80,7 +84,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		Instances:             instances,
 		SAs:                   sas,
 		Now:                   now,
-		Revoked:               revokedLinkPeers(snapshot, now),
+		Revoked:               revokedLinkPeers(verified.Network, runtime.LinkInstances, peers, now),
 		Roles:                 plan.Roles,
 		GroupSpecs:            groupSpecMap(groups),
 		GroupBackoff:          groupBackoffMap(groups),
@@ -92,7 +96,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		ForceUpdates:          forceUpdates,
 	})
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
-	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(snapshot, now)
+	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(verified, now)
 	for _, action := range result.Actions {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
@@ -109,7 +113,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			netns := netnsForAction(action, groups)
 			if _, err := platformRuntime.ApplyIPsecAction(ctx, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-				if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+				if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
 				return err
@@ -117,7 +121,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			if shouldAssignIPsecDiagnosticAddresses(action) {
 				if err := platformRuntime.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-					if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+					if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
 					}
 					return err
@@ -127,12 +131,12 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		}
 	}
 	if err := platformRuntime.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
-		if saveErr := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+		if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
 		return err
 	}
-	if err := d.commitIPsecReconcileResult(rev, snapshot, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
+	if err := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
@@ -275,19 +279,19 @@ func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
 	}
 }
 
-func (d *DaemonService) localIPv6DiagnosticPrefixes(state *stateFile, now time.Time) []netip.Prefix {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || state == nil || state.Network == nil {
+func (d *DaemonService) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
 	if !ipamAutoAnnounceEnabled(d.Sync.App.Config.IPAM) {
 		return nil
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
 		return nil
 	}
-	prefixes := autoAnnounceAssignedPrefixes(ars, state.ManagedZone, d.Sync.App.Config.IPAM)
+	prefixes := autoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.Sync.App.Config.IPAM)
 	out := prefixes[:0]
 	for _, prefix := range prefixes {
 		if prefix.Addr().Is6() && prefix.Bits() == 64 {
@@ -369,17 +373,17 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 	}
 }
 
-func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateFile, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
-	if d == nil || d.StateStore == nil || workspace == nil {
+func (d *DaemonService) commitIPsecReconcileResult(rev uint64, runtime *linuxRuntimeState, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
+	if d == nil || d.StateStore == nil || runtime == nil {
 		return nil
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	summary.Committed = true
 	nextInstances := linkInstancesFromIPsec(instances)
-	if ipsecReconcileResultEqual(workspace.LinkInstances, workspace.IPsecReconcile, nextInstances, summary) {
+	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, nextInstances, summary) {
 		return nil
 	}
-	currentRev, committed, err := d.commitIPsecRuntime(rev, workspace.IPsecTransportKey, workspace.IPsecPortRecord, nextInstances, summary)
+	currentRev, committed, err := d.commitIPsecRuntime(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, nextInstances, summary)
 	if err != nil {
 		return err
 	}
@@ -493,17 +497,17 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 // map from the gossip transport's runtime reachability state. This lets the
 // IPsec planner deprioritize addresses that are currently in backoff or have
 // recent failures, matching the gossip transport's own dialing preferences.
-func (d *DaemonService) buildIPsecContactPointQuality(state *stateFile, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
-	if d == nil || d.Sync == nil || d.Sync.Transport == nil || state == nil || state.Network == nil {
+func (d *DaemonService) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
 	transport := d.Sync.Transport
-	ns := state.Network
+	ns := verified.Network
 	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
 
 	for _, peerID := range transport.KnownPeerIDs() {
 		peerPath := zone.ZonePath(peerID)
-		if !peerPath.Valid() || peerPath.IsRoot() || peerPath == state.ManagedZone {
+		if !peerPath.Valid() || peerPath.IsRoot() || peerPath == verified.ManagedZone {
 			continue
 		}
 		states := transport.PeerAddrStates(peerID)
@@ -785,25 +789,29 @@ func formatStateAddr(addr netip.Addr) string {
 	return addr.String()
 }
 
-func revokedLinkPeers(state *stateFile, now time.Time) map[zone.ZonePath]bool {
+func revokedLinkPeers(network *zone.NetworkState, instances map[string]linkInstanceState, peers map[string]syncPeerState, now time.Time) map[zone.ZonePath]bool {
 	// Phase 6.4.5: use the comprehensive revoked peer zone collector that
 	// covers both LinkInstances and SyncPeers, so that revocation is detected
 	// even for peers that don't have an active link instance yet.
-	return collectRevokedPeerZones(state, now)
+	return collectRevokedPeerZones(network, instances, peers, now)
 }
 
-func injectIPsecKeyMaterial(state *stateFile, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
-	if state == nil {
+func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *ipsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
+	if verified == nil {
 		return desired
 	}
-	localKey := state.IPsecTransportKey
 	out := make([]ipsec.TransportLinkSpec, len(desired))
 	for i, spec := range desired {
 		if localKey != nil && len(localKey.PrivateKey) > 0 {
 			spec.LocalPrivateKey = append([]byte(nil), localKey.PrivateKey...)
 			spec.LocalPrivateKeyAlgorithm = localKey.Algorithm
 		}
-		if peerZone := state.Network.Zones[spec.PeerZone]; peerZone != nil {
+		if verified.Network != nil {
+			peerZone := verified.Network.Zones[spec.PeerZone]
+			if peerZone == nil {
+				out[i] = spec
+				continue
+			}
 			if record := peerZone.Records[ipsec.RecordKeyTransportKey]; record != nil {
 				if keyRecord, err := ipsec.ParseTransportKeyRecord(record); err == nil {
 					if pub, err := ipsec.DecodeTransportPublicKey(*keyRecord); err == nil {

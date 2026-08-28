@@ -38,7 +38,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	if err != nil {
 		return err
 	}
-	view, err := buildDebugZoneView(state, path, rt.Now())
+	view, err := buildDebugZoneView(state.Network, path, rt.Now())
 	if err != nil {
 		return err
 	}
@@ -55,13 +55,13 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	return inspecttext.WriteZoneDebug(os.Stdout, view)
 }
 
-func buildDebugZoneView(state *stateFile, path zone.ZonePath, now time.Time) (inspect.ZoneDebugView, error) {
-	if state == nil || state.Network == nil {
-		return inspect.ZoneDebugView{}, fmt.Errorf("state is nil")
+func buildDebugZoneView(network *zone.NetworkState, path zone.ZonePath, now time.Time) (inspect.ZoneDebugView, error) {
+	if network == nil {
+		return inspect.ZoneDebugView{}, fmt.Errorf("network is nil")
 	}
-	configureValidation(state.Network)
+	configureValidation(network)
 	view, ok := inspect.BuildZoneDebug(inspect.ZoneDebugInput{
-		Network: state.Network,
+		Network: network,
 		Path:    path,
 		Now:     now,
 	})

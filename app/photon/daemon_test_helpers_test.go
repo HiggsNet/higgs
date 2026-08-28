@@ -944,7 +944,7 @@ func daemonSystemDesiredSpec(t *testing.T, state *stateFile, group ipsec.LinkGro
 	if len(plan.Desired) != 1 {
 		t.Fatalf("desired for %s = %+v, skips=%+v, want one", state.ManagedZone, plan.Desired, plan.Skipped)
 	}
-	return injectIPsecKeyMaterial(state, plan.Desired)[0]
+	return injectIPsecKeyMaterial(verifiedStateForTest(state), state.IPsecTransportKey, plan.Desired)[0]
 }
 
 func freeDaemonTestUDPAddr(t *testing.T) string {
@@ -1019,7 +1019,7 @@ func daemonRunGossipStrongSwanReady(state *stateFile, group ipsec.LinkGroupSpec)
 	if err != nil || len(plan.Desired) != 1 {
 		return false
 	}
-	spec := injectIPsecKeyMaterial(state, plan.Desired)[0]
+	spec := injectIPsecKeyMaterial(verifiedStateForTest(state), state.IPsecTransportKey, plan.Desired)[0]
 	inst, ok := state.LinkInstances[ipsec.LinkInstanceID(spec)]
 	return ok && inst.ActualState == ipsec.LinkStateUp
 }

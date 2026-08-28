@@ -117,11 +117,11 @@ func syncStatus(verbose bool) error {
 }
 
 func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now time.Time, verbose bool) error {
-	return inspecttext.WriteSyncStatus(w, buildSyncStatusView(state, config, now, verbose))
+	return inspecttext.WriteSyncStatus(w, buildSyncStatusView(state.Network, state.SyncPeers, config, now, verbose))
 }
 
-func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {
-	digests := corestate.ZoneDigests(state.Network)
+func buildSyncStatusView(network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {
+	digests := corestate.ZoneDigests(network)
 	view := inspect.SyncStatusView{
 		PeerID:       config.PeerID,
 		ListenAddr:   config.ListenAddr,
@@ -137,7 +137,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 		},
 		Verbose: verbose,
 	}
-	discovered := gossip.ExtractPeerEndpoints(state.Network)
+	discovered := gossip.ExtractPeerEndpoints(network)
 	if verbose {
 		known := configuredKnownPeers(config)
 		view.AllowlistSource = "bootstrap+discovery"
@@ -152,7 +152,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 			if addr := known[peer.ID]; addr != nil {
 				resolved = addr.String()
 			}
-			peerState := state.SyncPeers[peer.ID]
+			peerState := peers[peer.ID]
 			view.Bootstrap = append(view.Bootstrap, syncVerbosePeerView(peer.ID, peer.Addr, resolved, "", peerState, now))
 		}
 		discoveredIDs := make([]string, 0, len(discovered))
@@ -166,7 +166,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 		sort.Slice(discoveredIDs, func(i, j int) bool { return inspect.ZonePathLess(discoveredIDs[i], discoveredIDs[j]) })
 		for _, peerID := range discoveredIDs {
 			entries := discovered[peerID]
-			peerState := state.SyncPeers[peerID]
+			peerState := peers[peerID]
 			addr := "-"
 			if len(entries) > 0 {
 				addr = fmt.Sprintf("%s:%d", entries[0].Address, entries[0].Port)
@@ -175,7 +175,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 		}
 	}
 	for _, peer := range config.Bootstrap {
-		peerState := state.SyncPeers[peer.ID]
+		peerState := peers[peer.ID]
 		peerDebug := inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
 			PeerID:         peer.ID,
 			ConfiguredAddr: peer.Addr,
@@ -197,7 +197,7 @@ func buildSyncStatusView(state *stateFile, config *syncConfigFile, now time.Time
 		})
 	}
 	for _, digest := range digests {
-		zs := state.Network.Zones[digest.Zone]
+		zs := network.Zones[digest.Zone]
 		view.Zones = append(view.Zones, inspect.SyncZoneSummaryView{
 			Zone:        string(digest.Zone),
 			RootHex:     hex.EncodeToString(digest.RootHash),

@@ -142,7 +142,7 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 			}
 			item.Raw[cmd] = out
 		}
-		enrichBirdDumpInstance(&item, state)
+		enrichBirdDumpInstance(&item, state.LinkInstances, state.IPsecReconcile)
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
@@ -163,11 +163,11 @@ func birdDebugCommands(view birdDebugView) ([]string, error) {
 	}
 }
 
-func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, state *stateFile) {
+func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]linkInstanceState, reconcile *ipsecReconcileState) {
 	if item == nil {
 		return
 	}
-	contexts := birdInterfaceContexts(state, item.NetNS)
+	contexts := birdInterfaceContexts(instances, reconcile, item.NetNS)
 	item.Interfaces = make([]inspect.BirdInterfaceContext, 0, len(contexts))
 	for _, context := range contexts {
 		item.Interfaces = append(item.Interfaces, context)
@@ -185,9 +185,9 @@ func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, state *stateFile) {
 	}
 }
 
-func birdInterfaceContexts(state *stateFile, netnsName string) map[string]inspect.BirdInterfaceContext {
+func birdInterfaceContexts(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string) map[string]inspect.BirdInterfaceContext {
 	contexts := map[string]inspect.BirdInterfaceContext{}
-	for _, output := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
+	for _, output := range buildLinkOutputs(instances, reconcile) {
 		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
 			continue
 		}

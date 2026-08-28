@@ -239,7 +239,13 @@ func (rt *Runtime) SaveState(state *stateFile) error {
 }
 
 func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
-	return syncConfigFromAppConfig(rt.Config, state), nil
+	if state == nil {
+		return syncConfigFromAppConfig(rt.Config, nil), nil
+	}
+	return syncConfigFromAppConfig(rt.Config, &corestate.VerifiedState{
+		ManagedZone:        state.ManagedZone,
+		IdentityPrivateKey: append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
+	}), nil
 }
 
 func (rt *Runtime) ConfigureNetworkValidation(ns *zone.NetworkState) {
@@ -496,17 +502,17 @@ func normalizeSyncPeers(state *stateFile) {
 	}
 }
 
-func defaultPeerID(state *stateFile) string {
-	if state == nil {
+func defaultPeerID(verified *corestate.VerifiedState) string {
+	if verified == nil {
 		return "local"
 	}
-	if state.ManagedZone != "" && state.ManagedZone != zone.RootZone {
-		return string(state.ManagedZone)
+	if verified.ManagedZone != "" && verified.ManagedZone != zone.RootZone {
+		return string(verified.ManagedZone)
 	}
-	if len(state.ZonePrivateKey) == 0 {
+	if len(verified.IdentityPrivateKey) == 0 {
 		return "local"
 	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	pub := verified.IdentityPrivateKey.Public().(ed25519.PublicKey)
 	return hex.EncodeToString(photoncrypto.KeyID(pub))[:16]
 }
 

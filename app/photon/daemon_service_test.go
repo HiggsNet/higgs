@@ -86,20 +86,12 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	state := &stateFile{ManagedZone: "node-a.catofes."}
 	service := newTestDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
 	var called bool
-	service.Hooks.OnStateChanged = func(got *stateFile) {
+	service.Hooks.OnStateChanged = func() {
 		called = true
-		if got == state || got == nil || got.ManagedZone != state.ManagedZone {
-			t.Fatalf("hook got unexpected detached state: %+v", got)
-		}
-		got.ManagedZone = "retained-mutation.invalid."
 	}
 	service.notifyStateChanged()
 	if !called {
 		t.Fatal("state changed hook was not called")
-	}
-	committed, _ := service.StateStore.Snapshot()
-	if committed.ManagedZone != state.ManagedZone {
-		t.Fatalf("hook mutation leaked into committed state: %s", committed.ManagedZone)
 	}
 }
 

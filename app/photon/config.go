@@ -1088,10 +1088,10 @@ func statePathOverride() string {
 	return os.Getenv("PHOTON_STATE")
 }
 
-func syncConfigFromAppConfig(config *appConfig, state *stateFile) *syncConfigFile {
+func syncConfigFromAppConfig(config *appConfig, verified *corestate.VerifiedState) *syncConfigFile {
 	peerID := config.PeerID
 	if peerID == "" {
-		peerID = defaultPeerID(state)
+		peerID = defaultPeerID(verified)
 	}
 	return &syncConfigFile{
 		PeerID:                 peerID,

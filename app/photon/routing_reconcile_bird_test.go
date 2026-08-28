@@ -434,7 +434,7 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
 	workspace.RoutingReconcile.LastRunUnix = 20
 
-	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace); err != nil {
+	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace.BirdInstances, workspace.RoutingReconcile); err != nil {
 		t.Fatalf("commitRoutingReconcileResult: %v", err)
 	}
 	if got := service.StateStore.Meta().Revision; got != rev {

@@ -30,7 +30,7 @@ func TestApplyPeerLifecycleCleanupDeletesOfflineCacheAndKeepsSuppression(t *test
 	if !ok || cleanup.Reason != peerCleanupReasonOffline {
 		t.Fatalf("cleanup marker = %+v present=%t", cleanup, ok)
 	}
-	if got := peerLifecycleExcludedPeers(state, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
+	if got := peerLifecycleExcludedPeers(state.PeerCleanups, state.SyncPeers, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
 		t.Fatalf("excluded reason = %q", got)
 	}
 }

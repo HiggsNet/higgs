@@ -177,7 +177,12 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 }
 
 func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Time) (*manualPortRotateResult, error) {
-	record, runtime, result, err := planLocalIPsecPortRotation(config, state, now)
+	verified := &corestate.VerifiedState{
+		ManagedZone:        state.ManagedZone,
+		Network:            state.Network,
+		IdentityPrivateKey: state.ZonePrivateKey,
+	}
+	record, runtime, result, err := planLocalIPsecPortRotation(config, verified, linuxRuntimeStateFromLegacy(state), now)
 	if err != nil {
 		return nil, err
 	}
@@ -192,17 +197,17 @@ func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Tim
 	return result, nil
 }
 
-func planLocalIPsecPortRotation(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, *ipsecPortRecordState, *manualPortRotateResult, error) {
+func planLocalIPsecPortRotation(config *appConfig, verified *corestate.VerifiedState, ownersRuntime *linuxRuntimeState, now time.Time) (*ipsec.PortRecord, *ipsecPortRecordState, *manualPortRotateResult, error) {
 	if config == nil {
 		config = defaultAppConfig()
 	}
-	if state == nil || state.Network == nil {
-		return nil, nil, nil, fmt.Errorf("state is nil")
+	if verified == nil || verified.Network == nil {
+		return nil, nil, nil, fmt.Errorf("verified state is nil")
 	}
-	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() {
+	if verified.ManagedZone == zone.RootZone || !verified.ManagedZone.Valid() {
 		return nil, nil, nil, fmt.Errorf("managed zone is required")
 	}
-	if len(state.ZonePrivateKey) == 0 {
+	if len(verified.IdentityPrivateKey) == 0 {
 		return nil, nil, nil, fmt.Errorf("managed zone private key is required")
 	}
 	mode := config.IPsec.PortMode
@@ -215,8 +220,6 @@ func planLocalIPsecPortRotation(config *appConfig, state *stateFile, now time.Ti
 	if now.IsZero() {
 		now = time.Now()
 	}
-	verified := &corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network}
-	ownersRuntime := linuxRuntimeStateFromLegacy(state)
 	existing := existingIPsecPortRecord(verified)
 	previous := existing
 	if previous == nil {
@@ -250,7 +253,7 @@ func planLocalIPsecPortRotation(config *appConfig, state *stateFile, now time.Ti
 		UpdatedAt:  record.UpdatedAt,
 	}
 	result := &manualPortRotateResult{
-		Zone:              state.ManagedZone,
+		Zone:              verified.ManagedZone,
 		CurrentGeneration: record.Current.Generation,
 		CurrentIKE:        record.Current.IKE.Advertised,
 		CurrentNATT:       record.Current.NATT.Advertised,
