@@ -268,13 +268,13 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	}
 
 	committedRev := service.StateStore.Meta().Revision
-	statusDone := make(chan controlResponse, 1)
+	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
-		statusDone <- controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	}()
 	select {
 	case status := <-statusDone:
-		if !status.OK || status.StateRevision != committedRev {
+		if !status.OK || status.View.StateRevision != committedRev {
 			close(pm.unblock)
 			t.Fatalf("status response = %#v, want committed revision %d", status, committedRev)
 		}

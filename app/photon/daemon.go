@@ -589,38 +589,21 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
-	case "status":
+	case "daemon_status_view":
+		writeCanonicalView(conn, daemonStatusView(d))
+	case "root_public_key":
 		common := d.StateStore.common.ReadView()
-		d.StateStore.mu.RLock()
-		meta := d.StateStore.metaLocked()
-		linkInstances := 0
-		desiredLinks := 0
-		lastLinkError := ""
-		if d.StateStore.runtime != nil {
-			linkInstances = len(d.StateStore.runtime.LinkInstances)
-			if d.StateStore.runtime.IPsecReconcile != nil {
-				desiredLinks = d.StateStore.runtime.IPsecReconcile.DesiredLinks
-				lastLinkError = d.StateStore.runtime.IPsecReconcile.LastError
-			}
-		}
-		d.StateStore.mu.RUnlock()
 		var rootPublicKey ed25519.PublicKey
 		if common.State != nil && common.State.Network != nil {
 			if root := common.State.Network.Zones[zone.RootZone]; root != nil && root.Authority != nil && len(root.Authority.Keys) > 0 {
 				rootPublicKey = append(ed25519.PublicKey(nil), root.Authority.Keys[0].Key...)
 			}
 		}
-		response := controlResponse{
-			OK:            true,
-			PeerID:        d.Sync.Config.PeerID,
-			LinkInstances: linkInstances,
-			DesiredLinks:  desiredLinks,
-			LastLinkError: lastLinkError,
-			RootPublicKey: rootPublicKey,
-			Message:       "daemon online",
+		if len(rootPublicKey) == 0 {
+			writeControlResponse(conn, controlError(errors.New("root authority has no public key")))
+			return
 		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
 		writeCanonicalView(conn, statusViewFromOwners(d.Sync.App, common, runtime, d.healthStatusResponse(), true))
@@ -815,7 +798,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		writeControlResponse(conn, controlResponse{OK: true})
+		writeCanonicalView(conn, true)
 	case "endpoint_acl_apply":
 		if request.EndpointACL == nil {
 			writeControlResponse(conn, controlError(errors.New("endpoint_acl is required")))
@@ -1715,18 +1698,6 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 		d.notifyStateChanged()
 	}
 	return result, nil
-}
-
-func applyStateStoreMeta(response *controlResponse, meta daemonStateStoreMeta) {
-	if response == nil {
-		return
-	}
-	response.StateRevision = meta.Revision
-	if !meta.SnapshotTime.IsZero() {
-		response.SnapshotTimeUnix = meta.SnapshotTime.Unix()
-	}
-	response.Dirty = meta.Dirty
-	response.ReconcileProgress = meta.ReconcileProgress
 }
 
 func (d *DaemonService) notifyStateChanged() {

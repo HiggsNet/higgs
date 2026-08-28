@@ -52,3 +52,86 @@ func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRunt
 	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, peers, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, rt.Now(), cfg, hasOverlay)
 	return inspect.BuildStatus(input)
 }
+
+// daemonStatusView is the single operational-status projection shared by the
+// local control transport and Observer HTTP. It reads the two state owners
+// once and returns a detached canonical inspect DTO.
+func daemonStatusView(d *DaemonService) inspect.DaemonStatusView {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+		return inspect.DaemonStatusView{DaemonOnline: false}
+	}
+	store := d.StateStore
+	store.writeMu.Lock()
+	view := store.common.ReadView()
+	store.mu.RLock()
+	meta := store.metaLocked()
+	linkInstances := 0
+	desiredLinks := 0
+	lastLinkError := ""
+	lastRoutingError := ""
+	ipsecLastRunUnix := int64(0)
+	routingLastRunUnix := int64(0)
+	if store.runtime != nil {
+		linkInstances = len(store.runtime.LinkInstances)
+		if store.runtime.IPsecReconcile != nil {
+			desiredLinks = store.runtime.IPsecReconcile.DesiredLinks
+			lastLinkError = store.runtime.IPsecReconcile.LastError
+			ipsecLastRunUnix = store.runtime.IPsecReconcile.LastRunUnix
+		}
+		if store.runtime.RoutingReconcile != nil {
+			lastRoutingError = store.runtime.RoutingReconcile.LastError
+			routingLastRunUnix = store.runtime.RoutingReconcile.LastRunUnix
+		}
+	}
+	store.mu.RUnlock()
+	store.writeMu.Unlock()
+	if view.State == nil {
+		return inspect.DaemonStatusView{DaemonOnline: false}
+	}
+	knownZones := 0
+	if view.State.Network != nil {
+		knownZones = len(view.State.Network.Zones)
+	}
+	knownPeers := 0
+	lastSyncUnix := int64(0)
+	if view.Gossip != nil {
+		knownPeers = len(view.Gossip.Peers)
+		for _, peer := range view.Gossip.Peers {
+			if peer.LastSyncUnix > lastSyncUnix {
+				lastSyncUnix = peer.LastSyncUnix
+			}
+		}
+	}
+	if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
+		routingLastRunUnix = lastRun
+	}
+	peerID := ""
+	listenAddr := ""
+	if d.Sync.Config != nil {
+		peerID = d.Sync.Config.PeerID
+		listenAddr = d.Sync.Config.ListenAddr
+	}
+	snapshotTimeUnix := int64(0)
+	if !meta.SnapshotTime.IsZero() {
+		snapshotTimeUnix = meta.SnapshotTime.Unix()
+	}
+	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
+		PeerID:             peerID,
+		ManagedZone:        string(view.State.ManagedZone),
+		ListenAddr:         listenAddr,
+		DaemonOnline:       true,
+		StateRevision:      meta.Revision,
+		SnapshotTimeUnix:   snapshotTimeUnix,
+		Dirty:              meta.Dirty,
+		ReconcileProgress:  meta.ReconcileProgress,
+		KnownZones:         knownZones,
+		KnownPeers:         knownPeers,
+		LinkInstances:      linkInstances,
+		DesiredLinks:       desiredLinks,
+		LastLinkError:      lastLinkError,
+		LastRoutingError:   lastRoutingError,
+		LastSyncUnix:       lastSyncUnix,
+		IPsecLastRunUnix:   ipsecLastRunUnix,
+		RoutingLastRunUnix: routingLastRunUnix,
+	})
+}

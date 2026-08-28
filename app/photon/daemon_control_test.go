@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -54,11 +55,11 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 	defer stop()
 
-	response, err := sendControlRequest(service.ControlSocketPath, controlRequest{Method: "status"})
-	if err != nil {
-		t.Fatalf("sendControlRequest(status): %v", err)
+	var response controlViewResponse[inspect.DaemonStatusView]
+	if err := controlapi.Send(service.ControlSocketPath, controlRequest{Method: "daemon_status_view"}, &response); err != nil {
+		t.Fatalf("daemon_status_view: %v", err)
 	}
-	if response.PeerID != config.PeerID || response.Message != "daemon online" {
+	if !response.OK || response.View.PeerID != config.PeerID || !response.View.DaemonOnline {
 		t.Fatalf("status response = %#v", response)
 	}
 }
@@ -99,6 +100,14 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	statusView := controlViewRequestViaPipe[inspect.StatusView](t, service, controlRequest{Method: "status_view"})
 	if !statusView.OK || !statusView.View.DaemonOnline {
 		t.Fatalf("status_view response = %#v", statusView)
+	}
+	daemonStatus := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
+	if !daemonStatus.OK || !daemonStatus.View.DaemonOnline || daemonStatus.View.PeerID != config.PeerID {
+		t.Fatalf("daemon_status_view response = %#v", daemonStatus)
+	}
+	rootPublicKey := controlViewRequestViaPipe[[]byte](t, service, controlRequest{Method: "root_public_key"})
+	if !rootPublicKey.OK || len(rootPublicKey.View) == 0 {
+		t.Fatalf("root_public_key response = %#v", rootPublicKey)
 	}
 	admission := controlViewRequestViaPipe[inspect.AdmissionDiagnosis](t, service, controlRequest{Method: "admission_status"})
 	if !admission.OK {
@@ -347,11 +356,11 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 	state.IPsecReconcile.DesiredLinks = 99
 	defer state.Unlock()
 
-	status := controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+	status := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	if !status.OK {
 		t.Fatalf("status response = %#v", status)
 	}
-	if status.StateRevision != committedRev || status.LinkInstances != 1 || status.DesiredLinks != 1 {
+	if status.View.StateRevision != committedRev || status.View.LinkInstances != 1 || status.View.DesiredLinks != 1 {
 		t.Fatalf("status = %#v, want committed rev=%d link_instances=1 desired_links=1", status, committedRev)
 	}
 

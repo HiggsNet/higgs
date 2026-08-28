@@ -273,6 +273,8 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    status/peer lifecycle/gossip peers/health 均由 daemon 或离线 owner 调用同一查询函数生成最终 inspect DTO，CLI 只负责呈现；
    links/firewall/Babel/health/ping 也已改为 daemon 直接返回 canonical inspect DTO，旧 resource response 和 links live-replan 换壳已删除；
    `record_get`、admission diagnosis 和 Endpoint ACL list 也已退出巨型 `controlResponse`，直接通过 typed view envelope 传输；
+   旧 `status` 混合回包也已拆除，Observer/control 共用同一 operational status 投影，root public key 改为独立 typed view；
+   `verify_chain` 同样返回 typed bool view，只读 control 已不再借用 mutation response；
    routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
    聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
    不在 HTTP 层重新推导 desired/runtime 状态。

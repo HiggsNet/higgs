@@ -50,31 +50,22 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK                bool                    `json:"ok"`
-	Error             string                  `json:"error,omitempty"`
-	StateRevision     uint64                  `json:"state_revision"`
-	SnapshotTimeUnix  int64                   `json:"snapshot_time_unix,omitempty"`
-	Dirty             daemonDirtyFlags        `json:"dirty,omitempty"`
-	ReconcileProgress daemonReconcileStatus   `json:"reconcile_in_progress,omitempty"`
-	PeerID            string                  `json:"peer_id,omitempty"`
-	LinkInstances     int                     `json:"link_instances,omitempty"`
-	CleanedLinks      int                     `json:"cleaned_links,omitempty"`
-	CleanedOrphans    int                     `json:"cleaned_orphans,omitempty"`
-	DesiredLinks      int                     `json:"desired_links,omitempty"`
-	LastLinkError     string                  `json:"last_link_error,omitempty"`
-	LastRoutingError  string                  `json:"last_routing_error,omitempty"`
-	Version           uint64                  `json:"version,omitempty"`
-	Message           string                  `json:"message,omitempty"`
-	Zone              zone.ZonePath           `json:"zone,omitempty"`
-	RootPublicKey     ed25519.PublicKey       `json:"root_public_key,omitempty"`
-	JoinBundle        *joinBundle             `json:"join_bundle,omitempty"`
-	PortRotate        *manualPortRotateResult `json:"port_rotate,omitempty"`
-	RecordsApplied    int                     `json:"records_applied,omitempty"`
-	Delegations       int                     `json:"delegations,omitempty"`
-	Revocations       int                     `json:"revocations,omitempty"`
-	NetworkChanged    bool                    `json:"network_changed,omitempty"`
-	PurgePlan         *purgePlan              `json:"purge_plan,omitempty"`
-	StateGC           *stateGCPlan            `json:"state_gc,omitempty"`
+	OK             bool                    `json:"ok"`
+	Error          string                  `json:"error,omitempty"`
+	CleanedLinks   int                     `json:"cleaned_links,omitempty"`
+	CleanedOrphans int                     `json:"cleaned_orphans,omitempty"`
+	Version        uint64                  `json:"version,omitempty"`
+	Message        string                  `json:"message,omitempty"`
+	Zone           zone.ZonePath           `json:"zone,omitempty"`
+	RootPublicKey  ed25519.PublicKey       `json:"root_public_key,omitempty"`
+	JoinBundle     *joinBundle             `json:"join_bundle,omitempty"`
+	PortRotate     *manualPortRotateResult `json:"port_rotate,omitempty"`
+	RecordsApplied int                     `json:"records_applied,omitempty"`
+	Delegations    int                     `json:"delegations,omitempty"`
+	Revocations    int                     `json:"revocations,omitempty"`
+	NetworkChanged bool                    `json:"network_changed,omitempty"`
+	PurgePlan      *purgePlan              `json:"purge_plan,omitempty"`
+	StateGC        *stateGCPlan            `json:"state_gc,omitempty"`
 }
 
 // controlViewResponse is the transport envelope for read-only queries. View
@@ -197,16 +188,12 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 	return &response, nil
 }
 
-func daemonStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
+func daemonStatusViaControl(rt *Runtime) (inspect.DaemonStatusView, bool, error) {
+	return readCanonicalViewViaControl[inspect.DaemonStatusView](rt, controlRequest{Method: "daemon_status_view"})
+}
+
+func rootPublicKeyViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
+	return readCanonicalViewViaControl[ed25519.PublicKey](rt, controlRequest{Method: "root_public_key"})
 }
 
 func readCanonicalViewViaControl[T any](rt *Runtime, request controlRequest) (T, bool, error) {
@@ -231,14 +218,8 @@ func readCanonicalViewViaControl[T any](rt *Runtime, request controlRequest) (T,
 }
 
 func verifyChainViaControl(rt *Runtime, path zone.ZonePath) (bool, error) {
-	if rt == nil || rt.DisableControl {
-		return false, nil
-	}
-	_, err := sendControlRequest(controlSocketPath(rt.Config), controlRequest{Method: "verify_chain", Zone: path.String()})
-	if err != nil && isControlSocketUnavailable(err) {
-		return false, nil
-	}
-	return true, err
+	_, online, err := readCanonicalViewViaControl[bool](rt, controlRequest{Method: "verify_chain", Zone: path.String()})
+	return online, err
 }
 
 func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {

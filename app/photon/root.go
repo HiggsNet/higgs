@@ -12,13 +12,13 @@ func rootPubkey() error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+	if publicKey, ok, err := rootPublicKeyViaControl(rt); err != nil {
 		return err
 	} else if ok {
-		if len(response.RootPublicKey) == 0 {
+		if len(publicKey) == 0 {
 			return errors.New("root authority has no public key")
 		}
-		fmt.Println(formatPublicKey(response.RootPublicKey))
+		fmt.Println(formatPublicKey(publicKey))
 		return nil
 	}
 	common, _, err := loadOfflineOwnerViews(rt)

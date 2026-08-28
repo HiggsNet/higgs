@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observer"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -832,13 +833,13 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	}
 
 	committedRev := service.StateStore.Meta().Revision
-	statusDone := make(chan controlResponse, 1)
+	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
-		statusDone <- controlRequestViaPipe(t, service, controlRequest{Method: "status"})
+		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	}()
 	select {
 	case status := <-statusDone:
-		if !status.OK || status.StateRevision != committedRev {
+		if !status.OK || status.View.StateRevision != committedRev {
 			close(driver.unblock)
 			t.Fatalf("status response = %#v, want committed revision %d", status, committedRev)
 		}
