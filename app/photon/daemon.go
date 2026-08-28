@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
@@ -25,6 +26,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -335,7 +337,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	logAutoJoinPendingProjection(d.Log, d.StateStore.autoJoinLogProjection())
+	logAutoJoinPending(d.Log, d.StateStore.common.ReadView().State)
 
 	nextSync := d.Sync.now()
 	nextEndpointPublish := d.Sync.now()
@@ -569,16 +571,28 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
 	case "status":
-		projection := d.StateStore.statusProjection()
+		d.StateStore.mu.RLock()
+		meta := d.StateStore.metaLocked()
+		linkInstances := 0
+		desiredLinks := 0
+		lastLinkError := ""
+		if d.StateStore.runtime != nil {
+			linkInstances = len(d.StateStore.runtime.LinkInstances)
+			if d.StateStore.runtime.IPsecReconcile != nil {
+				desiredLinks = d.StateStore.runtime.IPsecReconcile.DesiredLinks
+				lastLinkError = d.StateStore.runtime.IPsecReconcile.LastError
+			}
+		}
+		d.StateStore.mu.RUnlock()
 		response := controlResponse{
 			OK:            true,
 			PeerID:        d.Sync.Config.PeerID,
-			LinkInstances: projection.linkInstances,
-			DesiredLinks:  projection.desiredLinks,
-			LastLinkError: projection.lastLinkError,
+			LinkInstances: linkInstances,
+			DesiredLinks:  desiredLinks,
+			LastLinkError: lastLinkError,
 			Message:       "daemon online",
 		}
-		applyStateStoreMeta(&response, projection.meta)
+		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
@@ -857,34 +871,48 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			Message:  "bird dump",
 		})
 	case "routes_dump":
-		projection := d.StateStore.routesProjection(d.Sync.now())
 		var routingInstances []RoutingInstance
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
 		}
-		if !projection.loaded {
+		d.StateStore.writeMu.Lock()
+		view := d.StateStore.common.ReadView()
+		d.StateStore.mu.RLock()
+		birdInstances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+		meta := d.StateStore.metaLocked()
+		d.StateStore.mu.RUnlock()
+		d.StateStore.writeMu.Unlock()
+		if view.State == nil || view.State.Network == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		if projection.err != nil {
-			writeControlResponse(conn, controlError(projection.err))
+		ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.Sync.now())
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
 			return
 		}
-		routesDump := projection.routes
-		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, projection.bird)
+		routesDump := inspecthttp.RoutesFromAuthorizedSet(view.State.ManagedZone, ars)
+		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdInstances)
 		response := controlResponse{
 			OK:         true,
 			RoutesDump: routesDump,
 			Message:    "routes dump",
 		}
-		applyStateStoreMeta(&response, projection.meta)
+		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "admission_status":
-		diagnosis, meta, loaded := d.StateStore.admissionProjection(d.Sync.now())
-		if !loaded {
+		d.StateStore.writeMu.Lock()
+		view := d.StateStore.common.ReadView()
+		d.StateStore.mu.RLock()
+		admission := cloneAdmissionState(d.StateStore.runtime.Admission)
+		meta := d.StateStore.metaLocked()
+		d.StateStore.mu.RUnlock()
+		d.StateStore.writeMu.Unlock()
+		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
+		diagnosis := diagnoseAutoJoinAdmissionFromOwners(view.State, admission, d.Sync.now())
 		response := controlResponse{
 			OK:        true,
 			PeerID:    d.Sync.Config.PeerID,

@@ -225,7 +225,12 @@ authorization 和 transport records 作为可信事实来源。
     视图构造聚合 `stateFile`。`endpoint_acl_list` 直接从 Linux runtime 复制并排序 ACL，删除
     `endpointACLProjection`；BIRD HTTP/control status 也直接复制 Linux runtime 的 instance/reconcile 数据，删除
     `birdStatusProjection`；firewall control status 直接复制 Linux runtime reconcile，删除
-    `firewallStatusProjection`。
+    `firewallStatusProjection`。HTTP status 在单写边界内分别读取 common verified/checkpoint 与 Linux runtime，control
+    status 只读取 Linux runtime/store metadata，删除 `statusProjection` 及其聚合 DTO。HTTP routes 只读取 common
+    verified Network，control routes 再独立复制 Linux BIRD runtime，删除 `routesProjection`。启动 auto-join 提示
+    直接读取 common verified state，删除 `autoJoinLogProjection`。health context 直接组合 Linux runtime 的
+    link/reconcile 与 health manager 快照，删除 `healthContextProjection`。admission status 显式组合 common
+    verified identity/network 与 Linux runtime admission history，删除 `admissionProjection`。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

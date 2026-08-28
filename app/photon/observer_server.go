@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/routing"
 )
 
 type observerServer struct {
@@ -176,14 +177,51 @@ func (s *observerServer) handler() http.Handler {
 
 func (p *observerProvider) Status() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
-	projection := d.StateStore.statusProjection()
-	if !projection.loaded {
+	store := d.StateStore
+	store.writeMu.Lock()
+	view := store.common.ReadView()
+	store.mu.RLock()
+	meta := store.metaLocked()
+	linkInstances := 0
+	desiredLinks := 0
+	lastLinkError := ""
+	lastRoutingError := ""
+	ipsecLastRunUnix := int64(0)
+	routingLastRunUnix := int64(0)
+	if store.runtime != nil {
+		linkInstances = len(store.runtime.LinkInstances)
+		if store.runtime.IPsecReconcile != nil {
+			desiredLinks = store.runtime.IPsecReconcile.DesiredLinks
+			lastLinkError = store.runtime.IPsecReconcile.LastError
+			ipsecLastRunUnix = store.runtime.IPsecReconcile.LastRunUnix
+		}
+		if store.runtime.RoutingReconcile != nil {
+			lastRoutingError = store.runtime.RoutingReconcile.LastError
+			routingLastRunUnix = store.runtime.RoutingReconcile.LastRunUnix
+		}
+	}
+	store.mu.RUnlock()
+	store.writeMu.Unlock()
+	if view.State == nil {
 		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
 	}
-	routingLastRunUnix := projection.routingLastRunUnix
+	knownZones := 0
+	if view.State.Network != nil {
+		knownZones = len(view.State.Network.Zones)
+	}
+	knownPeers := 0
+	lastSyncUnix := int64(0)
+	if view.Gossip != nil {
+		knownPeers = len(view.Gossip.Peers)
+		for _, peer := range view.Gossip.Peers {
+			if peer.LastSyncUnix > lastSyncUnix {
+				lastSyncUnix = peer.LastSyncUnix
+			}
+		}
+	}
 	if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
 		routingLastRunUnix = lastRun
 	}
@@ -194,24 +232,24 @@ func (p *observerProvider) Status() (any, error) {
 		peerID = d.Sync.Config.PeerID
 		listenAddr = d.Sync.Config.ListenAddr
 	}
-	managedZone = string(projection.managedZone)
+	managedZone = string(view.State.ManagedZone)
 	return inspecthttp.BuildStatusResponse(inspecthttp.StatusInput{
 		PeerID:             peerID,
 		ManagedZone:        managedZone,
 		ListenAddr:         listenAddr,
 		DaemonOnline:       true,
-		StateRevision:      projection.meta.Revision,
-		SnapshotTimeUnix:   projection.meta.SnapshotTime.Unix(),
-		Dirty:              projection.meta.Dirty,
-		ReconcileProgress:  projection.meta.ReconcileProgress,
-		KnownZones:         projection.knownZones,
-		KnownPeers:         projection.knownPeers,
-		LinkInstances:      projection.linkInstances,
-		DesiredLinks:       projection.desiredLinks,
-		LastLinkError:      projection.lastLinkError,
-		LastRoutingError:   projection.lastRoutingError,
-		LastSyncUnix:       projection.lastSyncUnix,
-		IPsecLastRunUnix:   projection.ipsecLastRunUnix,
+		StateRevision:      meta.Revision,
+		SnapshotTimeUnix:   meta.SnapshotTime.Unix(),
+		Dirty:              meta.Dirty,
+		ReconcileProgress:  meta.ReconcileProgress,
+		KnownZones:         knownZones,
+		KnownPeers:         knownPeers,
+		LinkInstances:      linkInstances,
+		DesiredLinks:       desiredLinks,
+		LastLinkError:      lastLinkError,
+		LastRoutingError:   lastRoutingError,
+		LastSyncUnix:       lastSyncUnix,
+		IPsecLastRunUnix:   ipsecLastRunUnix,
 		RoutingLastRunUnix: routingLastRunUnix,
 	}), nil
 }
@@ -323,12 +361,26 @@ func observerRuntime(d *DaemonService) *Runtime {
 }
 
 func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
-	if d == nil || d.Sync == nil {
-		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
-			HealthLinks: inspectHealthLinks(links),
-		}), nil
+	input := inspecthttp.HealthContextInput{HealthLinks: inspectHealthLinks(links)}
+	if d == nil || d.Sync == nil || d.StateStore == nil {
+		return inspecthttp.BuildHealthContext(input), nil
 	}
-	return d.StateStore.healthContextProjection(links), nil
+	d.StateStore.mu.RLock()
+	if d.StateStore.runtime == nil {
+		d.StateStore.mu.RUnlock()
+		return inspecthttp.BuildHealthContext(input), nil
+	}
+	desiredByID := map[string]desiredLinkState{}
+	if d.StateStore.runtime.IPsecReconcile != nil {
+		desiredByID = desiredByInstanceID(d.StateStore.runtime.IPsecReconcile.Desired)
+	}
+	input.Instances = inspectHealthInstances(d.StateStore.runtime.LinkInstances)
+	input.Desired = inspectHealthDesired(desiredByID)
+	d.StateStore.mu.RUnlock()
+	input.Unknown = func(instanceID string) any {
+		return healthLinkJSON{InstanceID: instanceID, State: "unknown"}
+	}
+	return inspecthttp.BuildHealthContext(input), nil
 }
 
 func inspectHealthLinks(links []healthLinkJSON) []inspecthttp.HealthLinkContextInput {
@@ -487,14 +539,18 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	projection := d.StateStore.routesProjection(d.Sync.now())
-	if !projection.loaded || projection.err != nil {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	return projection.routes, nil
+	ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.Sync.now())
+	if err != nil {
+		return &inspecthttp.RoutesResponse{}, nil
+	}
+	return inspecthttp.RoutesFromAuthorizedSet(view.State.ManagedZone, ars), nil
 }
 
 func (p *observerProvider) Bird() (any, error) {

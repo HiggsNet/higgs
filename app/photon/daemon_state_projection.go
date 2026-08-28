@@ -1,67 +1,14 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
-
-type daemonStatusProjection struct {
-	loaded             bool
-	meta               daemonStateStoreMeta
-	managedZone        zone.ZonePath
-	knownZones         int
-	knownPeers         int
-	lastSyncUnix       int64
-	linkInstances      int
-	desiredLinks       int
-	lastLinkError      string
-	lastRoutingError   string
-	ipsecLastRunUnix   int64
-	routingLastRunUnix int64
-}
-
-func (s *DaemonStateStore) statusProjection() daemonStatusProjection {
-	var out daemonStatusProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out.meta = s.metaLocked()
-	state := s.committed
-	if state == nil {
-		return out
-	}
-	out.loaded = true
-	out.managedZone = state.ManagedZone
-	out.linkInstances = len(state.LinkInstances)
-	out.knownPeers = len(state.SyncPeers)
-	if state.Network != nil {
-		out.knownZones = len(state.Network.Zones)
-	}
-	for _, peer := range state.SyncPeers {
-		if peer.LastSyncUnix > out.lastSyncUnix {
-			out.lastSyncUnix = peer.LastSyncUnix
-		}
-	}
-	if state.IPsecReconcile != nil {
-		out.desiredLinks = state.IPsecReconcile.DesiredLinks
-		out.lastLinkError = state.IPsecReconcile.LastError
-		out.ipsecLastRunUnix = state.IPsecReconcile.LastRunUnix
-	}
-	if state.RoutingReconcile != nil {
-		out.lastRoutingError = state.RoutingReconcile.LastError
-		out.routingLastRunUnix = state.RoutingReconcile.LastRunUnix
-	}
-	return out
-}
 
 func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	return daemonStateStoreMeta{
@@ -70,49 +17,6 @@ func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 		Dirty:             s.dirty,
 		ReconcileProgress: s.reconcileProgress,
 	}
-}
-
-type routesProjection struct {
-	loaded bool
-	routes *inspecthttp.RoutesResponse
-	bird   map[string]*BirdInstanceState
-	meta   daemonStateStoreMeta
-	err    error
-}
-
-func (s *DaemonStateStore) routesProjection(now time.Time) routesProjection {
-	var out routesProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out.meta = s.metaLocked()
-	state := s.committed
-	if state == nil || state.Network == nil {
-		return out
-	}
-	out.loaded = true
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
-	if err != nil {
-		out.err = err
-		return out
-	}
-	out.routes = inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
-	out.bird = cloneBirdInstances(state.BirdInstances)
-	return out
-}
-
-func (s *DaemonStateStore) admissionProjection(now time.Time) (inspect.AdmissionDiagnosis, daemonStateStoreMeta, bool) {
-	if s == nil {
-		return inspect.AdmissionDiagnosis{}, daemonStateStoreMeta{}, false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return inspect.AdmissionDiagnosis{}, s.metaLocked(), false
-	}
-	return diagnoseAutoJoinAdmission(s.committed, now), s.metaLocked(), true
 }
 
 type linksStatusProjection struct {
@@ -216,34 +120,6 @@ func (s *DaemonStateStore) revocationCleanupProjection(now time.Time) revocation
 	return projection
 }
 
-type autoJoinLogProjection struct {
-	pending     bool
-	managedZone zone.ZonePath
-	joinRequest string
-}
-
-func (s *DaemonStateStore) autoJoinLogProjection() autoJoinLogProjection {
-	var out autoJoinLogProjection
-	if s == nil {
-		return out
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	state := s.committed
-	if !autoJoinPending(state) || len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
-		return out
-	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
-	text, err := encodeBase64JSON(&joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub})
-	if err != nil {
-		return out
-	}
-	out.pending = true
-	out.managedZone = state.ManagedZone
-	out.joinRequest = text
-	return out
-}
-
 func (s *DaemonStateStore) autoAnnouncePlanProjection(d *DaemonService, ars *routing.AuthorizedRouteSet) (autoAnnouncePlan, error) {
 	if s == nil {
 		return autoAnnouncePlan{}, nil
@@ -251,30 +127,6 @@ func (s *DaemonStateStore) autoAnnouncePlanProjection(d *DaemonService, ars *rou
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return d.autoAnnounceAssignedIPsPlanForState(s.committed, ars)
-}
-
-func (s *DaemonStateStore) healthContextProjection(links []healthLinkJSON) []inspecthttp.HealthContextItem {
-	if s == nil {
-		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{HealthLinks: inspectHealthLinks(links)})
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	state := s.committed
-	if state == nil {
-		return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{HealthLinks: inspectHealthLinks(links)})
-	}
-	desiredByID := map[string]desiredLinkState{}
-	if state.IPsecReconcile != nil {
-		desiredByID = desiredByInstanceID(state.IPsecReconcile.Desired)
-	}
-	return inspecthttp.BuildHealthContext(inspecthttp.HealthContextInput{
-		HealthLinks: inspectHealthLinks(links),
-		Instances:   inspectHealthInstances(state.LinkInstances),
-		Desired:     inspectHealthDesired(desiredByID),
-		Unknown: func(instanceID string) any {
-			return healthLinkJSON{InstanceID: instanceID, State: "unknown"}
-		},
-	})
 }
 
 func (s *DaemonStateStore) stateGCPlanProjection(config *appConfig) *stateGCPlan {

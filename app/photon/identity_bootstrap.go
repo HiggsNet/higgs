@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -187,6 +188,15 @@ func writeJoinRequestFromConfig(outPath string) error {
 }
 
 func autoJoinPending(state *stateFile) bool {
+	if state == nil {
+		return false
+	}
+	return autoJoinPendingVerified(&corestate.VerifiedState{
+		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
+	})
+}
+
+func autoJoinPendingVerified(state *corestate.VerifiedState) bool {
 	if state == nil || state.Network == nil || state.ManagedZone == "" || state.ManagedZone == zone.RootZone {
 		return false
 	}
@@ -194,10 +204,10 @@ func autoJoinPending(state *stateFile) bool {
 	if zs == nil || zs.Authority == nil {
 		return true
 	}
-	if len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+	if len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
 		return true
 	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	pub := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
 	return !authorityHasKey(zs.Authority, pub)
 }
 
@@ -236,17 +246,22 @@ func tryAdoptAutoJoinDelegation(state *stateFile, now time.Time) (bool, error) {
 	return true, nil
 }
 
-func logAutoJoinPendingProjection(logger *appLogger, projection autoJoinLogProjection) {
-	if !projection.pending {
+func logAutoJoinPending(logger *appLogger, state *corestate.VerifiedState) {
+	if !autoJoinPendingVerified(state) || len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
+		return
+	}
+	pub := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
+	request, err := encodeBase64JSON(&joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub})
+	if err != nil {
 		return
 	}
 	if logger == nil {
-		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", projection.managedZone, projection.joinRequest, "photon gossip join request --from-config")
+		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, request, "photon gossip join request --from-config")
 		return
 	}
 	logger.Info("auto_join", "pending", map[string]any{
-		"zone":         projection.managedZone,
-		"join_request": projection.joinRequest,
+		"zone":         state.ManagedZone,
+		"join_request": request,
 		"hint":         "photon gossip join request --from-config",
 	})
 }
