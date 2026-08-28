@@ -292,10 +292,18 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
-	recordRejectedDigest(state, "node-b.catofes.", digestForSnapshot(snapshot), "previous transient rejection", now.Add(-time.Minute))
-
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
+	if _, err := service.StateStore.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+		Reject: map[zone.ZonePath]corestate.RejectedObject{snapshot.Zone: {
+			RootHash:    corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot)),
+			Reason:      "previous transient rejection",
+			UpdatedUnix: now.Add(-time.Minute).Unix(),
+			UntilUnix:   now.Add(time.Minute).Unix(),
+		}},
+	}); err != nil {
+		t.Fatalf("UpdatePeerCheckpoint(rejected snapshot): %v", err)
+	}
 	session := NewSyncSession("node-b.catofes.")
 	beforeRevision := service.StateStore.Meta().Revision
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones["node-b.catofes."])...)
@@ -369,7 +377,8 @@ func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
 	if afterRoot := corestate.ZoneRoot(committed.Network.Zones[snapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("root-mismatched snapshot changed zone: before=%x after=%x", beforeRoot, afterRoot)
 	}
-	if !isRejectedDigestActive(committed, session.PeerID, snapshot.Zone, []byte("different-advertised-root"), now.Add(time.Minute)) {
+	rejected := service.StateStore.common.ReadView().Gossip.Peers[session.PeerID].RejectedObjects[snapshot.Zone]
+	if !bytes.Equal(rejected.RootHash, []byte("different-advertised-root")) || rejected.UntilUnix <= now.Unix() {
 		t.Fatal("root-mismatched snapshot did not record rejected digest")
 	}
 	select {
@@ -399,7 +408,7 @@ func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalStat
 		t.Fatalf("PutAt(local-newer): %v", err)
 	}
 	beforeRoot := append([]byte(nil), corestate.ZoneRoot(state.Network.Zones[staleSnapshot.Zone])...)
-	expectedRoot := digestForSnapshot(staleSnapshot).RootHash
+	expectedRoot := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(staleSnapshot))
 
 	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
 	session := NewSyncSession("node-b.catofes.")
@@ -419,7 +428,7 @@ func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalStat
 	if committed.Network.Zones[staleSnapshot.Zone].Records[localRecord.Key] == nil {
 		t.Fatal("stale snapshot removed newer local record")
 	}
-	if isRejectedDigestActive(committed, session.PeerID, staleSnapshot.Zone, expectedRoot, now.Add(time.Minute)) {
+	if _, rejected := service.StateStore.common.ReadView().Gossip.Peers[session.PeerID].RejectedObjects[staleSnapshot.Zone]; rejected {
 		t.Fatal("valid advertised snapshot was rejected because the merge retained newer local state")
 	}
 	select {

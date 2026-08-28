@@ -101,7 +101,7 @@ type RejectedObject struct {
 	UntilUnix   int64  `json:"until_unix,omitempty"`
 }
 
-const rejectedObjectTTL = 10 * time.Minute
+const RejectedObjectTTL = 10 * time.Minute
 
 // CommitCandidate is the atomic common-state persistence candidate. Verified facts and the
 // loss-tolerant gossip checkpoint remain distinct logical partitions.
@@ -442,7 +442,7 @@ func recordRejectedObject(state *GossipCheckpoint, peerID string, path zone.Zone
 		return false
 	}
 	metadata.RejectedObjects[path] = RejectedObject{
-		RootHash: append([]byte(nil), root...), Reason: reason, UpdatedUnix: now.Unix(), UntilUnix: now.Add(rejectedObjectTTL).Unix(),
+		RootHash: append([]byte(nil), root...), Reason: reason, UpdatedUnix: now.Unix(), UntilUnix: now.Add(RejectedObjectTTL).Unix(),
 	}
 	state.Peers[peerID] = metadata
 	return true

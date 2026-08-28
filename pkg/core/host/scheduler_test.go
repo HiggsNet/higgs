@@ -268,3 +268,18 @@ func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 		t.Fatalf("timer event = %#v", event)
 	}
 }
+
+func TestRuntimeSchedulesControllerTimerInSharedQueue(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	runtime := NewRuntime(clock, 1)
+	defer runtime.Stop()
+	id := TimerID{Namespace: "controller", Owner: "daemon", Key: "routing"}
+	if _, err := runtime.ScheduleTimer(id, clock.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	fired := receiveTimer(t, runtime.Events())
+	if fired.ID != id || !runtime.AcceptTimer(fired) || runtime.AcceptTimer(fired) {
+		t.Fatalf("controller timer acceptance = %#v", fired)
+	}
+}

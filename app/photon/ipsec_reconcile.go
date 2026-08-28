@@ -941,15 +941,6 @@ func groupSpecMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.LinkGroupSpec {
 	return out
 }
 
-func linkGroupForSpec(spec ipsec.TransportLinkSpec, groups []ipsec.LinkGroupSpec) ipsec.LinkGroupSpec {
-	for _, group := range groups {
-		if group.ID == spec.OverlayID {
-			return group.Normalized()
-		}
-	}
-	return ipsec.LinkGroupSpec{}
-}
-
 func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolicy {
 	out := make(map[string]ipsec.BackoffPolicy, len(groups))
 	for _, group := range groups {

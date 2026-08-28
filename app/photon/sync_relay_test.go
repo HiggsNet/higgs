@@ -26,22 +26,13 @@ func TestRecordRelaySuppression(t *testing.T) {
 	}
 }
 
-func TestRecordRelaySuccess(t *testing.T) {
-	state := &stateFile{}
+func TestRecordRelaySuccessDiagnostics(t *testing.T) {
 	store := observability.NewPeerObservabilityStore(8, time.Hour)
 	now := time.Unix(100, 0)
 	recordRelaySuppression(store, "node-b", "relay_throttled", now.Add(-time.Second))
 
-	recordRelaySuccess(state, "node-b", "catalog-root-a", now)
 	recordRelaySuccessDiagnostics(store, "node-b", "node-a", now)
 
-	peerState := state.SyncPeers["node-b"]
-	if peerState.LastRelayUnix != now.Unix() {
-		t.Fatalf("LastRelayUnix = %d, want %d", peerState.LastRelayUnix, now.Unix())
-	}
-	if peerState.LastRelayCatalogRootHex != "catalog-root-a" {
-		t.Fatalf("LastRelayCatalogRootHex = %q, want catalog-root-a", peerState.LastRelayCatalogRootHex)
-	}
 	diagnostics, ok := store.Snapshot("node-b", now)
 	if !ok || diagnostics.LastUpdateSource != "node-a" {
 		t.Fatalf("LastUpdateSource = %q, want node-a", diagnostics.LastUpdateSource)

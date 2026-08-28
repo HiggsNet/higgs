@@ -191,6 +191,26 @@ func (runtime *Runtime) CancelGossipTimers(peerID string) {
 	runtime.schedulerForRead().CancelOwner(GossipTimerNamespace, peerID)
 }
 
+// ScheduleTimer registers a protocol or controller deadline in Runtime's one
+// scheduler. Callers choose a stable namespace/owner/key and consume the
+// resulting TimerFired event through AcceptTimer at the single-writer boundary.
+func (runtime *Runtime) ScheduleTimer(id TimerID, deadline time.Time) (uint64, error) {
+	if runtime == nil {
+		return 0, ErrRuntimeStopped
+	}
+	return runtime.schedulerForRead().Schedule(id, deadline)
+}
+
+func (runtime *Runtime) CancelTimer(id TimerID) {
+	if runtime != nil {
+		runtime.schedulerForRead().Cancel(id)
+	}
+}
+
+func (runtime *Runtime) AcceptTimer(fired TimerFired) bool {
+	return runtime != nil && runtime.schedulerForRead().Accept(fired)
+}
+
 // ResetScheduler replaces only the runtime scheduling resource. It is used by
 // deterministic tests before the event loop starts; protocol sessions remain
 // owned by the same gossip Engine.

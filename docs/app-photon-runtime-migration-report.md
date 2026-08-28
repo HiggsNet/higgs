@@ -116,7 +116,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `config.go` | 混合解析 gossip、identity 和全部 Linux subsystem | 顶层 YAML 进 `internal/photonlinux/config`；公共参数转换为 host/gossip config；各 Linux 配置归各 controller |
 | `control.go` | 私有 DTO、Unix socket client、命令 wrapper 和部分 view | DTO 进 `internal/controlapi`；Unix transport 进 `internal/photonlinux/control`；CLI/view 分别进 photoncli/inspect |
 | `cpu_profile.go` | daemon CPU profile 生命周期 | `internal/runtimeprofile` 或薄 app helper；不属于状态层 |
-| `daemon.go` | event loop、控制服务、timer、admin mutation、publisher、controller 生命周期 | 公共循环进 `pkg/core/host`；Unix control 和 Linux controller 下沉；最终只留 composition root |
+| `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing 周期 deadline 已进入 HostRuntime Scheduler；剩余公共循环进 `pkg/core/host`，Unix control 和 Linux controller 下沉，最终只留 composition root |
 | `daemon_common_intent.go` | control DTO 到公共 intent 的转换 | typed control command 落地后删除，不保留永久 adapter |
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | chunk/NACK transport 与 checkpoint/观测 adapter | assembly 已由每个 host Runtime 独占；repair deadline/缺失索引在 gossip，timer/action 已进 host Scheduler |

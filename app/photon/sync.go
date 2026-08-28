@@ -30,9 +30,6 @@ import (
 const defaultSyncRoundTimeout = 5 * time.Second
 const syncOnceResponderQuiet = 500 * time.Millisecond
 const maxRelayFanoutPerUpdate = 8
-const rejectedDigestTTL = 10 * time.Minute
-const observedPathTTL = 3 * time.Minute
-const observedPathMigrationGrace = time.Minute
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
@@ -422,80 +419,6 @@ func (e *syncPendingZonesError) PendingZones() []string {
 	return zonePathStrings(e.zones)
 }
 
-func shouldSkipRemoteZone(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
-	if state == nil {
-		return true
-	}
-	if path == state.ManagedZone {
-		// Never fetch or apply our own managed zone from a peer; we are the authority.
-		return true
-	}
-	return isRejectedDigestActive(state, peerID, path, rootHash, now)
-}
-
-func isRejectedDigestActive(state *stateFile, peerID string, path zone.ZonePath, rootHash []byte, now time.Time) bool {
-	if state == nil || peerID == "" || !path.Valid() || len(rootHash) == 0 {
-		return false
-	}
-	peerState := state.SyncPeers[peerID]
-	rejected, ok := peerState.RejectedDigests[rejectedDigestKey(path)]
-	if !ok {
-		rejected, ok = peerState.RejectedDigests[path.String()]
-		if !ok {
-			return false
-		}
-	}
-	if rejected.Object != "" && rejected.Object != "zone" {
-		return false
-	}
-	if rejected.RootHashHex != hex.EncodeToString(rootHash) {
-		return false
-	}
-	return rejected.UntilUnix != 0 && now.Before(time.Unix(rejected.UntilUnix, 0))
-}
-
-// recordRejectedDigest mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordRejectedDigest(state *stateFile, peerID string, digest corestate.ZoneDigest, reason string, now time.Time) {
-	if state == nil || peerID == "" || !digest.Zone.Valid() || len(digest.RootHash) == 0 {
-		return
-	}
-	if reason == "" {
-		reason = "verify_failed"
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	if peerState.RejectedDigests == nil {
-		peerState.RejectedDigests = make(map[string]rejectedDigestState)
-	}
-	peerState.RejectedDigests[rejectedDigestKey(digest.Zone)] = rejectedDigestState{
-		Zone:           digest.Zone,
-		Object:         "zone",
-		RootHashHex:    hex.EncodeToString(digest.RootHash),
-		Reason:         reason,
-		RejectedAtUnix: now.Unix(),
-		UntilUnix:      now.Add(rejectedDigestTTL).Unix(),
-	}
-	state.SyncPeers[peerID] = peerState
-}
-
-func rejectedDigestKey(path zone.ZonePath) string {
-	return "zone:" + path.String()
-}
-
-// recordRelaySuccess mutates state.SyncPeers. The caller must hold the write
-// lock on state.
-func recordRelaySuccess(state *stateFile, peerID, catalogRoot string, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	peerState.LastRelayUnix = now.Unix()
-	peerState.LastRelayCatalogRootHex = catalogRoot
-	state.SyncPeers[peerID] = peerState
-}
-
 func recordRelaySuccessDiagnostics(store *observability.PeerObservabilityStore, peerID, sourcePeerID string, now time.Time) {
 	if store == nil || peerID == "" {
 		return
@@ -517,30 +440,6 @@ func recordRelaySuppression(store *observability.PeerObservabilityStore, peerID,
 	})
 }
 
-// recordVerifiedObservedPath mutates state.SyncPeers. The caller must hold the
-// write lock on state.
-func recordVerifiedObservedPath(state *stateFile, peerID string, addr *net.UDPAddr, now time.Time) bool {
-	if state == nil || addr == nil || !peerChainVerified(state, peerID, now) {
-		return false
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	addrString := addr.String()
-	if peerState.ObservedAddr != addrString || peerState.ObservedFirstSeenUnix == 0 {
-		if observedPathActive(peerState, now) && peerState.ObservedAddr != "" && peerState.ObservedAddr != addrString {
-			peerState.ObservedGraceAddrs = appendObservedGraceAddr(peerState.ObservedGraceAddrs, peerState.ObservedAddr, now.Add(observedPathMigrationGrace), now)
-		}
-		peerState.ObservedFirstSeenUnix = now.Unix()
-		peerState.ObservedFailureCount = 0
-	}
-	peerState.ObservedAddr = addrString
-	peerState.ObservedLastSeenUnix = now.Unix()
-	peerState.ObservedUntilUnix = now.Add(observedPathTTL).Unix()
-	peerState.ObservedGraceAddrs = pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, addrString, now)
-	state.SyncPeers[peerID] = peerState
-	return true
-}
-
 func recordObservedSource(store *observability.PeerObservabilityStore, peerID string, source gossip.MessageType, now time.Time) {
 	if store == nil || peerID == "" {
 		return
@@ -552,14 +451,6 @@ func recordObservedSource(store *observability.PeerObservabilityStore, peerID st
 
 func observedPathActive(peerState syncPeerState, now time.Time) bool {
 	return peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0))
-}
-
-func appendObservedGraceAddr(grace []observedGraceAddrState, addr string, until, now time.Time) []observedGraceAddrState {
-	if addr == "" || !now.Before(until) {
-		return pruneObservedGraceAddrs(grace, "", now)
-	}
-	out := pruneObservedGraceAddrs(grace, addr, now)
-	return append(out, observedGraceAddrState{Addr: addr, UntilUnix: until.Unix()})
 }
 
 func pruneObservedGraceAddrs(grace []observedGraceAddrState, current string, now time.Time) []observedGraceAddrState {
@@ -965,10 +856,6 @@ func endpointDialRank(entry gossip.EndpointEntry) int {
 		return 2
 	}
 	return 0
-}
-
-func endpointEntryIsPrivate(entry gossip.EndpointEntry) bool {
-	return endpointDialRank(entry) == 2
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {

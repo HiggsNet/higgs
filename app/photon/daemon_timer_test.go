@@ -3,18 +3,27 @@ package main
 import (
 	"testing"
 	"time"
+
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
-func TestNextTimerWait(t *testing.T) {
-	now := time.Unix(1000, 0)
-	d := &DaemonService{Sync: &SyncRuntime{App: &Runtime{Clock: func() time.Time { return now }}}}
-	if wait := d.nextTimerWait(now.Add(time.Second), now.Add(2*time.Second)); wait != time.Second {
-		t.Fatalf("nextTimerWait = %v, want 1s", wait)
+func TestScheduleDaemonTimerUsesHostRuntimeNamespace(t *testing.T) {
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1)
+	defer runtime.Stop()
+	d := &DaemonService{hostRuntime: runtime}
+	if err := d.scheduleDaemonTimer(daemonTimerRouting, time.Now()); err != nil {
+		t.Fatal(err)
 	}
-	if wait := d.nextTimerWait(now.Add(-time.Second), now.Add(time.Second)); wait != 0 {
-		t.Fatalf("nextTimerWait for due deadline = %v, want 0", wait)
-	}
-	if wait := d.nextTimerWait(time.Time{}, time.Time{}); wait != 24*time.Hour {
-		t.Fatalf("nextTimerWait with no deadlines = %v, want 24h", wait)
+	select {
+	case event := <-runtime.Events():
+		fired, ok := event.(corehost.TimerFired)
+		if !ok || fired.ID.Namespace != daemonTimerNamespace || fired.ID.Owner != daemonTimerOwner || fired.ID.Key != daemonTimerRouting {
+			t.Fatalf("timer event = %#v", event)
+		}
+		if !runtime.AcceptTimer(fired) {
+			t.Fatal("daemon timer was not accepted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("daemon timer did not fire")
 	}
 }

@@ -142,47 +142,6 @@ func TestPersistedComposedDaemonStateStoreCommitsRuntimeThroughOwnedHandle(t *te
 	}
 }
 
-func TestBoltStateStoreLinuxAggregateRollbackAndNoop(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "photon.db")
-	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyRuntimeState(t, path, legacy)
-	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
-	if err != nil {
-		t.Fatalf("corestate.OpenBoltStore: %v", err)
-	}
-	defer store.Close()
-	snapshot, _, err := loadAndMigrateLinuxState(store, trustedRoot)
-	if err != nil {
-		t.Fatalf("LoadAndMigrate: %v", err)
-	}
-
-	before := boltTxID(t, path, store)
-	if err := commitLinuxState(store, snapshot.Candidate, corestate.ChangeSet{VerifiedRevision: snapshot.Revision}, snapshot.Runtime); err != nil {
-		t.Fatalf("no-op commitLinuxState: %v", err)
-	}
-	if after := boltTxID(t, path, store); after != before {
-		t.Fatalf("no-op advanced bbolt txid from %d to %d", before, after)
-	}
-
-	badRuntime := *snapshot.Runtime
-	badRuntime.IdentityKeyPath = "/changed-before-rollback"
-	badCandidate := *snapshot.Candidate
-	badVerified := *snapshot.Candidate.Verified
-	badVerified.TrustedRootPublicKey = append([]byte(nil), badVerified.TrustedRootPublicKey...)
-	badVerified.TrustedRootPublicKey[0] ^= 0xff
-	badCandidate.Verified = &badVerified
-	if err := commitLinuxState(store, &badCandidate, corestate.ChangeSet{VerifiedRevision: snapshot.Revision}, &badRuntime); !errors.Is(err, corestate.ErrInvalidStateRoot) {
-		t.Fatalf("commitLinuxState error = %v, want ErrInvalidStateRoot", err)
-	}
-	reloaded, found, err := loadAndMigrateLinuxState(store, trustedRoot)
-	if err != nil || !found {
-		t.Fatalf("reload after rollback = found=%v err=%v", found, err)
-	}
-	if reloaded.Runtime.IdentityKeyPath != snapshot.Runtime.IdentityKeyPath {
-		t.Fatalf("failed common commit retained platform write: %q", reloaded.Runtime.IdentityKeyPath)
-	}
-}
-
 func TestBoltStateStoreLinuxCommonCommitUsesOwnedHandle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
@@ -263,10 +222,10 @@ func TestBoltStateStoreLinuxRejectsStaleRuntimeCompletion(t *testing.T) {
 	}
 
 	snapshot.Candidate.Verified.Network.GlobalRoot = []byte("newer-network-root")
-	if err := commitLinuxState(store, snapshot.Candidate, corestate.ChangeSet{
+	if err := store.CommitCommon(context.Background(), snapshot.Candidate, corestate.ChangeSet{
 		VerifiedRevision: snapshot.Revision + 1,
 		NetworkChanged:   true,
-	}, snapshot.Runtime); err != nil {
+	}); err != nil {
 		t.Fatalf("advance verified revision: %v", err)
 	}
 	stale := *snapshot.Runtime
@@ -296,7 +255,7 @@ func TestBoltStateStoreLinuxRejectsNilPlatformState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAndMigrate: %v", err)
 	}
-	if err := commitLinuxState(store, snapshot.Candidate, corestate.ChangeSet{VerifiedRevision: snapshot.Revision}, nil); err == nil {
+	if err := commitLinuxRuntime(store, snapshot.Revision, nil); err == nil {
 		t.Fatal("nil Linux runtime state unexpectedly committed")
 	}
 }
@@ -316,16 +275,4 @@ func TestBoltStateStoreLinuxRejectsExternalHandle(t *testing.T) {
 	if time.Since(started) > time.Second {
 		t.Fatalf("external lock conflict did not respect timeout")
 	}
-}
-
-func boltTxID(t *testing.T, _ string, store *corestate.BoltStore) uint64 {
-	t.Helper()
-	var id uint64
-	if err := store.View(func(tx *bolt.Tx) error {
-		id = uint64(tx.ID())
-		return nil
-	}); err != nil {
-		t.Fatalf("read txid: %v", err)
-	}
-	return id
 }

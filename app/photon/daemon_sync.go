@@ -359,21 +359,6 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	return result.NetworkChanged
 }
 
-func filterRemoteCatalogPage(state *stateFile, peerID string, page *corestate.CatalogPage, now time.Time) *corestate.CatalogPage {
-	if page == nil || state == nil || len(page.Entries) == 0 {
-		return page
-	}
-	filtered := *page
-	filtered.Entries = make([]corestate.ZoneDigest, 0, len(page.Entries))
-	for _, entry := range page.Entries {
-		if shouldSkipRemoteZone(state, peerID, entry.Zone, entry.RootHash, now) {
-			continue
-		}
-		filtered.Entries = append(filtered.Entries, entry)
-	}
-	return &filtered
-}
-
 func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*corestate.PeerCheckpoint)) bool {
 	return d.recordSyncPeerStateBatch(peerID, label, fn)
 }
@@ -578,25 +563,6 @@ func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotO
 			"zone":    outcome.managedZone,
 		})
 	}
-}
-
-func (d *DaemonService) applySyncSnapshotAction(peerID string, action gossip.ApplySnapshotAction, limits corestate.SyncLimits, now time.Time) (*corestate.ApplyResult, syncSnapshotCommit, error) {
-	if action.Snapshot == nil {
-		return nil, syncSnapshotCommit{}, nil
-	}
-	outcomes, commit, err := d.applySyncSnapshotBatch(peerID, []syncSnapshotApply{{action: action, limits: limits}}, now)
-	if err != nil {
-		return nil, syncSnapshotCommit{}, err
-	}
-	if !commit.StateCommitted || len(outcomes) == 0 {
-		return nil, commit, nil
-	}
-	outcome := outcomes[0]
-	if outcome.applyErr != nil {
-		return nil, commit, outcome.applyErr
-	}
-	d.logSnapshotAdoption(peerID, outcome)
-	return outcome.result, commit, nil
 }
 
 type daemonGossipActionController struct {
@@ -986,28 +952,6 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			recordRelaySuccessDiagnostics(d.PeerObservability, peerID, sourcePeerID, now)
 		}
 	}
-}
-
-func digestForSnapshot(snapshot *corestate.ZoneSnapshot) corestate.ZoneDigest {
-	if snapshot == nil {
-		return corestate.ZoneDigest{}
-	}
-	return corestate.ZoneDigest{
-		Zone:     snapshot.Zone,
-		RootHash: corestate.ZoneRoot(zoneStateFromSnapshot(snapshot)),
-	}
-}
-
-func zoneStateFromSnapshot(snapshot *corestate.ZoneSnapshot) *zone.ZoneState {
-	if snapshot == nil {
-		return nil
-	}
-	zs := zone.NewZoneState(snapshot.Zone, snapshot.Authority)
-	zs.Delegations = snapshot.Delegations
-	zs.Revocations = snapshot.Revocations
-	zs.Records = snapshot.Records
-	zs.RecordHistory = snapshot.RecordHistory
-	return zs
 }
 
 func recordPeerBackoffCheckpoint(peer *corestate.PeerCheckpoint, err error, now time.Time) {

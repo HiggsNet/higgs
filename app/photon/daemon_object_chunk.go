@@ -50,7 +50,7 @@ func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr
 		return err
 	}
 
-	actualRoot := digestForSnapshot(snapshot).RootHash
+	actualRoot := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
 	if len(chunk.RootHash) > 0 && !bytes.Equal(chunk.RootHash, actualRoot) {
 		err := fmt.Errorf("chunk snapshot root mismatch for %s: advertised %x, decoded %x", snapshot.Zone, chunk.RootHash, actualRoot)
 		d.recordObjectChunkRejectedDigest(message.PeerID, chunk, err, now)
@@ -73,7 +73,7 @@ func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *go
 	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
 		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
 			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
-			UpdatedUnix: now.Unix(), UntilUnix: now.Add(rejectedDigestTTL).Unix(),
+			UpdatedUnix: now.Unix(), UntilUnix: now.Add(corestate.RejectedObjectTTL).Unix(),
 		}},
 	})
 	if err != nil {

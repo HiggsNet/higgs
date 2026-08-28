@@ -85,6 +85,12 @@ const (
 	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
 	defaultPeerObservabilityTTL                      = 24 * time.Hour
 	defaultPeerObservabilityLimit                    = 2048
+	daemonTimerNamespace                             = "daemon"
+	daemonTimerOwner                                 = "periodic"
+	daemonTimerSync                                  = "sync"
+	daemonTimerEndpoint                              = "endpoint_publish"
+	daemonTimerIPsec                                 = "ipsec_reconcile"
+	daemonTimerRouting                               = "routing_reconcile"
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
 	daemonEventRouteMutation         daemonEventType = "route_mutate"
@@ -341,12 +347,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.logDebug("daemon", "startup_publish_done", nil)
 	logAutoJoinPending(d.Log, d.StateStore.common.ReadView().State)
 
-	nextSync := d.Sync.now()
-	nextEndpointPublish := d.Sync.now()
+	startupNow := d.Sync.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
-	nextIPsecReconcile := nextIPsecReconcileTime(d.Sync.now(), ipsecReconcileInterval)
 	routingReconcileInterval := d.routingReconcileInterval()
-	nextRoutingReconcile := nextRoutingReconcileTime(d.Sync.now(), routingReconcileInterval)
 	d.updateDiscoveredPeers()
 	// Apply persisted lifecycle policy before startup recovery so stale signed
 	// records cannot recreate links that already exceeded cleanup_after.
@@ -363,6 +366,18 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.recoverFirewallOnStart(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
+	if err := d.scheduleDaemonTimer(daemonTimerEndpoint, startupNow); err != nil {
+		return err
+	}
+	if err := d.scheduleDaemonTimer(daemonTimerSync, startupNow); err != nil {
+		return err
+	}
+	if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextIPsecReconcileTime(startupNow, ipsecReconcileInterval)); err != nil {
+		return err
+	}
+	if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(startupNow, routingReconcileInterval)); err != nil {
+		return err
+	}
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -378,78 +393,37 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		}
 		_ = firewallFlushed
 		if syncNow {
-			nextSync = now
 			forceSync = true
+			if err := d.scheduleDaemonTimer(daemonTimerSync, now); err != nil {
+				return err
+			}
 		}
 		if ipsecFlushed {
-			nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextIPsecReconcileTime(now, ipsecReconcileInterval)); err != nil {
+				return err
+			}
 		}
 		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval {
 			ipsecReconcileInterval = interval
-			nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextIPsecReconcileTime(now, interval)); err != nil {
+				return err
+			}
 		}
 		if routingFlushed {
-			nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
+			if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(now, routingReconcileInterval)); err != nil {
+				return err
+			}
 		}
 		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval {
 			routingReconcileInterval = interval
-			nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
-		}
-		if !now.Before(nextEndpointPublish) {
-			result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
-			if result.Error != nil {
-				d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
-			}
-			if triggerSync {
-				nextSync = now
-				forceSync = true
-			}
-			interval := d.Sync.Config.ReflectorInterval
-			if interval <= 0 {
-				interval = 5 * time.Minute
-			}
-			nextEndpointPublish = now.Add(interval)
-		}
-		if !now.Before(nextSync) {
-			if d.flushPeerLifecycleCleanup() {
-				d.updateDiscoveredPeers()
-				d.notifyStateChanged()
-			}
-			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
-			if result.Error != nil {
-				d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
-			}
-			// Starting an asynchronous sync session is not itself a data-plane
-			// input change. Applied sync results call notifyStateChanged, while
-			// the independent reconcile timers remain the safety net.
-			nextSync = now.Add(d.Interval)
-			forceSync = false
-		}
-		if !nextIPsecReconcile.IsZero() && !now.Before(nextIPsecReconcile) {
-			d.ipsecDirty = true
-			if d.flushIPsecReconcile(ctx) {
-				nextIPsecReconcile = nextIPsecReconcileTime(now, ipsecReconcileInterval)
+			if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(now, interval)); err != nil {
+				return err
 			}
 		}
-		if !nextRoutingReconcile.IsZero() && !now.Before(nextRoutingReconcile) {
-			d.routingDirty = true
-			if d.flushRoutingReconcile(ctx) {
-				nextRoutingReconcile = nextRoutingReconcileTime(now, routingReconcileInterval)
-			}
-		}
-		// Wait for the next event. Use a dedicated receiver goroutine so UDP
-		// reads block until a packet arrives instead of polling every 250 ms.
-		wait := d.nextTimerWait(nextSync, nextEndpointPublish, nextIPsecReconcile, nextRoutingReconcile, time.Time{})
-		if wait <= 0 {
-			continue
-		}
-		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return nil
 		case event := <-d.Events:
-			timer.Stop()
 			result, triggerSync, stop := d.handleEvent(event)
 			if event.Reply != nil {
 				event.Reply <- result
@@ -458,11 +432,66 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				return nil
 			}
 			if triggerSync {
-				nextSync = d.Sync.now()
 				forceSync = true
+				if err := d.scheduleDaemonTimer(daemonTimerSync, d.Sync.now()); err != nil {
+					return err
+				}
 			}
 		case hostEvent := <-d.hostRuntime.Events():
-			timer.Stop()
+			if fired, ok := hostEvent.(corehost.TimerFired); ok && fired.ID.Namespace == daemonTimerNamespace {
+				if !d.hostRuntime.AcceptTimer(fired) {
+					continue
+				}
+				now := d.Sync.now()
+				switch fired.ID.Key {
+				case daemonTimerEndpoint:
+					result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
+					if result.Error != nil {
+						d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
+					}
+					if triggerSync {
+						forceSync = true
+						if err := d.scheduleDaemonTimer(daemonTimerSync, now); err != nil {
+							return err
+						}
+					}
+					interval := d.Sync.Config.ReflectorInterval
+					if interval <= 0 {
+						interval = 5 * time.Minute
+					}
+					if err := d.scheduleDaemonTimer(daemonTimerEndpoint, now.Add(interval)); err != nil {
+						return err
+					}
+				case daemonTimerSync:
+					if d.flushPeerLifecycleCleanup() {
+						d.updateDiscoveredPeers()
+						d.notifyStateChanged()
+					}
+					result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
+					if result.Error != nil {
+						d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
+					}
+					forceSync = false
+					if err := d.scheduleDaemonTimer(daemonTimerSync, now.Add(d.Interval)); err != nil {
+						return err
+					}
+				case daemonTimerIPsec:
+					d.ipsecDirty = true
+					if d.flushIPsecReconcile(ctx) {
+						if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextIPsecReconcileTime(now, ipsecReconcileInterval)); err != nil {
+							return err
+						}
+					}
+				case daemonTimerRouting:
+					d.routingDirty = true
+					if d.flushRoutingReconcile(ctx) {
+						if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(now, routingReconcileInterval)); err != nil {
+							return err
+						}
+					}
+				}
+				continue
+			}
 			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
 				packet := received.Packet
 				result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
@@ -480,10 +509,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				d.handleSyncEvent(ctx, event)
 			}
 		case <-d.healthUpdates:
-			timer.Stop()
 			d.handleHealthUpdate(d.Sync.now())
-		case <-timer.C:
-			// Continue the loop; timers will be checked and fired at the top.
 		}
 	}
 }
@@ -2167,26 +2193,15 @@ func (d *DaemonService) logError(component, event string, fields map[string]any)
 	}
 }
 
-// nextTimerWait returns the duration until the earliest non-zero deadline.
-// If no deadline is set, it returns a large value so the caller can wait
-// indefinitely for packets, events, or context cancellation. If a deadline is
-// already due, it returns 0 or a negative duration.
-func (d *DaemonService) nextTimerWait(deadlines ...time.Time) time.Duration {
-	now := d.Sync.now()
-	var earliest time.Time
-	for _, t := range deadlines {
-		if t.IsZero() {
-			continue
-		}
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
+func (d *DaemonService) scheduleDaemonTimer(key string, deadline time.Time) error {
+	if d == nil || d.hostRuntime == nil {
+		return corehost.ErrRuntimeStopped
 	}
-	if earliest.IsZero() {
-		return 24 * time.Hour
+	id := corehost.TimerID{Namespace: daemonTimerNamespace, Owner: daemonTimerOwner, Key: key}
+	if deadline.IsZero() {
+		d.hostRuntime.CancelTimer(id)
+		return nil
 	}
-	if !earliest.After(now) {
-		return 0
-	}
-	return earliest.Sub(now)
+	_, err := d.hostRuntime.ScheduleTimer(id, deadline)
+	return err
 }

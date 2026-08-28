@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"path/filepath"
 	"testing"
@@ -11,23 +13,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
-
-func TestFilterRemoteCatalogPageSkipsManagedZone(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	page := &corestate.CatalogPage{Entries: []corestate.ZoneDigest{
-		{Zone: state.ManagedZone, RootHash: []byte("remote-own-root")},
-		{Zone: "catofes.", RootHash: []byte("remote-parent-root")},
-	}}
-
-	filtered := filterRemoteCatalogPage(state, "zone-catofes-admin", page, time.Unix(1000, 0))
-	if len(filtered.Entries) != 1 || filtered.Entries[0].Zone != "catofes." {
-		t.Fatalf("filtered entries = %+v, want only catofes.", filtered.Entries)
-	}
-	if len(page.Entries) != 2 {
-		t.Fatalf("original page was mutated: %+v", page.Entries)
-	}
-}
 
 func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	state, config := buildTestNetworkState(t)
@@ -40,11 +25,12 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	snapshot := &corestate.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("node-b.catofes.", gossip.ApplySnapshotAction{PeerID: "node-b.catofes.", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
-		t.Fatal("applySyncSnapshotAction accepted an invalid snapshot")
+	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
+	if _, err := controller.ApplyGossipSnapshots(context.Background(), "node-b.catofes.", []gossip.ApplySnapshotAction{{PeerID: "node-b.catofes.", Snapshot: snapshot}}); err != nil {
+		t.Fatalf("ApplyGossipSnapshots: %v", err)
 	}
-	committed, _ := service.StateStore.Snapshot()
-	if !isRejectedDigestActive(committed, "node-b.catofes.", snapshot.Zone, digestForSnapshot(snapshot).RootHash, now.Add(time.Minute)) {
+	rejected := service.StateStore.common.ReadView().Gossip.Peers["node-b.catofes."].RejectedObjects[snapshot.Zone]
+	if !bytes.Equal(rejected.RootHash, corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))) || rejected.UntilUnix <= now.Unix() {
 		t.Fatal("invalid snapshot did not record a rejected digest")
 	}
 }
@@ -73,9 +59,10 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, commit, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err != nil {
-		t.Fatalf("applySyncSnapshotAction(root grant): %v", err)
-	} else if !commit.StateCommitted || !commit.NetworkChanged {
+	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
+	if result, err := controller.ApplyGossipSnapshots(context.Background(), "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); err != nil {
+		t.Fatalf("ApplyGossipSnapshots(root grant): %v", err)
+	} else if !result.StateCommitted || !result.NetworkChanged {
 		t.Fatal("root grant snapshot was not committed")
 	}
 
@@ -125,8 +112,9 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, _, err := service.applySyncSnapshotAction("root-admin", gossip.ApplySnapshotAction{PeerID: "root-admin", Snapshot: snapshot}, corestate.DefaultSyncLimits(), now); err == nil {
-		t.Fatal("managed authority refresh accepted a different identity key")
+	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
+	if _, err := controller.ApplyGossipSnapshots(context.Background(), "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); err != nil {
+		t.Fatalf("ApplyGossipSnapshots(root grant): %v", err)
 	}
 
 	committed, _ := service.StateStore.Snapshot()

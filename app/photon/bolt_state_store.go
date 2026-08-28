@@ -156,25 +156,6 @@ func loadAndRestoreLinuxState(store *corestate.BoltStore, trustedRoot ed25519.Pu
 	return startup, true, nil
 }
 
-// commitLinuxState atomically commits the common logical partitions and Linux
-// runtime partition through the same BoltStore transaction.
-func commitLinuxState(store *corestate.BoltStore, candidate *corestate.CommitCandidate, changes corestate.ChangeSet, runtimeState *linuxRuntimeState) error {
-	if store == nil {
-		return errors.New("bbolt state store is nil")
-	}
-	return store.Update(func(tx *bolt.Tx) (bool, error) {
-		runtimeChanged, err := saveLinuxRuntimeStateTx(tx, runtimeState)
-		if err != nil {
-			return false, err
-		}
-		commonChanged, err := corestate.CommitBoltState(tx, candidate, changes)
-		if err != nil {
-			return false, err
-		}
-		return commonChanged || runtimeChanged, nil
-	})
-}
-
 // commitLinuxRuntime persists a Linux-only completion without modifying the
 // common candidate or VerifiedRevision. sourceRevision is the sole verified
 // revision from which the controller planned its work.

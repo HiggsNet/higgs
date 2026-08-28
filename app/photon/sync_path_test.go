@@ -2,87 +2,12 @@ package main
 
 import (
 	"errors"
-	"github.com/HiggsNet/photon/internal/observability"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
-	"net"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
-
-func TestRecordVerifiedObservedPathRequiresVerifiedPeer(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	now := time.Unix(1000, 0)
-	store := observability.NewPeerObservabilityStore(8, time.Hour)
-
-	if recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, now) {
-		recordObservedSource(store, "node-b.catofes.", gossip.MessagePing, now)
-	}
-
-	peerState := state.SyncPeers["node-b.catofes."]
-	if peerState.ObservedAddr != "127.0.0.1:2000" {
-		t.Fatalf("ObservedAddr = %q, want 127.0.0.1:2000", peerState.ObservedAddr)
-	}
-	if peerState.ObservedFirstSeenUnix != now.Unix() || peerState.ObservedLastSeenUnix != now.Unix() {
-		t.Fatalf("observed timestamps = first %d last %d, want %d", peerState.ObservedFirstSeenUnix, peerState.ObservedLastSeenUnix, now.Unix())
-	}
-	if peerState.ObservedUntilUnix != now.Add(observedPathTTL).Unix() {
-		t.Fatalf("ObservedUntilUnix = %d, want %d", peerState.ObservedUntilUnix, now.Add(observedPathTTL).Unix())
-	}
-	diagnostics, ok := store.Snapshot("node-b.catofes.", now)
-	if !ok || diagnostics.ObservedSource != string(gossip.MessagePing) {
-		t.Fatalf("ObservedSource = %q, want %q", diagnostics.ObservedSource, gossip.MessagePing)
-	}
-
-	recordVerifiedObservedPath(state, "unknown.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, now)
-	if got := state.SyncPeers["unknown.catofes."].ObservedAddr; got != "" {
-		t.Fatalf("unverified peer observed addr = %q, want empty", got)
-	}
-}
-
-func TestRecordVerifiedObservedPathMigratesNewSource(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	now := time.Now()
-	store := observability.NewPeerObservabilityStore(8, time.Hour)
-
-	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2000}, now)
-	recordVerifiedObservedPath(state, "node-b.catofes.", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 3000}, now.Add(time.Second))
-	recordObservedSource(store, "node-b.catofes.", gossip.MessagePong, now.Add(time.Second))
-
-	peerState := state.SyncPeers["node-b.catofes."]
-	if peerState.ObservedAddr != "127.0.0.1:3000" {
-		t.Fatalf("ObservedAddr after migration = %q, want 127.0.0.1:3000", peerState.ObservedAddr)
-	}
-	if peerState.ObservedFirstSeenUnix != now.Add(time.Second).Unix() {
-		t.Fatalf("ObservedFirstSeenUnix = %d, want migrated timestamp %d", peerState.ObservedFirstSeenUnix, now.Add(time.Second).Unix())
-	}
-	diagnostics, ok := store.Snapshot("node-b.catofes.", now.Add(time.Second))
-	if !ok || diagnostics.ObservedSource != string(gossip.MessagePong) {
-		t.Fatalf("ObservedSource = %q, want %q", diagnostics.ObservedSource, gossip.MessagePong)
-	}
-	if len(peerState.ObservedGraceAddrs) != 1 {
-		t.Fatalf("ObservedGraceAddrs = %#v, want previous address retained", peerState.ObservedGraceAddrs)
-	}
-	if peerState.ObservedGraceAddrs[0].Addr != "127.0.0.1:2000" {
-		t.Fatalf("ObservedGraceAddrs[0].Addr = %q, want old address", peerState.ObservedGraceAddrs[0].Addr)
-	}
-	if peerState.ObservedGraceAddrs[0].UntilUnix != now.Add(time.Second).Add(observedPathMigrationGrace).Unix() {
-		t.Fatalf("ObservedGraceAddrs[0].UntilUnix = %d, want migration grace", peerState.ObservedGraceAddrs[0].UntilUnix)
-	}
-	transport := &gossip.Transport{}
-	rt := &Runtime{Clock: func() time.Time { return now.Add(2 * time.Second) }}
-	sr := newSyncRuntime(&syncConfigFile{PeerID: "node-a.catofes."}, transport, rt)
-	sr.seedObservedPeerPathAt(state, "node-b.catofes.", sr.now())
-	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 2 || got[0].String() != "127.0.0.1:3000" || got[1].String() != "127.0.0.1:2000" {
-		t.Fatalf("ObservedPeerAddrs after migration = %v, want new addr plus grace old addr", got)
-	}
-
-	rt.Clock = func() time.Time { return now.Add(2*time.Second + observedPathMigrationGrace) }
-	sr.seedObservedPeerPathAt(state, "node-b.catofes.", sr.now())
-	if got := transport.ObservedPeerAddrs("node-b.catofes."); len(got) != 1 || got[0].String() != "127.0.0.1:3000" {
-		t.Fatalf("ObservedPeerAddrs after grace expiry = %v, want only new addr", got)
-	}
-}
 
 func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
 	state, config := buildTestNetworkState(t)
