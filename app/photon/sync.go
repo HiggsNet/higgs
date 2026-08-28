@@ -501,13 +501,13 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (sr *SyncRuntime) endpointProtocolIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
+func (sr *SyncRuntime) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
 	config := sr.Config
-	if state == nil || state.ManagedZone == zone.RootZone || len(state.ZonePrivateKey) == 0 || autoJoinPending(state) {
+	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || autoJoinPendingVerified(verified) {
 		return nil, nil
 	}
 	if config != nil && config.DisableEndpointPublish {
-		return sr.clearPublishedEndpointRecordIntent(state)
+		return sr.clearPublishedEndpointRecordIntent(verified)
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
@@ -518,7 +518,7 @@ func (sr *SyncRuntime) endpointProtocolIntent(state *stateFile) (*corestate.PutP
 	now := sr.now()
 	var previous *gossip.EndpointRecord
 
-	zs := state.Network.Zones[state.ManagedZone]
+	zs := verified.Network.Zones[verified.ManagedZone]
 	if zs != nil {
 		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
 			var er gossip.EndpointRecord
@@ -542,7 +542,7 @@ func (sr *SyncRuntime) endpointProtocolIntent(state *stateFile) (*corestate.PutP
 	}
 
 	return &corestate.PutProtocolRecordIntent{
-		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: state.ManagedZone,
+		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: verified.ManagedZone,
 		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
 	}, nil
 }
@@ -632,9 +632,9 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
+func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
 	config := sr.Config
-	zs := state.Network.Zones[state.ManagedZone]
+	zs := verified.Network.Zones[verified.ManagedZone]
 	if zs == nil {
 		return nil, nil
 	}
@@ -653,7 +653,7 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(state *stateFile) (*co
 		return nil, err
 	}
 	return &corestate.PutProtocolRecordIntent{
-		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: state.ManagedZone,
+		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: verified.ManagedZone,
 		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
 	}, nil
 }

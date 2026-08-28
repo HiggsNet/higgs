@@ -855,6 +855,10 @@ package dependency: app -> host -> gossip -> state -> zone
       同时删除仅服务聚合状态的 IPsec cleanup wrappers，join key 恢复与 recovery revocation 统计直接读取 common verified state。
     - [ ] 将 IPsec、routing、firewall 主 reconcile planner 输入和 `publishLocalProtocols` 从聚合 Snapshot 改为明确的
       common verified/checkpoint 与 Linux runtime 输入；随后删除 daemon `currentState()` 以及仅剩 hook/composition 所需的完整 Snapshot。
+      Firewall 主 reconcile 已完成：planner 直接接收 `VerifiedState` 与 `linuxRuntimeState`，删除不读取参数的
+      `firewallCharonPorts` wrapper，并把端口 record 的时间显式作为输入，不再依赖可变全局测试时钟。
+      `publishLocalProtocols` 也已完成：endpoint、IPsec key/port、routing/netns 与 admission 规划分别读取 verified
+      和 Linux runtime owner，启动发布不再构造聚合 Snapshot；相关 helper 与测试同步改为 owner 参数。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

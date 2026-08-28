@@ -39,6 +39,16 @@ type testLinuxDrivers struct {
 	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
 }
 
+func verifiedStateForTest(state *stateFile) *corestate.VerifiedState {
+	if state == nil {
+		return nil
+	}
+	return &corestate.VerifiedState{
+		ManagedZone: state.ManagedZone, Network: state.Network,
+		RootPrivateKey: state.RootPrivateKey, IdentityPrivateKey: state.ZonePrivateKey,
+	}
+}
+
 func listenTestGossipTransport(listenAddr string, config gossip.Config) (*gossip.Transport, error) {
 	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
 	if err != nil {

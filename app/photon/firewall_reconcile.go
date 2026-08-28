@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -13,6 +14,11 @@ import (
 )
 
 const defaultFirewallReconcileInterval = 30 * time.Second
+
+const (
+	defaultCharonIKEPort  uint16 = 500
+	defaultCharonNATTPort uint16 = 4500
+)
 
 func (d *DaemonService) firewallReconcileInterval() time.Duration {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || len(firewallInstancesEnabled(d.Sync.App.Config)) == 0 {
@@ -36,31 +42,32 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev := d.StateStore.Snapshot()
-	if snapshot == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
 		return nil
 	}
+	rev := uint64(common.Revision)
 	config := d.Sync.App.Config
 	instances := firewallInstancesEnabled(config)
 	if len(instances) == 0 {
 		return nil
 	}
-	if snapshot.ManagedZone.IsRoot() || !snapshot.ManagedZone.Valid() {
+	if common.State.ManagedZone.IsRoot() || !common.State.ManagedZone.Valid() {
 		return nil
 	}
 
 	now := d.Sync.now()
-	summary := cloneFirewallReconcileState(snapshot.FirewallReconcile)
+	summary := cloneFirewallReconcileState(runtime.FirewallReconcile)
 	if summary == nil {
 		summary = &firewallReconcileState{}
 	}
 	summary.LastRunUnix = now.Unix()
 
 	// Build authorized route set for prefix inputs.
-	ars, err := routing.BuildAuthorizedRouteSet(snapshot.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, now)
 	if err != nil {
 		summary.LastError = err.Error()
-		_ = d.commitFirewallReconcileResult(rev, snapshot.EndpointACLs, summary)
+		_ = d.commitFirewallReconcileResult(rev, runtime.EndpointACLs, summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
 
@@ -68,14 +75,12 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		summary.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
 	}
 
-	charonIKE, charonNATT := firewallCharonPorts(config, snapshot)
-
 	var firstErr error
 	for _, instCfg := range instances {
 		listenAddrs := instCfg.ListenAddrs
-		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, charonIKE, charonNATT)
+		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, defaultCharonIKEPort, defaultCharonNATTPort)
 		if spec.IsHost {
-			endpointServices, endpointErr := resolveEndpointServices(snapshot.EndpointACLs, ars)
+			endpointServices, endpointErr := resolveEndpointServices(runtime.EndpointACLs, ars)
 			if endpointErr != nil {
 				if firstErr == nil {
 					firstErr = endpointErr
@@ -84,7 +89,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 			}
 			spec.EndpointServices = endpointServices
 		}
-		input := buildFirewallPolicyInput(spec, ars, snapshot, config)
+		input := buildFirewallPolicyInput(spec, ars, common.State, runtime, config, now)
 		desired, err := firewall.BuildDesiredState(spec, input)
 		if err != nil {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
@@ -153,7 +158,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		summary.LastError = ""
 	}
 
-	if err := d.commitFirewallReconcileResult(rev, snapshot.EndpointACLs, summary); err != nil {
+	if err := d.commitFirewallReconcileResult(rev, runtime.EndpointACLs, summary); err != nil {
 		return fmt.Errorf("save firewall reconcile state: %w", err)
 	}
 	return firstErr
@@ -236,15 +241,15 @@ func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
 }
 
 // buildFirewallPolicyInput assembles the verified derived state for the planner.
-func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, state *stateFile, config *appConfig) firewall.FirewallPolicyInput {
+func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
 	input := firewall.FirewallPolicyInput{}
-	if ars == nil || state == nil {
+	if ars == nil || verified == nil || runtime == nil {
 		return input
 	}
 	runtimeNetNS := firewallRuntimeNetNS(config, spec.NetNS)
 
 	// Local assigned prefixes (AssignedTo == managed zone).
-	managedZone := state.ManagedZone
+	managedZone := verified.ManagedZone
 	// Use AllAssignments through the shared helper: Assignments keeps only one
 	// representative per prefix, so it can hide this zone's membership in a
 	// shared/anycast assignment when another zone is the representative.
@@ -261,7 +266,7 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	input.AssignmentPrefixes = assignmentPrefixes(ars)
 
 	// Provider-neutral live Babel-facing interfaces.
-	for _, link := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
+	for _, link := range buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile) {
 		if link.InterfaceName != "" &&
 			link.Readiness.Interface == "ready" &&
 			(link.Provider == "" || link.Provider == ipsec.ProviderStrongSwan) &&
@@ -301,12 +306,8 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	// ports keep ipsec.port_mode=range usable while charon listens on stable
 	// 500/4500; previous ports keep rotate grace alive during the configured
 	// window.
-	if spec.IsHost && state.Network != nil && state.ManagedZone.Valid() {
-		now := time.Now()
-		if d := nowFunc(); !d.IsZero() {
-			now = d
-		}
-		input.AdvertisedCurrentIKEPorts, input.AdvertisedCurrentNATTPorts, input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractIPsecRedirectPortsFromNetwork(state.Network, state.ManagedZone, now)
+	if spec.IsHost && verified.Network != nil && verified.ManagedZone.Valid() {
+		input.AdvertisedCurrentIKEPorts, input.AdvertisedCurrentNATTPorts, input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractIPsecRedirectPortsFromNetwork(verified.Network, verified.ManagedZone, now)
 	}
 
 	return input
@@ -363,15 +364,6 @@ func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZon
 		}
 	}
 	return currentIKE, currentNATT, previousIKE, previousNATT
-}
-
-// nowFunc returns the current time. Overridable in tests.
-var nowFunc = func() time.Time { return time.Time{} }
-
-// firewallCharonPorts returns the current charon IKE/NAT-T listen ports.
-// First version: defaults (500/4500). Future: derive from ipsec port record.
-func firewallCharonPorts(_ *appConfig, _ *stateFile) (uint16, uint16) {
-	return 500, 4500
 }
 
 // flushFirewallReconcile runs firewall reconcile if dirty.

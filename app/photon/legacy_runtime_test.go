@@ -37,7 +37,7 @@ func (d *DaemonService) setState(state *stateFile) {
 }
 
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
-	plan, err := sr.ipsecProtocolPlan(state)
+	plan, err := sr.ipsecProtocolPlan(verifiedStateForTest(state), linuxRuntimeStateFromLegacy(state))
 	if err != nil {
 		return err
 	}

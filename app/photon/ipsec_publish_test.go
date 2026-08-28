@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -496,7 +497,7 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 	config.IPsec.AnnounceDNS = []string{"vpn.example.com"}
 	config.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
 
-	records, err := localIPsecRecords(config, &stateFile{}, "node-a.catofes.", &ipsec.TransportKeyRecord{
+	records, err := localIPsecRecords(config, &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}, &linuxRuntimeState{}, &ipsec.TransportKeyRecord{
 		Version:     1,
 		Kind:        ipsec.TransportKeyRawPublicKey,
 		Algorithm:   ipsec.AlgorithmEd25519,
@@ -565,7 +566,7 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 	config.ListenAddr = "0.0.0.0:33434"
 	// AnnounceGossipEndpoints defaults to true.
 
-	record := localIPsecAddressRecord(config, state, now)
+	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
 	if len(record.Addresses) != 4 {
 		t.Fatalf("got %d addresses, want 4: %+v", len(record.Addresses), record.Addresses)
 	}
@@ -619,7 +620,7 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 	config := defaultAppConfig()
 	config.ListenAddr = "0.0.0.0:33434"
 
-	record1 := localIPsecAddressRecord(config, state, now)
+	record1 := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
 	first, _ := json.Marshal(record1)
 
 	// Simulate gossip endpoint record being refreshed 5 minutes later with the
@@ -633,7 +634,7 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Value = data
 	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Timestamp = later.Unix()
 
-	record2 := localIPsecAddressRecord(config, state, later)
+	record2 := localIPsecAddressRecord(config, verifiedStateForTest(state), later)
 	second, _ := json.Marshal(record2)
 
 	if !bytes.Equal(first, second) {
@@ -668,7 +669,7 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 		Timestamp: now.Unix(),
 	}
 
-	record := localIPsecAddressRecord(config, state, now)
+	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
 	if len(record.Addresses) != 2 {
 		t.Fatalf("got %d addresses, want 2: %+v", len(record.Addresses), record.Addresses)
 	}
@@ -782,7 +783,7 @@ func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
 	config.IPsec.AnnounceGossipEndpoints = false
 	config.ListenAddr = "198.51.100.10:33434"
 
-	record := localIPsecAddressRecord(config, state, now)
+	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
 	if len(record.Addresses) != 1 || record.Addresses[0].Address != "198.51.100.10" {
 		t.Fatalf("expected only listen fallback, got: %+v", record.Addresses)
 	}

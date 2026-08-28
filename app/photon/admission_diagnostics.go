@@ -141,33 +141,31 @@ func debugAdmission() error {
 // admission state. It should be called when the daemon detects it is in
 // pending state, e.g. at startup or after a sync round that did not
 // result in adoption.
-func updateAdmissionOnPending(state *stateFile, now time.Time) {
-	if state == nil {
+func updateAdmissionOnPending(verified *corestate.VerifiedState, runtime *linuxRuntimeState, now time.Time) {
+	if verified == nil || runtime == nil {
 		return
 	}
-	pending := autoJoinPending(state)
-	if state.Admission == nil {
-		state.Admission = &admissionState{}
+	pending := autoJoinPendingVerified(verified)
+	if runtime.Admission == nil {
+		runtime.Admission = &admissionState{}
 	}
 	if pending {
-		if state.Admission.PendingSinceUnix == 0 {
-			state.Admission.PendingSinceUnix = now.Unix()
+		if runtime.Admission.PendingSinceUnix == 0 {
+			runtime.Admission.PendingSinceUnix = now.Unix()
 		}
-		state.Admission.Pending = true
-		state.Admission.AdoptedAtUnix = 0
-		d := diagnoseAutoJoinAdmission(&corestate.VerifiedState{
-			ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-		}, state.Admission, now)
-		state.Admission.PendingReason = d.Reason
-		state.Admission.PendingReasonDetail = d.ReasonDetail
-		state.Admission.JoinRequestB64 = d.JoinRequestB64
+		runtime.Admission.Pending = true
+		runtime.Admission.AdoptedAtUnix = 0
+		d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
+		runtime.Admission.PendingReason = d.Reason
+		runtime.Admission.PendingReasonDetail = d.ReasonDetail
+		runtime.Admission.JoinRequestB64 = d.JoinRequestB64
 	} else {
 		// Not pending — clear pending fields but preserve adopted timestamp.
-		if state.Admission.Pending {
-			state.Admission.Pending = false
-			state.Admission.AdoptedAtUnix = now.Unix()
-			state.Admission.PendingReason = ""
-			state.Admission.PendingReasonDetail = ""
+		if runtime.Admission.Pending {
+			runtime.Admission.Pending = false
+			runtime.Admission.AdoptedAtUnix = now.Unix()
+			runtime.Admission.PendingReason = ""
+			runtime.Admission.PendingReasonDetail = ""
 		}
 	}
 }

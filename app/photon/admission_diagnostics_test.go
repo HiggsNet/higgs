@@ -133,17 +133,18 @@ func TestUpdateAdmissionOnPendingSetsTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
 	now := time.Unix(5000, 0)
-	updateAdmissionOnPending(state, now)
-	if state.Admission == nil {
+	runtime := linuxRuntimeStateFromLegacy(state)
+	updateAdmissionOnPending(verifiedStateForTest(state), runtime, now)
+	if runtime.Admission == nil {
 		t.Fatalf("admission state should be initialized")
 	}
-	if !state.Admission.Pending {
+	if !runtime.Admission.Pending {
 		t.Fatalf("should be pending")
 	}
-	if state.Admission.PendingSinceUnix != now.Unix() {
-		t.Fatalf("pending_since = %d, want %d", state.Admission.PendingSinceUnix, now.Unix())
+	if runtime.Admission.PendingSinceUnix != now.Unix() {
+		t.Fatalf("pending_since = %d, want %d", runtime.Admission.PendingSinceUnix, now.Unix())
 	}
-	if state.Admission.PendingReason == "" {
+	if runtime.Admission.PendingReason == "" {
 		t.Fatalf("pending_reason should not be empty")
 	}
 }
@@ -156,9 +157,10 @@ func TestUpdateAdmissionOnPendingPreservesTimestamp(t *testing.T) {
 		Pending:          true,
 		PendingSinceUnix: originalTime.Unix(),
 	}
-	updateAdmissionOnPending(state, time.Unix(5000, 0))
-	if state.Admission.PendingSinceUnix != originalTime.Unix() {
-		t.Fatalf("pending_since = %d, want %d (should be preserved)", state.Admission.PendingSinceUnix, originalTime.Unix())
+	runtime := linuxRuntimeStateFromLegacy(state)
+	updateAdmissionOnPending(verifiedStateForTest(state), runtime, time.Unix(5000, 0))
+	if runtime.Admission.PendingSinceUnix != originalTime.Unix() {
+		t.Fatalf("pending_since = %d, want %d (should be preserved)", runtime.Admission.PendingSinceUnix, originalTime.Unix())
 	}
 }
 
@@ -185,7 +187,9 @@ func TestAdmissionStatePersistsAcrossReload(t *testing.T) {
 		t.Fatalf("state should start pending")
 	}
 
-	updateAdmissionOnPending(state, time.Unix(1000, 0))
+	runtime := linuxRuntimeStateFromLegacy(state)
+	updateAdmissionOnPending(verifiedStateForTest(state), runtime, time.Unix(1000, 0))
+	state.Admission = cloneAdmissionState(runtime.Admission)
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}

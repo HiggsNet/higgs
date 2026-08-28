@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -214,12 +215,14 @@ func planLocalIPsecPortRotation(config *appConfig, state *stateFile, now time.Ti
 	if now.IsZero() {
 		now = time.Now()
 	}
-	existing := existingIPsecPortRecord(state)
+	verified := &corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network}
+	ownersRuntime := linuxRuntimeStateFromLegacy(state)
+	existing := existingIPsecPortRecord(verified)
 	previous := existing
 	if previous == nil {
-		previous = previousIPsecPortRecord(state)
+		previous = previousIPsecPortRecord(ownersRuntime)
 	}
-	prevState := ipsecPortRecordStateFromMeta(state)
+	prevState := ipsecPortRecordStateFromRuntime(ownersRuntime)
 	if prevState == nil {
 		prevState = ipsecPortRecordStateFromRecord(existing)
 	}

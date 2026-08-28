@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observer"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -614,15 +615,13 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	oldNow := nowFunc
-	nowFunc = func() time.Time { return now }
-	t.Cleanup(func() { nowFunc = oldNow })
-
 	input := buildFirewallPolicyInput(
 		firewall.FirewallInstanceSpec{ID: "host", IsHost: true},
 		&routing.AuthorizedRouteSet{},
-		state,
+		&corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network},
+		linuxRuntimeStateFromLegacy(state),
 		defaultAppConfig(),
+		now,
 	)
 	if len(input.AdvertisedCurrentIKEPorts) != 1 || input.AdvertisedCurrentIKEPorts[0] != 1500 {
 		t.Fatalf("current IKE ports = %v, want [1500]", input.AdvertisedCurrentIKEPorts)
@@ -657,8 +656,10 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 	input := buildFirewallPolicyInput(
 		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "photon"},
 		ars,
-		&stateFile{ManagedZone: "node-b.catofes."},
+		&corestate.VerifiedState{ManagedZone: "node-b.catofes."},
+		&linuxRuntimeState{},
 		defaultAppConfig(),
+		time.Now(),
 	)
 
 	if len(input.LocalAssigned) != 1 || input.LocalAssigned[0] != prefix {
@@ -698,8 +699,10 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 	input := buildFirewallPolicyInput(
 		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "default"},
 		&routing.AuthorizedRouteSet{},
-		state,
+		&corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network},
+		linuxRuntimeStateFromLegacy(state),
 		config,
+		time.Now(),
 	)
 	if len(input.LiveInterfaces) != 1 || input.LiveInterfaces[0] != "phx11111111" {
 		t.Fatalf("live interfaces = %v, want photon interface only", input.LiveInterfaces)

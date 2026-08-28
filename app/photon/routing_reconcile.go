@@ -1148,12 +1148,12 @@ func autoAnnounceAssignedIPsPlan(network *zone.NetworkState, managedZone zone.Zo
 	return plan, nil
 }
 
-func (d *DaemonService) routingNetnsProtocolIntent(state *stateFile) (*corestate.PutProtocolRecordIntent, error) {
-	if d == nil || d.Sync == nil || state == nil || state.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *DaemonService) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
+	if d == nil || d.Sync == nil || verified == nil || verified.Network == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil, nil
 	}
 	config := d.Sync.App.Config
-	if state.ManagedZone == zone.RootZone || !state.ManagedZone.Valid() || len(state.ZonePrivateKey) == 0 {
+	if verified.ManagedZone == zone.RootZone || !verified.ManagedZone.Valid() || len(verified.IdentityPrivateKey) == 0 {
 		return nil, nil
 	}
 	if len(config.Routing.Instances) == 0 {
@@ -1168,13 +1168,13 @@ func (d *DaemonService) routingNetnsProtocolIntent(state *stateFile) (*corestate
 	if err != nil {
 		return nil, fmt.Errorf("marshal routing/netns record: %w", err)
 	}
-	if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
+	if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil {
 		if current := zs.Records[routing.RecordKeyRoutingNetns]; current != nil && bytesEqual(current.Value, value) {
 			return nil, nil
 		}
 	}
 	return &corestate.PutProtocolRecordIntent{
-		Kind: corestate.ProtocolRecordRoutingNetns, Zone: state.ManagedZone,
+		Kind: corestate.ProtocolRecordRoutingNetns, Zone: verified.ManagedZone,
 		Key: routing.RecordKeyRoutingNetns, Type: routing.RecordTypeRoutingNetns, Value: value,
 	}, nil
 }

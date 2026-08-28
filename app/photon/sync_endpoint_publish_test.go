@@ -30,7 +30,7 @@ func TestEndpointProtocolIntentRefreshAndGrace(t *testing.T) {
 	now := time.Unix(1000, 0)
 	sr := newSyncRuntime(config, nil, &Runtime{Clock: func() time.Time { return now }})
 
-	intent, err := sr.endpointProtocolIntent(state)
+	intent, err := sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent == nil {
 		t.Fatalf("initial plan = intent:%+v err:%v", intent, err)
 	}
@@ -42,7 +42,7 @@ func TestEndpointProtocolIntentRefreshAndGrace(t *testing.T) {
 
 	now = now.Add(time.Minute)
 	address = "198.51.100.20"
-	intent, err = sr.endpointProtocolIntent(state)
+	intent, err = sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent == nil {
 		t.Fatalf("changed plan = intent:%+v err:%v", intent, err)
 	}
@@ -53,12 +53,12 @@ func TestEndpointProtocolIntentRefreshAndGrace(t *testing.T) {
 	applyEndpointIntentForTest(t, state, intent, now)
 
 	now = time.Unix(1300, 0)
-	intent, err = sr.endpointProtocolIntent(state)
+	intent, err = sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent != nil {
 		t.Fatalf("early refresh = intent:%+v err:%v", intent, err)
 	}
 	now = time.Unix(2800, 0)
-	intent, err = sr.endpointProtocolIntent(state)
+	intent, err = sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent == nil {
 		t.Fatalf("due refresh = intent:%+v err:%v", intent, err)
 	}
@@ -78,7 +78,7 @@ func TestEndpointProtocolIntentDisablesAndSkipsRoot(t *testing.T) {
 		t.Fatalf("PutAt: %v", err)
 	}
 	sr := newSyncRuntime(config, nil, &Runtime{Clock: func() time.Time { return now }})
-	intent, err := sr.endpointProtocolIntent(state)
+	intent, err := sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent == nil {
 		t.Fatalf("disable plan = intent:%+v err:%v", intent, err)
 	}
@@ -86,7 +86,7 @@ func TestEndpointProtocolIntentDisablesAndSkipsRoot(t *testing.T) {
 		t.Fatalf("disabled endpoints = %#v, want empty", got.Endpoints)
 	}
 	state.ManagedZone = zone.RootZone
-	intent, err = sr.endpointProtocolIntent(state)
+	intent, err = sr.endpointProtocolIntent(verifiedStateForTest(state))
 	if err != nil || intent != nil {
 		t.Fatalf("root plan = intent:%+v err:%v", intent, err)
 	}

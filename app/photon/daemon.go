@@ -1573,24 +1573,23 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
-	state, revision := d.StateStore.Snapshot()
-	if state == nil || state.Network == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return false, errors.New("daemon state network is nil")
 	}
-	runtime := linuxRuntimeStateFromLegacy(state)
+	revision := uint64(common.Revision)
 	if updateAdmission {
-		updateAdmissionOnPending(state, d.Sync.now())
-		runtime.Admission = cloneAdmissionState(state.Admission)
+		updateAdmissionOnPending(common.State, runtime, d.Sync.now())
 	}
 	var intents []corestate.LocalIntent
-	endpoint, err := d.Sync.endpointProtocolIntent(state)
+	endpoint, err := d.Sync.endpointProtocolIntent(common.State)
 	if err != nil {
 		return false, fmt.Errorf("plan endpoint record: %w", err)
 	}
 	if endpoint != nil {
 		intents = append(intents, *endpoint)
 	}
-	ipsecPlan, err := d.Sync.ipsecProtocolPlan(state)
+	ipsecPlan, err := d.Sync.ipsecProtocolPlan(common.State, runtime)
 	if err != nil {
 		return false, fmt.Errorf("plan IPsec records: %w", err)
 	}
@@ -1601,7 +1600,7 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	if ipsecPlan.PortRecord != nil {
 		runtime.IPsecPortRecord = cloneIPsecPortRecordState(ipsecPlan.PortRecord)
 	}
-	routingIntent, err := d.routingNetnsProtocolIntent(state)
+	routingIntent, err := d.routingNetnsProtocolIntent(common.State)
 	if err != nil {
 		return false, fmt.Errorf("plan routing record: %w", err)
 	}

@@ -25,47 +25,47 @@ type localIPsecPublishPlan struct {
 	PortRecord   *ipsecPortRecordState
 }
 
-func (sr *SyncRuntime) ipsecProtocolPlan(state *stateFile) (localIPsecPublishPlan, error) {
+func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *linuxRuntimeState) (localIPsecPublishPlan, error) {
 	var plan localIPsecPublishPlan
-	if sr == nil || state == nil || state.Network == nil || sr.App == nil || sr.App.Config == nil {
+	if sr == nil || verified == nil || verified.Network == nil || runtime == nil || sr.App == nil || sr.App.Config == nil {
 		if sr != nil {
 			sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
 		}
 		return plan, nil
 	}
 	config := sr.App.Config
-	if state.ManagedZone == zone.RootZone {
+	if verified.ManagedZone == zone.RootZone {
 		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
 		return plan, nil
 	}
-	if !state.ManagedZone.Valid() {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": state.ManagedZone})
+	if !verified.ManagedZone.Valid() {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
-	if len(state.ZonePrivateKey) == 0 {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": state.ManagedZone})
+	if len(verified.IdentityPrivateKey) == 0 {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
-	if autoJoinPending(state) {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": state.ManagedZone})
+	if autoJoinPendingVerified(verified) {
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
 	if len(config.IPsec.LinkGroups) == 0 {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": state.ManagedZone})
+		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
 	sr.logger().Debug("ipsec", "publish_started", map[string]any{
-		"managed_zone": state.ManagedZone,
+		"managed_zone": verified.ManagedZone,
 		"role":         config.IPsec.Role,
 		"link_groups":  len(config.IPsec.LinkGroups),
 	})
 	now := sr.now()
-	key, keyRecord, err := ensureIPsecTransportKey(state, now)
+	key, keyRecord, err := ensureIPsecTransportKey(runtime, verified.IdentityPrivateKey, now)
 	if err != nil {
 		return plan, err
 	}
 	plan.TransportKey = cloneIPsecTransportKeyState(key)
-	records, err := localIPsecRecords(config, state, state.ManagedZone, keyRecord, now)
+	records, err := localIPsecRecords(config, verified, runtime, keyRecord, now)
 	if err != nil {
 		return plan, err
 	}
@@ -74,16 +74,16 @@ func (sr *SyncRuntime) ipsecProtocolPlan(state *stateFile) (localIPsecPublishPla
 		if err != nil {
 			return localIPsecPublishPlan{}, err
 		}
-		if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
+		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil {
 			if current := zs.Records[item.key]; current != nil && current.Type == item.recordType && bytes.Equal(current.Value, value) {
 				continue
 			}
 		}
 		plan.Intents = append(plan.Intents, corestate.PutProtocolRecordIntent{
-			Kind: corestate.ProtocolRecordIPsec, Zone: state.ManagedZone, Key: item.key, Type: item.recordType, Value: value,
+			Kind: corestate.ProtocolRecordIPsec, Zone: verified.ManagedZone, Key: item.key, Type: item.recordType, Value: value,
 		})
 		sr.logger().Debug("ipsec", "publish_record_decision", map[string]any{
-			"managed_zone": state.ManagedZone,
+			"managed_zone": verified.ManagedZone,
 			"key":          item.key,
 			"updated":      true,
 		})
@@ -105,7 +105,7 @@ func (sr *SyncRuntime) ipsecProtocolPlan(state *stateFile) (localIPsecPublishPla
 		if portRecord.Range != nil {
 			r = portRecord.Range
 		}
-		previousState := state.IPsecPortRecord
+		previousState := runtime.IPsecPortRecord
 		sr.logger().Debug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
 		plan.PortRecord = &ipsecPortRecordState{
 			Mode:       portRecord.Mode,
@@ -114,17 +114,17 @@ func (sr *SyncRuntime) ipsecProtocolPlan(state *stateFile) (localIPsecPublishPla
 			UpdatedAt:  portRecord.UpdatedAt,
 		}
 	}
-	if len(plan.Intents) > 0 || !sameIPsecPublishRuntime(state, plan) {
-		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
+	if len(plan.Intents) > 0 || !sameIPsecPublishRuntime(runtime, plan) {
+		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
 		return plan, nil
 	}
-	sr.logger().Debug("ipsec", "publish_unchanged", map[string]any{"managed_zone": state.ManagedZone, "records": len(records)})
+	sr.logger().Debug("ipsec", "publish_unchanged", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
 	return plan, nil
 }
 
-func sameIPsecPublishRuntime(state *stateFile, plan localIPsecPublishPlan) bool {
-	return ipsecTransportKeyStateEqual(state.IPsecTransportKey, plan.TransportKey) &&
-		ipsecPortRecordStateEqual(state.IPsecPortRecord, plan.PortRecord)
+func sameIPsecPublishRuntime(runtime *linuxRuntimeState, plan localIPsecPublishPlan) bool {
+	return runtime != nil && ipsecTransportKeyStateEqual(runtime.IPsecTransportKey, plan.TransportKey) &&
+		ipsecPortRecordStateEqual(runtime.IPsecPortRecord, plan.PortRecord)
 }
 
 func ipsecTransportKeyStateEqual(a, b *ipsecTransportKeyState) bool {
@@ -192,15 +192,15 @@ type localIPsecRecord struct {
 	value      any
 }
 
-func ensureIPsecTransportKey(state *stateFile, now time.Time) (*ipsecTransportKeyState, *ipsec.TransportKeyRecord, error) {
-	if state == nil {
-		return nil, nil, fmt.Errorf("state is nil")
+func ensureIPsecTransportKey(runtime *linuxRuntimeState, identityPrivateKey ed25519.PrivateKey, now time.Time) (*ipsecTransportKeyState, *ipsec.TransportKeyRecord, error) {
+	if runtime == nil {
+		return nil, nil, fmt.Errorf("linux runtime state is nil")
 	}
-	if key := state.IPsecTransportKey; key != nil && len(key.PublicKey) > 0 && len(key.PrivateKey) > 0 {
+	if key := runtime.IPsecTransportKey; key != nil && len(key.PublicKey) > 0 && len(key.PrivateKey) > 0 {
 		record := buildTransportKeyRecord(key)
 		return key, record, nil
 	}
-	generated, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, zonePublicKey(state)...)
+	generated, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, zonePublicKey(identityPrivateKey)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -246,23 +246,23 @@ func ipsecPublicKeyString(publicKey []byte) string {
 	return base64.StdEncoding.EncodeToString(publicKey)
 }
 
-func zonePublicKey(state *stateFile) [][]byte {
-	if state == nil || len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+func zonePublicKey(identityPrivateKey ed25519.PrivateKey) [][]byte {
+	if len(identityPrivateKey) != ed25519.PrivateKeySize {
 		return nil
 	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	pub := identityPrivateKey.Public().(ed25519.PublicKey)
 	return [][]byte{append([]byte(nil), pub...)}
 }
 
-func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePath, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
+func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, runtime *linuxRuntimeState, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
 	if key == nil {
 		return nil, fmt.Errorf("transport key record is required")
 	}
-	addresses := localIPsecAddressRecord(config, state, now)
-	ports, err := localIPsecPortRecord(config, state, now)
+	addresses := localIPsecAddressRecord(config, verified, now)
+	ports, err := localIPsecPortRecord(config, verified, runtime, now)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +275,7 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 		Version:                 1,
 		Enabled:                 true,
 		Provider:                ipsec.ProviderStrongSwan,
-		IKEIdentity:             string(managed),
+		IKEIdentity:             string(verified.ManagedZone),
 		TransportKeyFingerprint: key.Fingerprint,
 		Role:                    role,
 		AddressFamilies:         families,
@@ -288,11 +288,11 @@ func localIPsecRecords(config *appConfig, state *stateFile, managed zone.ZonePat
 		{key: ipsec.RecordKeyAddresses, recordType: ipsec.RecordTypeAddresses, value: addresses},
 		{key: ipsec.RecordKeyPorts, recordType: ipsec.RecordTypePorts, value: ports},
 	}
-	records = append(records, localIPsecOverlayIntentRecords(config, state, addresses, now)...)
+	records = append(records, localIPsecOverlayIntentRecords(config, verified, addresses, now)...)
 	return records, nil
 }
 
-func localIPsecOverlayIntentRecords(config *appConfig, state *stateFile, addresses ipsec.AddressRecord, now time.Time) []localIPsecRecord {
+func localIPsecOverlayIntentRecords(config *appConfig, verified *corestate.VerifiedState, addresses ipsec.AddressRecord, now time.Time) []localIPsecRecord {
 	if config == nil {
 		return nil
 	}
@@ -318,7 +318,7 @@ func localIPsecOverlayIntentRecords(config *appConfig, state *stateFile, address
 		// Preserve the existing timestamp when the overlay intent has not
 		// actually changed. Otherwise the record would be re-published on every
 		// reconcile cycle just because UpdatedAt moved forward.
-		if existing := existingOverlayIntentRecord(state, group.ID); existing != nil && overlayIntentContentEqual(existing, &intent) {
+		if existing := existingOverlayIntentRecord(verified, group.ID); existing != nil && overlayIntentContentEqual(existing, &intent) {
 			intent.UpdatedAt = existing.UpdatedAt
 		}
 		out = append(out, localIPsecRecord{
@@ -330,11 +330,11 @@ func localIPsecOverlayIntentRecords(config *appConfig, state *stateFile, address
 	return out
 }
 
-func existingOverlayIntentRecord(state *stateFile, overlayID string) *ipsec.OverlayIntentRecord {
-	if state == nil || state.Network == nil || !state.ManagedZone.Valid() {
+func existingOverlayIntentRecord(verified *corestate.VerifiedState, overlayID string) *ipsec.OverlayIntentRecord {
+	if verified == nil || verified.Network == nil || !verified.ManagedZone.Valid() {
 		return nil
 	}
-	zs := state.Network.Zones[state.ManagedZone]
+	zs := verified.Network.Zones[verified.ManagedZone]
 	if zs == nil {
 		return nil
 	}
@@ -385,7 +385,7 @@ func localOverlayIntentPathKeys(group ipsec.LinkGroupSpec, families []string) []
 	}
 }
 
-func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time) ipsec.AddressRecord {
+func localIPsecAddressRecord(config *appConfig, verified *corestate.VerifiedState, now time.Time) ipsec.AddressRecord {
 	record := ipsec.AddressRecord{Version: 1}
 	seen := map[string]bool{}
 	priority := 100
@@ -465,7 +465,7 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 
 	// 4. Follow gossip endpoints (reflector / interface discovery).
 	if config.IPsec.AnnounceGossipEndpoints {
-		for _, ad := range ipsecAddressesFromGossipEndpoints(state, seen, now) {
+		for _, ad := range ipsecAddressesFromGossipEndpoints(verified, seen, now) {
 			addAddress(ad)
 		}
 	}
@@ -492,11 +492,11 @@ func localIPsecAddressRecord(config *appConfig, state *stateFile, now time.Time)
 // ipsecAddressesFromGossipEndpoints reads the local sync/endpoint/udp record
 // and converts its entries into IPsec AddressAdvertisement values.
 // The seen set is updated for each converted address.
-func ipsecAddressesFromGossipEndpoints(state *stateFile, seen map[string]bool, now time.Time) []ipsec.AddressAdvertisement {
-	if state == nil || state.ManagedZone == "" || seen == nil {
+func ipsecAddressesFromGossipEndpoints(verified *corestate.VerifiedState, seen map[string]bool, now time.Time) []ipsec.AddressAdvertisement {
+	if verified == nil || verified.Network == nil || verified.ManagedZone == "" || seen == nil {
 		return nil
 	}
-	zs := state.Network.Zones[state.ManagedZone]
+	zs := verified.Network.Zones[verified.ManagedZone]
 	if zs == nil {
 		return nil
 	}
@@ -583,15 +583,15 @@ func mapGossipEndpointSourceToIPsec(ep gossip.EndpointEntry) (source, reachabili
 	return
 }
 
-func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, error) {
+func localIPsecPortRecord(config *appConfig, verified *corestate.VerifiedState, runtime *linuxRuntimeState, now time.Time) (*ipsec.PortRecord, error) {
 	// IPsec ports are independent of the gossip listen address. Use the IKEv2
 	// defaults unless the configuration explicitly requests a different mode.
 	ike := uint16(ipsec.DefaultIKEPort)
 	natt := uint16(ipsec.DefaultNATTPort)
-	existing := existingIPsecPortRecord(state)
+	existing := existingIPsecPortRecord(verified)
 	previous := existing
 	if previous == nil {
-		previous = previousIPsecPortRecord(state)
+		previous = previousIPsecPortRecord(runtime)
 	}
 	mode := config.IPsec.PortMode
 	if mode == "" {
@@ -601,7 +601,7 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 	var portRange *ipsec.PortRange
 	if mode == ipsec.PortModeRange {
 		portRange = &config.IPsec.PortRange
-		generation = nextPortGeneration(state, existing, config, now)
+		generation = nextPortGeneration(runtime, existing, config, now)
 	}
 	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange) {
 		return existing, nil
@@ -618,11 +618,11 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 	})
 }
 
-func existingIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
-	if state == nil || state.Network == nil || !state.ManagedZone.Valid() {
+func existingIPsecPortRecord(verified *corestate.VerifiedState) *ipsec.PortRecord {
+	if verified == nil || verified.Network == nil || !verified.ManagedZone.Valid() {
 		return nil
 	}
-	zs := state.Network.Zones[state.ManagedZone]
+	zs := verified.Network.Zones[verified.ManagedZone]
 	if zs == nil || zs.Records == nil || zs.Records[ipsec.RecordKeyPorts] == nil {
 		return nil
 	}
@@ -633,11 +633,11 @@ func existingIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
 	return record
 }
 
-func previousIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
-	if state == nil || state.IPsecPortRecord == nil {
+func previousIPsecPortRecord(runtime *linuxRuntimeState) *ipsec.PortRecord {
+	if runtime == nil || runtime.IPsecPortRecord == nil {
 		return nil
 	}
-	prev := state.IPsecPortRecord
+	prev := runtime.IPsecPortRecord
 	record := &ipsec.PortRecord{
 		Version:   1,
 		Mode:      prev.Mode,
@@ -658,8 +658,8 @@ func previousIPsecPortRecord(state *stateFile) *ipsec.PortRecord {
 	return record
 }
 
-func nextPortGeneration(state *stateFile, existing *ipsec.PortRecord, config *appConfig, now time.Time) uint64 {
-	prev := ipsecPortRecordStateFromMeta(state)
+func nextPortGeneration(runtime *linuxRuntimeState, existing *ipsec.PortRecord, config *appConfig, now time.Time) uint64 {
+	prev := ipsecPortRecordStateFromRuntime(runtime)
 	if prev == nil {
 		prev = ipsecPortRecordStateFromRecord(existing)
 	}
@@ -679,11 +679,11 @@ func nextPortGeneration(state *stateFile, existing *ipsec.PortRecord, config *ap
 	return prev.Generation
 }
 
-func ipsecPortRecordStateFromMeta(state *stateFile) *ipsecPortRecordState {
-	if state == nil || state.IPsecPortRecord == nil {
+func ipsecPortRecordStateFromRuntime(runtime *linuxRuntimeState) *ipsecPortRecordState {
+	if runtime == nil || runtime.IPsecPortRecord == nil {
 		return nil
 	}
-	return state.IPsecPortRecord
+	return runtime.IPsecPortRecord
 }
 
 func ipsecPortRecordStateFromRecord(record *ipsec.PortRecord) *ipsecPortRecordState {
