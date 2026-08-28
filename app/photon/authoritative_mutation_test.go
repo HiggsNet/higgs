@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
@@ -93,21 +95,21 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if _, err := applyIPAMMutation(state, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntent(state, commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      managed, Prefix: "10.0.4.0/24", Target: managed,
-	}, rt.Now()); err != nil {
+	}), rt.Now()); err != nil {
 		t.Fatalf("apply assignment: %v", err)
 	}
-	if _, err := applyRouteMutation(state, routeMutationRequest{
+	if err := applyAuthoritativeTestIntent(state, commonRouteIntent(routeMutationRequest{
 		Zone: managed, Prefix: "10.0.4.0/24", Active: true,
-	}, rt.Now()); err != nil {
+	}), rt.Now()); err != nil {
 		t.Fatalf("apply active route: %v", err)
 	}
 	activeDisk := cloneStateFile(state)
-	if _, err := applyRouteMutation(state, routeMutationRequest{
+	if err := applyAuthoritativeTestIntent(state, commonRouteIntent(routeMutationRequest{
 		Zone: managed, Prefix: "10.0.4.0/24", Active: false,
-	}, rt.Now().Add(time.Second)); err != nil {
+	}), rt.Now().Add(time.Second)); err != nil {
 		t.Fatalf("withdraw committed route: %v", err)
 	}
 	if err := rt.SaveState(activeDisk); err != nil {
@@ -145,10 +147,10 @@ func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing
 		t.Fatalf("LoadState(committed): %v", err)
 	}
 	disk := cloneStateFile(committed)
-	if _, err := applyIPAMMutation(disk, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntent(disk, commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      managed, Prefix: "10.0.5.0/24", Target: managed,
-	}, rt.Now()); err != nil {
+	}), rt.Now()); err != nil {
 		t.Fatalf("apply disk assignment: %v", err)
 	}
 	if err := rt.SaveState(disk); err != nil {
@@ -223,7 +225,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
 	}
-	_, directErr := applyIPAMMutation(state, request, rt.Now())
+	directErr := applyAuthoritativeTestIntent(state, commonIPAMIntentForTest(t, request), rt.Now())
 	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
 	if directErr == nil || result.Error == nil {
@@ -232,6 +234,34 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 	if directErr.Error() != result.Error.Error() {
 		t.Fatalf("validation diverged: direct=%q daemon=%q", directErr, result.Error)
 	}
+}
+
+func commonIPAMIntentForTest(t *testing.T, request ipamMutationRequest) corestate.LocalIntent {
+	t.Helper()
+	intent, err := commonIPAMIntent(request)
+	if err != nil {
+		t.Fatalf("commonIPAMIntent: %v", err)
+	}
+	return intent
+}
+
+func applyAuthoritativeTestIntent(state *stateFile, intent corestate.LocalIntent, now time.Time) error {
+	return applyAuthoritativeTestIntentAs(state, state.ManagedZone, state.ZonePrivateKey, intent, now)
+}
+
+func applyAuthoritativeTestIntentAs(state *stateFile, managedZone zone.ZonePath, privateKey []byte, intent corestate.LocalIntent, now time.Time) error {
+	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{
+		ManagedZone:          managedZone,
+		Network:              state.Network,
+		TrustedRootPublicKey: append([]byte(nil), state.Network.Zones[zone.RootZone].Authority.Keys[0].Key...),
+		RootPrivateKey:       append([]byte(nil), state.RootPrivateKey...),
+		IdentityPrivateKey:   append([]byte(nil), privateKey...),
+	}, nil, nil)
+	if _, err := store.ApplyLocalIntent(context.Background(), intent, now); err != nil {
+		return err
+	}
+	state.Network = store.ReadView().State.Network
+	return nil
 }
 
 func TestUnavailableMutationControlFailsClosedWithoutDiskWrite(t *testing.T) {

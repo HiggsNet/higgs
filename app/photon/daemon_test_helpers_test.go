@@ -75,10 +75,6 @@ func installTestFirewallDriver(service *DaemonService, firewallDriver firewall.F
 	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, firewall: firewallDriver})
 }
 
-func installTestPlatformDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, firewallDriver firewall.FirewallDriver) {
-	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: ipsecDriver, xfrm: xfrmDriver, firewall: firewallDriver})
-}
-
 func installTestBirdDrivers(service *DaemonService, process bird.ProcessManager, clientFactory func(string, time.Duration) photonlinux.BirdClient) {
 	dryRun := &ipsec.DryRunDriver{}
 	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, birdProcess: process, birdClientFactory: clientFactory})
@@ -106,11 +102,6 @@ func installTestLinuxDrivers(service *DaemonService, drivers testLinuxDrivers) {
 	})); err != nil {
 		panic(err)
 	}
-}
-
-func installTestRoutingDrivers(service *DaemonService, vethManager bird.VethManager, upstreamRoutes photonlinux.UpstreamRouteManager) {
-	dryRun := &ipsec.DryRunDriver{}
-	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, veth: vethManager, upstreamRoutes: upstreamRoutes})
 }
 
 func newTestLinuxRuntime(ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) *photonlinux.Runtime {

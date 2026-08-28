@@ -1330,9 +1330,9 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissio
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
-	state := d.currentState()
+	view := d.StateStore.common.ReadView()
 	parent := request.Zone.Parent()
-	parentState := state.Network.Zones[parent]
+	parentState := view.State.Network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
 		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
 	}
@@ -1348,7 +1348,7 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissio
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromState(d.currentState(), request.Zone, d.Sync.now())
+	bundle, err := joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, request.Zone, d.Sync.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1363,11 +1363,11 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 	if !path.Valid() || len(permissions) == 0 {
 		return nil, errors.New("valid delegated zone and at least one permission are required")
 	}
-	state := d.currentState()
-	if state == nil || state.Network == nil || state.Network.Zones[path] == nil || state.Network.Zones[path].Authority == nil {
+	view := d.StateStore.common.ReadView()
+	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil || view.State.Network.Zones[path].Authority == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
-	authority := cloneAuthorityForJoinBundle(state.Network.Zones[path].Authority)
+	authority := cloneAuthorityForJoinBundle(view.State.Network.Zones[path].Authority)
 	grantPermissionsToAuthority(authority, permissions)
 	authority.Epoch++
 	var intent corestate.LocalIntent
@@ -1387,26 +1387,26 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 	if path.IsRoot() {
 		return nil, nil
 	}
-	return joinBundleFromState(d.currentState(), path, d.Sync.now())
+	return joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, path, d.Sync.now())
 }
 
-func joinBundleFromState(state *stateFile, path zone.ZonePath, now time.Time) (*joinBundle, error) {
-	if state == nil || state.Network == nil {
-		return nil, errors.New("state is nil")
+func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now time.Time) (*joinBundle, error) {
+	if network == nil {
+		return nil, errors.New("network is nil")
 	}
-	rootKey, err := rootPublicKey(state.Network)
+	rootKey, err := rootPublicKey(network)
 	if err != nil {
 		return nil, err
 	}
-	network, err := minimalNetworkForJoinBundle(state.Network, path)
+	bundleNetwork, err := minimalNetworkForJoinBundle(network, path)
 	if err != nil {
 		return nil, err
 	}
-	configureValidation(network)
-	if err := photoncrypto.VerifyChain(network, path, now); err != nil {
+	configureValidation(bundleNetwork)
+	if err := photoncrypto.VerifyChain(bundleNetwork, path, now); err != nil {
 		return nil, err
 	}
-	return &joinBundle{Version: 1, Zone: path, RootPublicKey: rootKey, Network: network}, nil
+	return &joinBundle{Version: 1, Zone: path, RootPublicKey: rootKey, Network: bundleNetwork}, nil
 }
 
 func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {

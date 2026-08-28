@@ -151,13 +151,9 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err := readBase64JSONOrJSON(requestText, &request); err != nil {
 		t.Fatalf("read request payload: %v", err)
 	}
-	state, err := rt.LoadState()
+	result, err := issueDelegationDirect(rt, &request, nil)
 	if err != nil {
-		t.Fatalf("loadState(admin): %v", err)
-	}
-	result, err := issueDelegationInState(rt, state, &request, nil)
-	if err != nil {
-		t.Fatalf("issueDelegationInState: %v", err)
+		t.Fatalf("issueDelegationDirect: %v", err)
 	}
 	bundleText, err := encodeBase64JSON(result.Bundle)
 	if err != nil {

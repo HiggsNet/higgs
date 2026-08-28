@@ -843,6 +843,12 @@ package dependency: app -> host -> gossip -> state -> zone
     - [x] JSONL spool 的配置、并发写入、保留期裁剪和 series query 已整体迁入
       `internal/observability/healthspool`；Observer 直接查询该 owner，daemon 只把 health snapshot 转为 Sample。
       app 私有 `health_spool.go` 已删除，纯 spool 测试随实现迁移。
+  - [x] E2i：完成推荐顺序中的旧 direct writer 收口。
+    - [x] record、IPAM、route、service 与 delegation issue/grant/revoke 的 explicit `--direct` 路径均直接使用
+      唯一 BoltStore 恢复出的 common Store typed intent；删除旧 `stateFile` 手工 record/delegation 签名、候选授权校验、
+      peer cleanup 和测试保活入口。只读 show/list 的 `LoadState` 不在本项冒充 writer。
+    - [x] fresh join accept 直接初始化 common/Linux bucket，不先写 legacy `stateFile` 再依赖下次启动迁移；首次 identity 先由公共 Store 完整验证，再在同一 Bolt 事务原子写入两个 bucket，避免崩溃留下半初始化数据库。
+    - [x] `state_gc --direct` 只读/提交 Linux runtime owner，不再 `LoadState -> SaveState` 聚合状态；提交绑定当前 common verified revision，但不会推进该 revision。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

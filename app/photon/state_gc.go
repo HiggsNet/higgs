@@ -34,12 +34,12 @@ func buildStateGCPlan(config *appConfig, instances map[string]*BirdInstanceState
 	return plan
 }
 
-func applyStateGCPlan(state *stateFile, plan *stateGCPlan) bool {
-	if state == nil || plan == nil || len(plan.OrphanBirdInstances) == 0 {
+func applyStateGCPlan(runtime *linuxRuntimeState, plan *stateGCPlan) bool {
+	if runtime == nil || plan == nil || len(plan.OrphanBirdInstances) == 0 {
 		return false
 	}
 	for _, netns := range plan.OrphanBirdInstances {
-		delete(state.BirdInstances, netns)
+		delete(runtime.BirdInstances, netns)
 	}
 	return true
 }
@@ -75,20 +75,29 @@ func garbageCollectState(apply, direct bool) error {
 		writeStateGCResult(response.StateGC, apply, "via daemon")
 		return nil
 	}
-	state, err := rt.LoadState()
+	plan, err := garbageCollectStateDirect(rt, apply)
 	if err != nil {
 		return err
 	}
-	state.Lock()
-	defer state.Unlock()
-	plan := buildStateGCPlan(rt.Config, state.BirdInstances)
-	if apply && applyStateGCPlan(state, plan) {
-		if err := rt.SaveState(state); err != nil {
-			return err
-		}
-	}
 	writeStateGCResult(plan, apply, "directly")
 	return nil
+}
+
+func garbageCollectStateDirect(rt *Runtime, apply bool) (*stateGCPlan, error) {
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		return nil, err
+	}
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+	plan := buildStateGCPlan(rt.Config, runtimeCandidate.BirdInstances)
+	if apply && applyStateGCPlan(runtimeCandidate, plan) {
+		if err := commitLinuxRuntime(boltStore, startup.Common.VerifiedRevision(), runtimeCandidate); err != nil {
+			return nil, err
+		}
+	}
+	return plan, nil
 }
 
 func writeStateGCResult(plan *stateGCPlan, apply bool, source string) {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
 	"fmt"
 	"os"
@@ -25,13 +24,6 @@ type recordMutationResult struct {
 	Key     string
 	Version uint64
 	DryRun  bool
-}
-
-func cloneNetworkStateForCandidateValidation(ns *zone.NetworkState, path zone.ZonePath) *zone.NetworkState {
-	if ns == nil {
-		return zone.NewNetworkState()
-	}
-	return zone.CloneNetworkStateForZone(ns, path)
 }
 
 func validateGenericRecordPut(key, recordType string) error {
@@ -91,18 +83,9 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	if err := validateGenericRecordPut(key, recordType); err != nil {
 		return err
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
-	if err != nil {
-		return err
-	}
-	defer boltStore.Close()
-	store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-	if err != nil {
-		return err
-	}
-	result, err := store.ApplyCommonLocalIntent(context.Background(), corestate.PutRecordIntent{
+	result, err := applyOfflineCommonIntent(rt, corestate.PutRecordIntent{
 		Zone: path, Key: key, Type: recordType, Value: append([]byte(nil), value...),
-	}, false, rt.Now())
+	}, false)
 	if err != nil {
 		return err
 	}

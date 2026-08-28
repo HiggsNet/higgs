@@ -1,20 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/routing"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
@@ -110,99 +104,17 @@ func submitServiceMutation(rt *Runtime, request serviceMutationRequest, operatio
 		fmt.Printf("%s service %s version %d via daemon\n", operation, socks5RecordName, version)
 		return nil
 	}
-	state, err := rt.LoadState()
+	intent, err := commonServiceIntent(request)
 	if err != nil {
 		return err
 	}
-	result, err := applyServiceMutation(state, request, rt.Now())
+	result, err := applyOfflineCommonIntent(rt, intent, request.DryRun)
 	if err != nil {
 		return err
 	}
-	if !result.DryRun {
-		if err := rt.SaveState(state); err != nil {
-			return err
-		}
+	if result.Record == nil {
+		return errors.New("service mutation did not return a record")
 	}
-	fmt.Printf("%s service %s version %d\n", operation, socks5RecordName, result.Version)
+	fmt.Printf("%s service %s version %d\n", operation, socks5RecordName, result.Record.Version)
 	return nil
-}
-
-func applyServiceMutation(state *stateFile, request serviceMutationRequest, now time.Time) (*recordMutationResult, error) {
-	if state == nil || state.Network == nil {
-		return nil, errors.New("state is nil")
-	}
-	path := state.ManagedZone
-	if !path.Valid() {
-		return nil, fmt.Errorf("invalid managed zone: %s", path)
-	}
-	key, err := photonservice.RecordKey(socks5RecordName)
-	if err != nil {
-		return nil, err
-	}
-	var value photonservice.SOCKS5Record
-	switch request.Operation {
-	case serviceOperationPublish:
-		canonical := make([]photonservice.SOCKS5Endpoint, 0, len(request.Endpoints))
-		for _, endpoint := range request.Endpoints {
-			addr, err := netip.ParseAddr(endpoint.Address)
-			if err != nil {
-				return nil, fmt.Errorf("invalid service address %q: %w", endpoint.Address, err)
-			}
-			endpoint.Address = addr.String()
-			canonical = append(canonical, endpoint)
-		}
-		sort.Slice(canonical, func(i, j int) bool {
-			if canonical[i].Region != canonical[j].Region {
-				return canonical[i].Region < canonical[j].Region
-			}
-			return canonical[i].Address < canonical[j].Address
-		})
-		value = photonservice.SOCKS5Record{Type: photonservice.TypeSOCKS5, Endpoints: canonical}
-		if err := value.Validate(); err != nil {
-			return nil, err
-		}
-	case serviceOperationWithdraw:
-		zs := state.Network.Zones[path]
-		if zs == nil || zs.Records[key] == nil {
-			return nil, fmt.Errorf("service %q is not published", socks5RecordName)
-		}
-		current, err := photonservice.ParseSOCKS5Record(zs.Records[key])
-		if err != nil {
-			return nil, fmt.Errorf("current service record is invalid: %w", err)
-		}
-		if !current.IsActive() {
-			return nil, fmt.Errorf("service %q is already withdrawn", socks5RecordName)
-		}
-		active := false
-		current.Active = &active
-		value = *current
-	default:
-		return nil, fmt.Errorf("unsupported service operation %q", request.Operation)
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("marshal service record: %w", err)
-	}
-	if value.IsActive() {
-		candidate := &zone.Record{Zone: path, Key: key, Type: photonservice.RecordTypeSOCKS5, Value: encoded}
-		ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
-		if err != nil {
-			return nil, fmt.Errorf("build route authorization: %w", err)
-		}
-		if _, err := photonservice.AuthorizeSOCKS5Record(candidate, ars); err != nil {
-			return nil, err
-		}
-	}
-	record, err := buildSignedRecordAt(state, path, key, encoded, photonservice.RecordTypeSOCKS5, now)
-	if err != nil {
-		return nil, err
-	}
-	result := &recordMutationResult{Zone: path, Key: key, Version: record.Version, DryRun: request.DryRun}
-	if request.DryRun {
-		return result, nil
-	}
-	if err := state.Network.Put(record); err != nil {
-		return nil, err
-	}
-	return result, nil
 }

@@ -15,38 +15,73 @@ func TestStateGCOnlyPlansUnconfiguredBirdInstances(t *testing.T) {
 		// Disabled entries remain configured and must not be treated as orphans.
 		{ID: "standby", NetNS: "edge", Enabled: false, Mode: ipsec.RoutingModeDisabled},
 	}}
-	state := &stateFile{BirdInstances: map[string]*BirdInstanceState{
+	runtime := &linuxRuntimeState{BirdInstances: map[string]*BirdInstanceState{
 		"default": {NetNSName: "default"},
 		"edge":    {NetNSName: "edge"},
 		"photon":  {NetNSName: "photon"},
 	}}
 
-	plan := buildStateGCPlan(config, state.BirdInstances)
+	plan := buildStateGCPlan(config, runtime.BirdInstances)
 	if len(plan.OrphanBirdInstances) != 1 || plan.OrphanBirdInstances[0] != "default" {
 		t.Fatalf("orphan BIRD instances = %#v, want [default]", plan.OrphanBirdInstances)
 	}
-	if !applyStateGCPlan(state, plan) {
+	if !applyStateGCPlan(runtime, plan) {
 		t.Fatal("applyStateGCPlan = false, want true")
 	}
-	if _, ok := state.BirdInstances["default"]; ok {
+	if _, ok := runtime.BirdInstances["default"]; ok {
 		t.Fatal("default BIRD state was not removed")
 	}
-	if len(state.BirdInstances) != 2 || state.BirdInstances["photon"] == nil || state.BirdInstances["edge"] == nil {
-		t.Fatalf("remaining BIRD state = %#v", state.BirdInstances)
+	if len(runtime.BirdInstances) != 2 || runtime.BirdInstances["photon"] == nil || runtime.BirdInstances["edge"] == nil {
+		t.Fatalf("remaining BIRD state = %#v", runtime.BirdInstances)
 	}
 }
 
 func TestStateGCEmptyPlanDoesNotMutateState(t *testing.T) {
 	config := defaultAppConfig()
 	config.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
-	state := &stateFile{BirdInstances: map[string]*BirdInstanceState{"photon": {NetNSName: "photon"}}}
+	runtime := &linuxRuntimeState{BirdInstances: map[string]*BirdInstanceState{"photon": {NetNSName: "photon"}}}
 
-	plan := buildStateGCPlan(config, state.BirdInstances)
+	plan := buildStateGCPlan(config, runtime.BirdInstances)
 	if len(plan.OrphanBirdInstances) != 0 {
 		t.Fatalf("orphan BIRD instances = %#v, want none", plan.OrphanBirdInstances)
 	}
-	if applyStateGCPlan(state, plan) {
+	if applyStateGCPlan(runtime, plan) {
 		t.Fatal("applyStateGCPlan = true for empty plan")
+	}
+}
+
+func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
+	state, trustedRoot := legacyRuntimeMigrationFixture(t)
+	state.BirdInstances = map[string]*BirdInstanceState{
+		"default": {NetNSName: "default"},
+		"photon":  {NetNSName: "photon"},
+	}
+	appConfig := defaultAppConfig()
+	appConfig.TrustedRootPublicKey = trustedRoot
+	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
+	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	plan, err := garbageCollectStateDirect(rt, true)
+	if err != nil {
+		t.Fatalf("garbageCollectStateDirect: %v", err)
+	}
+	if len(plan.OrphanBirdInstances) != 1 || plan.OrphanBirdInstances[0] != "default" {
+		t.Fatalf("plan = %#v, want default orphan", plan)
+	}
+	store, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState: %v", err)
+	}
+	defer store.Close()
+	defer startup.Common.Close()
+	if startup.Common.VerifiedRevision() != 0 {
+		t.Fatalf("Linux GC advanced verified revision to %d", startup.Common.VerifiedRevision())
+	}
+	if startup.Runtime.BirdInstances["default"] != nil || startup.Runtime.BirdInstances["photon"] == nil {
+		t.Fatalf("persisted BIRD runtime = %#v", startup.Runtime.BirdInstances)
 	}
 }
 

@@ -599,18 +599,6 @@ func readFileString(path string) (string, error) {
 	return string(data), nil
 }
 
-func runWithZonePrivateKey(rt *Runtime, key ed25519.PrivateKey, f func() error) error {
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	state.ZonePrivateKey = key
-	if err := rt.SaveState(state); err != nil {
-		return err
-	}
-	return f()
-}
-
 func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*stateFile, *Runtime) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)

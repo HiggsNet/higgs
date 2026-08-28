@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func allAuthorityPermissions() []zone.Permission {
@@ -79,15 +80,8 @@ func grantDelegationPermissions(path zone.ZonePath, permissions []zone.Permissio
 	if !direct {
 		logControlFallback("delegate_grant")
 	}
-	state, err := rt.LoadState()
+	bundle, err = grantDelegationPermissionsDirect(rt, path, permissions)
 	if err != nil {
-		return err
-	}
-	bundle, err = grantDelegationPermissionsInState(rt, state, path, permissions)
-	if err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
 		return err
 	}
 	if err := writeDelegationGrantBundle(bundle, outPath); err != nil {
@@ -108,17 +102,21 @@ func writeDelegationGrantBundle(bundle *joinBundle, outPath string) error {
 	return nil
 }
 
-func grantDelegationPermissionsInState(rt *Runtime, state *stateFile, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
-	if state == nil || state.Network == nil {
-		return nil, errors.New("state is nil")
-	}
+func grantDelegationPermissionsDirect(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
 	if !path.Valid() {
 		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
-	zs := state.Network.Zones[path]
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		return nil, err
+	}
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	zs := view.State.Network.Zones[path]
 	if zs == nil || zs.Authority == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
@@ -129,59 +127,19 @@ func grantDelegationPermissionsInState(rt *Runtime, state *stateFile, path zone.
 	grantPermissionsToAuthority(authority, permissions)
 	authority.Epoch++
 
-	if path == zone.RootZone {
-		if !authorityHasPrivateKey(authority, state.RootPrivateKey) {
-			return nil, errors.New("root private key does not match root authority")
-		}
-		zs.Authority = authority
-		configureValidation(state.Network)
-		if err := photoncrypto.VerifyChain(state.Network, zone.RootZone, rt.Now()); err != nil {
-			return nil, err
-		}
+	var intent corestate.LocalIntent
+	if path.IsRoot() {
+		intent = corestate.UpdateRootAuthorityIntent{Authority: authority}
+	} else {
+		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
+	}
+	if _, err := startup.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+		return nil, err
+	}
+	if path.IsRoot() {
 		return nil, nil
 	}
-
-	parent := path.Parent()
-	parentState := state.Network.Zones[parent]
-	if parentState == nil || parentState.Authority == nil {
-		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
-	}
-	signer, err := signerForParent(state, parent)
-	if err != nil {
-		return nil, err
-	}
-	delegation := &zone.Delegation{
-		ZoneName:  path,
-		Scope:     zone.DelegationScopeDirectChild,
-		Authority: *authority,
-	}
-	if err := photoncrypto.SignDelegation(delegation, parent, signer); err != nil {
-		return nil, err
-	}
-	parentState.Delegations[path] = delegation
-	zs.Authority = authority
-	configureValidation(state.Network)
-	if err := photoncrypto.VerifyChain(state.Network, path, rt.Now()); err != nil {
-		return nil, err
-	}
-	rootKey, err := rootPublicKey(state.Network)
-	if err != nil {
-		return nil, err
-	}
-	bundleNetwork, err := minimalNetworkForJoinBundle(state.Network, path)
-	if err != nil {
-		return nil, err
-	}
-	configureValidation(bundleNetwork)
-	if err := photoncrypto.VerifyChain(bundleNetwork, path, rt.Now()); err != nil {
-		return nil, err
-	}
-	return &joinBundle{
-		Version:       1,
-		Zone:          path,
-		RootPublicKey: rootKey,
-		Network:       bundleNetwork,
-	}, nil
+	return joinBundleFromNetwork(startup.Common.ReadView().State.Network, path, rt.Now())
 }
 
 func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zone.Permission) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -9,6 +10,19 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
+
+func applyOfflineCommonIntent(rt *Runtime, intent corestate.LocalIntent, dryRun bool) (corestate.LocalIntentResult, error) {
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		return corestate.LocalIntentResult{}, err
+	}
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	if dryRun {
+		return startup.Common.PreviewLocalIntent(intent, rt.Now())
+	}
+	return startup.Common.ApplyLocalIntent(context.Background(), intent, rt.Now())
+}
 
 const daemonBoltLockTimeout = time.Second
 
@@ -175,5 +189,34 @@ func commitLinuxRuntime(store *corestate.BoltStore, sourceRevision corestate.Ver
 			return false, fmt.Errorf("%w: completion=%d current=%d", errRuntimeStateSourceRevisionMismatch, sourceRevision, currentRevision)
 		}
 		return saveLinuxRuntimeStateTx(tx, runtimeState)
+	})
+}
+
+// initializeLinuxState atomically creates the common and Linux runtime
+// partitions for a previously empty database. Identity validation happens in
+// the public Store before this function is called; this boundary only ensures
+// that a crash cannot leave one partition without the other.
+func initializeLinuxState(store *corestate.BoltStore, candidate *corestate.CommitCandidate, revision corestate.VerifiedRevision, runtimeState *linuxRuntimeState) error {
+	if store == nil {
+		return errors.New("bbolt state store is nil")
+	}
+	return store.Update(func(tx *bolt.Tx) (bool, error) {
+		_, _, _, found, err := corestate.LoadBoltState(tx)
+		if err != nil {
+			return false, err
+		}
+		if found || tx.Bucket(bucketLinuxRuntime) != nil || tx.Bucket(bucketLegacyMeta) != nil {
+			return false, errors.New("daemon state is already initialized")
+		}
+		commonChanged, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{
+			VerifiedRevision: revision,
+			NetworkChanged:   true,
+			SecurityPriority: true,
+		})
+		if err != nil {
+			return false, err
+		}
+		runtimeChanged, err := saveLinuxRuntimeStateTx(tx, runtimeState)
+		return commonChanged || runtimeChanged, err
 	})
 }

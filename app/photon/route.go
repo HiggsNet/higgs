@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -81,83 +79,15 @@ func mutateRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, acti
 		fmt.Printf("%s route %s version %d via daemon\n", routeOpVerb(request.Active), request.Prefix, version)
 		return nil
 	}
-	state, err := rt.LoadState()
+	result, err := applyOfflineCommonIntent(rt, commonRouteIntent(request), request.DryRun)
 	if err != nil {
 		return err
 	}
-	result, err := applyRouteMutation(state, request, rt.Now())
-	if err != nil {
-		return err
+	if result.Record == nil {
+		return errors.New("route mutation did not return a record")
 	}
-	if !result.DryRun {
-		if err := rt.SaveState(state); err != nil {
-			return err
-		}
-	}
-	fmt.Printf("%s route %s/%s version %d\n", routeOpVerb(request.Active), result.Zone, result.Key, result.Version)
+	fmt.Printf("%s route %s/%s version %d\n", routeOpVerb(request.Active), result.Record.Zone, result.Record.Key, result.Record.Version)
 	return nil
-}
-
-func applyRouteMutation(state *stateFile, request routeMutationRequest, now time.Time) (*recordMutationResult, error) {
-	if state == nil || state.Network == nil {
-		return nil, errors.New("state is nil")
-	}
-	if !request.Zone.Valid() {
-		return nil, fmt.Errorf("invalid route zone: %s", request.Zone)
-	}
-	canonical, key, value, err := prepareRouteRecord(request.Prefix, request.Active)
-	if err != nil {
-		return nil, err
-	}
-	if !request.Active {
-		if err := checkWithdrawAllowed(state, request.Zone, key, canonical); err != nil {
-			return nil, err
-		}
-	}
-	record, err := buildSignedRecordAt(state, request.Zone, key, value, routing.RecordTypeRouteAnnouncement, now)
-	if err != nil {
-		return nil, err
-	}
-	if request.Active {
-		if err := validateRouteCandidate(state, record, canonical, now); err != nil {
-			return nil, err
-		}
-	}
-	result := &recordMutationResult{Zone: request.Zone, Key: key, Version: record.Version, DryRun: request.DryRun}
-	if request.DryRun {
-		return result, nil
-	}
-	if err := state.Network.Put(record); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func validateRouteCandidate(state *stateFile, record *zone.Record, canonical string, now time.Time) error {
-	path := record.Zone
-	ns := cloneNetworkStateForCandidateValidation(state.Network, path)
-	zs := ns.Zones[path]
-	if zs == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	if err := ns.Put(record); err != nil {
-		return err
-	}
-	ars, err := routing.BuildAuthorizedRouteSet(ns, now)
-	if err != nil {
-		return fmt.Errorf("build route authorization: %w", err)
-	}
-	for prefix := range ars.Announced[path] {
-		if prefix.String() == canonical {
-			return nil
-		}
-	}
-	for _, authErr := range ars.Errors {
-		if authErr.Zone == path && authErr.Prefix.String() == canonical {
-			return fmt.Errorf("%s: %s", authErr.Code, authErr.Detail)
-		}
-	}
-	return fmt.Errorf("route_unauthorized_no_assignment: no matching assignment for %s in %s", canonical, path)
 }
 
 func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool) (*routeShowReport, error) {
@@ -419,48 +349,9 @@ func routeUsesSharedAssignment(ars *routing.AuthorizedRouteSet, path zone.ZonePa
 	return false
 }
 
-func prepareRouteRecord(prefix string, active bool) (canonical, key string, value []byte, err error) {
-	canonical, err = routing.CanonicalizePrefix(prefix)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("invalid prefix %q: %w", prefix, err)
-	}
-	key, err = routing.NormalizeRouteAnnouncementKey(prefix)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("normalize route key for %q: %w", prefix, err)
-	}
-	record := routing.RouteAnnouncementRecord{Version: 1, Prefix: canonical, Active: active}
-	value, err = json.Marshal(record)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("marshal route announcement record: %w", err)
-	}
-	return canonical, key, value, nil
-}
-
 func routeOpVerb(active bool) string {
 	if active {
 		return "announced"
 	}
 	return "withdrew"
-}
-
-func checkWithdrawAllowed(state *stateFile, path zone.ZonePath, key, canonical string) error {
-	if state == nil || state.Network == nil {
-		return fmt.Errorf("state is nil")
-	}
-	zs := state.Network.Zones[path]
-	if zs == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	current := zs.Records[key]
-	if current == nil {
-		return fmt.Errorf("no active route announcement for %s in %s", canonical, path)
-	}
-	ann, err := routing.ParseRouteAnnouncementRecord(current)
-	if err != nil {
-		return fmt.Errorf("current route record for %s is invalid: %w", canonical, err)
-	}
-	if !ann.Active {
-		return fmt.Errorf("route %s in %s is already withdrawn", canonical, path)
-	}
-	return nil
 }

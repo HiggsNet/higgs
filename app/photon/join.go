@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"slices"
 
@@ -108,15 +107,8 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	if !direct {
 		logControlFallback("delegate_issue")
 	}
-	state, err := rt.LoadState()
+	result, err := issueDelegationDirect(rt, &request, permissions)
 	if err != nil {
-		return err
-	}
-	result, err := issueDelegationInState(rt, state, &request, permissions)
-	if err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
 		return err
 	}
 	if outPath == "" {
@@ -136,20 +128,22 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	return nil
 }
 
-func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+func issueDelegationDirect(rt *Runtime, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
-	parent := request.Zone.Parent()
-	parentState := state.Network.Zones[parent]
-	if parentState == nil || parentState.Authority == nil {
-		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
-	}
-	signer, err := signerForParent(state, parent)
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return nil, err
 	}
-
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	view := startup.Common.ReadView()
+	parent := request.Zone.Parent()
+	parentState := view.State.Network.Zones[parent]
+	if parentState == nil || parentState.Authority == nil {
+		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	}
 	authorityEpoch := uint64(1)
 	if parentState.Revocations != nil {
 		if revocation := parentState.Revocations[request.Zone]; revocation != nil && revocation.RevokedAuthorityEpoch >= authorityEpoch {
@@ -165,40 +159,16 @@ func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest,
 			Capabilities: delegationCapabilities(permissions),
 		}},
 	}
-	delegation := &zone.Delegation{
-		ZoneName:  request.Zone,
-		Scope:     zone.DelegationScopeDirectChild,
-		Authority: *authority,
-	}
-	if err := photoncrypto.SignDelegation(delegation, parent, signer); err != nil {
+	if _, err := startup.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
+		Parent: parent, Authority: authority,
+	}, rt.Now()); err != nil {
 		return nil, err
 	}
-	parentState.Delegations[request.Zone] = delegation
-	state.Network.Zones[request.Zone] = zone.NewZoneState(request.Zone, authority)
-	configureValidation(state.Network)
-	if err := photoncrypto.VerifyChain(state.Network, request.Zone, rt.Now()); err != nil {
-		return nil, err
-	}
-
-	rootKey, err := rootPublicKey(state.Network)
+	bundle, err := joinBundleFromNetwork(startup.Common.ReadView().State.Network, request.Zone, rt.Now())
 	if err != nil {
 		return nil, err
 	}
-	bundleNetwork, err := minimalNetworkForJoinBundle(state.Network, request.Zone)
-	if err != nil {
-		return nil, err
-	}
-	configureValidation(bundleNetwork)
-	if err := photoncrypto.VerifyChain(bundleNetwork, request.Zone, rt.Now()); err != nil {
-		return nil, err
-	}
-	bundle := joinBundle{
-		Version:       1,
-		Zone:          request.Zone,
-		RootPublicKey: rootKey,
-		Network:       bundleNetwork,
-	}
-	return &delegationIssueResult{Zone: request.Zone, Bundle: &bundle}, nil
+	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
 }
 
 func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
@@ -227,70 +197,27 @@ func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
 	if !direct {
 		logControlFallback("delegate_revoke")
 	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
-	if err := revokeDelegationInState(rt, state, path, reason); err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
+	if err := revokeDelegationDirect(rt, path, reason); err != nil {
 		return err
 	}
 	fmt.Printf("revoked delegation for %s\n", path)
 	return nil
 }
 
-func revokeDelegationInState(rt *Runtime, state *stateFile, path zone.ZonePath, reason string) error {
+func revokeDelegationDirect(rt *Runtime, path zone.ZonePath, reason string) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid revoke zone: %s", path)
 	}
-	parent := path.Parent()
-	parentState := state.Network.Zones[parent]
-	if parentState == nil || parentState.Authority == nil {
-		return fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
-	}
-	signer, err := signerForParent(state, parent)
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	if parentState.Revocations == nil {
-		parentState.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
-	}
-
-	delegation := parentState.Delegations[path]
-	authorityEpoch := uint64(1)
-	var authorityHash []byte
-	if delegation != nil {
-		authorityEpoch = delegation.AuthorityEpoch
-		authorityHash = append([]byte(nil), delegation.AuthorityHash...)
-	} else if childState := state.Network.Zones[path]; childState != nil && childState.Authority != nil {
-		authorityEpoch = childState.Authority.Epoch
-		authorityHash = photoncrypto.AuthorityHash(childState.Authority)
-	} else {
-		return fmt.Errorf("delegation not found: %s", path)
-	}
-	if reason == "" {
-		reason = "revoked"
-	}
-	revocation := &zone.DelegationRevocation{
-		ChildZone:             path,
-		ParentZone:            parent,
-		RevokedAuthorityEpoch: authorityEpoch,
-		RevokedAuthorityHash:  authorityHash,
-		Reason:                reason,
-		RevokedAt:             rt.Now().Unix(),
-	}
-	if err := photoncrypto.SignDelegationRevocation(revocation, parent, signer); err != nil {
-		return err
-	}
-	if err := photoncrypto.VerifyDelegationRevocation(revocation, parentState.Authority, parent, rt.Now()); err != nil {
-		return err
-	}
-	parentState.Revocations[path] = revocation
-	delete(parentState.Delegations, path)
-	cleanupRevokedPeerState(state, path)
-	return nil
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	_, err = startup.Common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
+		Parent: path.Parent(), Child: path, Reason: reason,
+	}, rt.Now())
+	return err
 }
 
 func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
@@ -329,107 +256,70 @@ func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 }
 
 func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	var existing *stateFile
-	if loaded, err := rt.LoadState(); err == nil {
-		existing = loaded
+	if rt == nil || rt.Config == nil || rt.StatePath == "" {
+		return nil, errors.New("runtime state path is not configured")
 	}
-	_, partitioned, err := loadPartitionedState(rt.StatePath, rt.Config)
+	if bundle == nil {
+		return nil, errors.New("join bundle is nil")
+	}
+	if bundle.Version != 1 {
+		return nil, fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
+	}
+	if bundle.Network == nil {
+		return nil, errors.New("join bundle network is nil")
+	}
+	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return nil, err
 	}
-	if partitioned {
+	defer boltStore.Close()
+	startup, found, err := loadAndRestoreLinuxState(boltStore, rt.Config.TrustedRootPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		if key == nil {
-			key, err = joinAcceptKeyFromStateFile(existing, bundle.Zone)
-			if err != nil {
-				return nil, err
-			}
+			return nil, errors.New("join accept requires key.json because no existing state is available")
 		}
 		if err := validatePrivateKeyFile(key); err != nil {
 			return nil, err
 		}
-		boltStore, startup, err := openLinuxDaemonState(rt)
-		if err != nil {
-			return nil, err
-		}
-		defer boltStore.Close()
-		store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := store.InstallCommonIdentity(context.Background(), corestate.IdentityInstall{
+		initial := corestate.NewStore(nil, nil)
+		if _, err := initial.InstallIdentity(context.Background(), corestate.IdentityInstall{
 			ManagedZone: bundle.Zone, Network: bundle.Network,
 			TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
 		}, rt.Now()); err != nil {
 			return nil, err
 		}
-		return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
-	}
-	state, result, err := prepareJoinAcceptedState(rt, existing, bundle, key)
-	if err != nil {
-		return nil, err
-	}
-	if err := rt.SaveState(state); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func prepareJoinAcceptedState(rt *Runtime, existing *stateFile, bundle *joinBundle, key *privateKeyFile) (*stateFile, *joinAcceptResult, error) {
-	if rt == nil {
-		return nil, nil, errors.New("runtime is nil")
-	}
-	if bundle == nil {
-		return nil, nil, errors.New("join bundle is nil")
-	}
-	if bundle.Version != 1 {
-		return nil, nil, fmt.Errorf("unsupported join bundle version: %d", bundle.Version)
-	}
-	if bundle.Network == nil {
-		return nil, nil, errors.New("join bundle network is nil")
-	}
-	if key == nil {
-		var err error
-		key, err = joinAcceptKeyFromStateFile(existing, bundle.Zone)
+		view := initial.ReadView()
+		if err := initializeLinuxState(boltStore, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, view.Revision, &linuxRuntimeState{}); err != nil {
+			return nil, err
+		}
+		startup, found, err = loadAndRestoreLinuxState(boltStore, rt.Config.TrustedRootPublicKey)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
+		}
+		if !found {
+			return nil, errors.New("initialized join state could not be restored")
+		}
+	}
+	defer startup.Common.Close()
+	if key == nil {
+		key, err = joinAcceptKeyFromStateFile(composeLinuxStateView(startup.Common.ReadView(), startup.Runtime), bundle.Zone)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if err := validatePrivateKeyFile(key); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	zs := bundle.Network.Zones[bundle.Zone]
-	if zs == nil || zs.Authority == nil {
-		return nil, nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, bundle.Zone)
+	if _, err := startup.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
+		ManagedZone: bundle.Zone, Network: bundle.Network,
+		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
+	}, rt.Now()); err != nil {
+		return nil, err
 	}
-	if !authorityHasKey(zs.Authority, key.PublicKey) {
-		return nil, nil, errors.New("private key does not match delegated zone authority")
-	}
-	bundleNetwork := zone.CloneNetworkState(bundle.Network)
-	configureValidation(bundleNetwork)
-	normalizeState(bundleNetwork)
-	if err := photoncrypto.VerifyChain(bundleNetwork, bundle.Zone, rt.Now()); err != nil {
-		return nil, nil, err
-	}
-	state := &stateFile{
-		ManagedZone:    bundle.Zone,
-		ZonePrivateKey: append([]byte(nil), key.PrivateKey...),
-		Network:        bundleNetwork,
-	}
-	if existing != nil && existing.ManagedZone == bundle.Zone {
-		state = cloneStateFile(existing)
-		state.ManagedZone = bundle.Zone
-		state.ZonePrivateKey = append([]byte(nil), key.PrivateKey...)
-		if state.Network == nil {
-			state.Network = zone.NewNetworkState()
-		}
-		mergeJoinBundleNetwork(state.Network, bundleNetwork)
-		configureValidation(state.Network)
-		normalizeState(state.Network)
-		if err := photoncrypto.VerifyChain(state.Network, bundle.Zone, rt.Now()); err != nil {
-			return nil, nil, err
-		}
-	}
-	return state, &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
+	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
 func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) {
@@ -455,77 +345,6 @@ func joinAcceptKeyFromStateFile(state *stateFile, expectedZone zone.ZonePath) (*
 		PublicKey:  append([]byte(nil), pub...),
 		PrivateKey: append([]byte(nil), state.ZonePrivateKey...),
 	}, nil
-}
-
-func mergeJoinBundleNetwork(dst *zone.NetworkState, src *zone.NetworkState) {
-	if dst == nil || src == nil {
-		return
-	}
-	if dst.Zones == nil {
-		dst.Zones = make(map[zone.ZonePath]*zone.ZoneState)
-	}
-	for path, source := range src.Zones {
-		if source == nil {
-			continue
-		}
-		target := dst.Zones[path]
-		if target == nil {
-			dst.Zones[path] = source
-			continue
-		}
-		target.Authority = source.Authority
-		target.ParentProof = source.ParentProof
-		if target.Delegations == nil {
-			target.Delegations = make(map[zone.ZonePath]*zone.Delegation)
-		}
-		maps.Copy(target.Delegations, source.Delegations)
-		if target.Revocations == nil {
-			target.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
-		}
-		maps.Copy(target.Revocations, source.Revocations)
-	}
-}
-
-func cleanupRevokedPeerState(state *stateFile, revoked zone.ZonePath) {
-	if state == nil {
-		return
-	}
-	for peerID := range state.SyncPeers {
-		path := zone.ZonePath(peerID)
-		if path == revoked || isZoneDescendantOf(path, revoked) {
-			delete(state.SyncPeers, peerID)
-		}
-	}
-	for peerID := range state.PeerCleanups {
-		path := zone.ZonePath(peerID)
-		if path == revoked || isZoneDescendantOf(path, revoked) {
-			delete(state.PeerCleanups, peerID)
-		}
-	}
-}
-
-func isZoneDescendantOf(path, parent zone.ZonePath) bool {
-	if !path.Valid() || !parent.Valid() || path == parent {
-		return false
-	}
-	for current := path.Parent(); current != zone.RootZone; current = current.Parent() {
-		if current == parent {
-			return true
-		}
-	}
-	return parent == zone.RootZone
-}
-
-func signerForParent(state *stateFile, parent zone.ZonePath) (ed25519.PrivateKey, error) {
-	switch {
-	case parent == zone.RootZone:
-		if len(state.RootPrivateKey) == ed25519.PrivateKeySize {
-			return state.RootPrivateKey, nil
-		}
-	case parent == state.ManagedZone && len(state.ZonePrivateKey) == ed25519.PrivateKeySize:
-		return state.ZonePrivateKey, nil
-	}
-	return nil, fmt.Errorf("no local signing key for parent zone %s", parent)
 }
 
 func rootPublicKey(ns *zone.NetworkState) (ed25519.PublicKey, error) {

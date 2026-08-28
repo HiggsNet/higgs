@@ -206,7 +206,9 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 ## 4. 推荐迁移顺序
 
-1. **删除剩余旧 direct writer**：`recovery.go` 已完成；`authority.go`、`join.go`、`record.go`、`ipam.go`、`route.go`、`service.go`、`state_gc.go` 的 `--direct` 路径继续统一改为打开 BoltStore 后调用同一个 typed Store/controller API。
+1. **删除剩余旧 direct writer**：record、IPAM、route、service 和 delegation issue/grant/revoke 的 `--direct`
+   已统一为打开唯一 BoltStore/common Store 后调用同一个 typed intent；旧手工签名、授权校验和聚合 state mutation
+   已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；`state_gc --direct` 也只提交 Linux runtime owner，不再保存聚合状态。
 2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
 4. **删除聚合 stateFile**：先替换 protocol projection，再替换 controller input、inspect/observer 和离线 CLI read path；随后删除 `linux_state_view.go`、`daemon_state_store.go`、aggregate clone 和旧 state loader。
@@ -254,3 +256,12 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
 
 进入 F 前优先继续拆 `health_reconcile.go` 的公共调度、`link_outputs.go` 的 Linux DTO 组合，以及仍依赖
 聚合 `stateFile` 的 daemon/composition 入口。CLI/展示文件数量较多，但不应阻塞 runtime/state 唯一真相收口。
+
+### 5.3 推荐顺序的当前进度
+
+1. direct writer：已完成；record/IPAM/route/service/delegation、fresh join bootstrap 与 Linux state GC 均写入各自 owner，不再通过聚合 `stateFile` 落盘。
+2. 公共 HostRuntime：协议 receive、timer、object-pull、discovery 和 controller 周期调度已完成；`sync.go` 与
+   `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。
+3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
+4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；daemon Snapshot 和只读 CLI 仍依赖聚合形状，这是当前主线。
+5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。

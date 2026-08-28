@@ -106,28 +106,34 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 }
 
 func TestIPAMRoutingSmoke(t *testing.T) {
-	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
 	rt.DisableControl = true
 	now := rt.Now()
 
-	// Publish pool and assignment as the catofes. administrator.
-	if err := runWithZonePrivateKey(rt, signers["catofes."], func() error {
-		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
-			return err
-		}
-		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/16", "node-a.catofes.", false)
-	}); err != nil {
+	// Construct records signed by both authorities without pretending that one
+	// persisted node can switch its managed identity between CLI calls.
+	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+		Operation: ipamOperationPoolCreate,
+		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "catofes.",
+	}), now); err != nil {
+		t.Fatalf("catofes pool write: %v", err)
+	}
+	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "node-a.catofes.",
+	}), now); err != nil {
 		t.Fatalf("catofes IPAM writes: %v", err)
 	}
 
-	// Announce a route as node-a.catofes.
-	if err := runWithZonePrivateKey(rt, signers["node-a.catofes."], func() error {
-		return mutateRouteWithRuntime(rt, "node-a.catofes.", "10.0.1.0/24", true)
-	}); err != nil {
+	if err := applyAuthoritativeTestIntentAs(state, "node-a.catofes.", signers["node-a.catofes."], commonRouteIntent(routeMutationRequest{
+		Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true,
+	}), now); err != nil {
 		t.Fatalf("node-a route announce: %v", err)
 	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState prepared routing state: %v", err)
+	}
 
-	// Reload state to see records written by the CLI functions.
 	state, err := rt.LoadState()
 	if err != nil {
 		t.Fatalf("LoadState after CLI writes: %v", err)
@@ -186,30 +192,31 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 }
 
 func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
-	_, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
 	rt.DisableControl = true
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
 	now := rt.Now()
 
-	// Publish pool and assignment as the catofes. administrator.
-	// The assignment is for node-a.catofes., so auto-announce should pick it up.
-	if err := runWithZonePrivateKey(rt, signers["catofes."], func() error {
-		if err := createIPAMPoolWithRuntime(rt, "catofes.", "10.0.0.0/16", "catofes."); err != nil {
-			return err
-		}
-		return assignIPAMWithRuntime(rt, "catofes.", "10.0.0.0/24", "node-a.catofes.", false)
-	}); err != nil {
-		t.Fatalf("catofes IPAM writes: %v", err)
+	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+		Operation: ipamOperationPoolCreate,
+		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "catofes.",
+	}), now); err != nil {
+		t.Fatalf("catofes pool write: %v", err)
+	}
+	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+		Operation: ipamOperationAssignmentCreate,
+		Zone:      "catofes.", Prefix: "10.0.0.0/24", Target: "node-a.catofes.",
+	}), now); err != nil {
+		t.Fatalf("catofes assignment write: %v", err)
+	}
+	if err := rt.SaveState(state); err != nil {
+		t.Fatalf("SaveState prepared auto-announce state: %v", err)
 	}
 
-	// Reload state to see records written by the CLI functions.
 	state, err := rt.LoadState()
 	if err != nil {
-		t.Fatalf("LoadState after CLI writes: %v", err)
+		t.Fatalf("LoadState after prepared writes: %v", err)
 	}
-	// Restore the managed-zone signing key; runWithZonePrivateKey left the
-	// state with the catofes. administrator key.
-	state.ZonePrivateKey = signers["node-a.catofes."]
 
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
