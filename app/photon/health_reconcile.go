@@ -11,6 +11,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
@@ -278,23 +279,31 @@ func showHealth(sortBy string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	view, online, err := readCanonicalViewViaControl[inspect.HealthDebugView](rt, controlRequest{Method: "health_status"})
 	if err != nil {
 		return err
 	}
-	if state == nil {
-		_, _ = os.Stdout.WriteString("no state loaded\n")
-		return nil
-	}
-	// Reconstruct targets and print from state.
-	localZone := string(state.ManagedZone)
-	targets := inspectHealthProbeTargets(healthTargets(state.LinkInstances, state.IPsecReconcile, localZone))
-	view := inspect.HealthDebugView{Targets: targets}
-	// Health manager output (when daemon live).
-	if links := liveDaemonHealthSnapshot(rt); links != nil {
-		view.Live = inspectHealthLiveLinks(links)
+	if !online {
+		common, runtime, err := loadOfflineOwnerViews(rt)
+		if err != nil {
+			return err
+		}
+		if common.State == nil || runtime == nil {
+			_, _ = os.Stdout.WriteString("no state loaded\n")
+			return nil
+		}
+		view = healthViewFromOwners(common, runtime, nil)
 	}
 	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
+}
+
+func healthViewFromOwners(common corestate.View, runtime *linuxRuntimeState, live []healthLinkJSON) inspect.HealthDebugView {
+	view := inspect.HealthDebugView{Live: inspectHealthLiveLinks(live)}
+	if common.State == nil || runtime == nil {
+		return view
+	}
+	view.Targets = inspectHealthProbeTargets(healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone)))
+	return view
 }
 
 func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthProbeTargetView {
@@ -342,18 +351,4 @@ func inspectHealthLiveLinks(links []healthLinkJSON) []inspect.HealthLiveView {
 		})
 	}
 	return out
-}
-
-// liveDaemonHealthSnapshot reads health state from a running daemon via the
-// control socket. Returns nil if the daemon is not running.
-func liveDaemonHealthSnapshot(rt *Runtime) []healthLinkJSON {
-	path := controlSocketPath(rt.Config)
-	resp, err := sendControlRequest(path, controlRequest{Method: "health_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil
-	}
-	if err != nil {
-		return nil
-	}
-	return resp.Health
 }

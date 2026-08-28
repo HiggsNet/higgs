@@ -9,9 +9,11 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 )
@@ -21,23 +23,6 @@ type routeMutationRequest struct {
 	Prefix string        `json:"prefix"`
 	Active bool          `json:"active"`
 	DryRun bool          `json:"dry_run,omitempty"`
-}
-
-type routeShowReport struct {
-	ManagedZone   string         `json:"managed_zone"`
-	Announcements []routeShowRow `json:"announcements"`
-}
-
-type routeShowRow struct {
-	Zone       string `json:"zone"`
-	Prefix     string `json:"prefix"`
-	Tag        string `json:"tag,omitempty"`
-	Shared     bool   `json:"shared,omitempty"`
-	Active     bool   `json:"active"`
-	Controller string `json:"controller,omitempty"`
-	Authorized bool   `json:"authorized"`
-	Version    uint64 `json:"version"`
-	Key        string `json:"key"`
 }
 
 func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
@@ -90,22 +75,34 @@ func mutateRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, acti
 	return nil
 }
 
-func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool) (*routeShowReport, error) {
-	state, err := rt.LoadState()
+func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.RouteShowReport](rt, controlRequest{Method: "route_view", Zone: filterZone.String(), IncludeAll: includeAll}); err != nil {
+		return nil, err
+	} else if ok {
+		return &report, nil
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err
 	}
-	report := &routeShowReport{
-		ManagedZone:   string(state.ManagedZone),
-		Announcements: []routeShowRow{},
+	if common.State == nil {
+		return nil, errors.New("common state is not initialized")
 	}
-	if state.Network == nil {
+	return buildRouteShowReportFromState(common.State, rt.Now(), filterZone, includeAll)
+}
+
+func buildRouteShowReportFromState(verified *corestate.VerifiedState, now time.Time, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {
+	report := &inspect.RouteShowReport{
+		ManagedZone:   string(verified.ManagedZone),
+		Announcements: []inspect.RouteShowRow{},
+	}
+	if verified.Network == nil {
 		return report, nil
 	}
 	authorized := map[string]map[string]struct{}{}
 	sharedRoutes := map[string]map[string]struct{}{}
 	routeTags := map[string]map[string]string{}
-	ars, arsErr := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	ars, arsErr := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if arsErr == nil && ars != nil {
 		for z, prefixes := range ars.Announced {
 			key := string(z)
@@ -130,8 +127,8 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 		}
 	}
 
-	zones := make([]zone.ZonePath, 0, len(state.Network.Zones))
-	for path := range state.Network.Zones {
+	zones := make([]zone.ZonePath, 0, len(verified.Network.Zones))
+	for path := range verified.Network.Zones {
 		if filterZone != "" && path != filterZone {
 			continue
 		}
@@ -140,7 +137,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 	inspect.SortZonePaths(zones)
 
 	for _, path := range zones {
-		zs := state.Network.Zones[path]
+		zs := verified.Network.Zones[path]
 		if zs == nil {
 			continue
 		}
@@ -169,7 +166,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 			if !isShared {
 				isShared = routeUsesSharedAssignment(ars, path, prefix)
 			}
-			report.Announcements = append(report.Announcements, routeShowRow{
+			report.Announcements = append(report.Announcements, inspect.RouteShowRow{
 				Zone:       string(path),
 				Prefix:     prefix,
 				Tag:        routeTags[string(path)][prefix],
@@ -186,7 +183,7 @@ func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool
 	return report, nil
 }
 
-func sortRouteShowRows(rows []routeShowRow) {
+func sortRouteShowRows(rows []inspect.RouteShowRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		a := rows[i]
 		b := rows[j]
@@ -200,12 +197,12 @@ func sortRouteShowRows(rows []routeShowRow) {
 	})
 }
 
-func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool, filter string, verbose bool) error {
+func printRouteShowReport(w io.Writer, report *inspect.RouteShowReport, includeAll bool, filter string, verbose bool) error {
 	if report == nil {
-		report = &routeShowReport{}
+		report = &inspect.RouteShowReport{}
 	}
 	filter = strings.ToLower(strings.TrimSpace(filter))
-	rows := make([]routeShowRow, 0, len(report.Announcements))
+	rows := make([]inspect.RouteShowRow, 0, len(report.Announcements))
 	for _, row := range report.Announcements {
 		state := "active"
 		if !row.Active {
@@ -241,8 +238,8 @@ func printRouteShowReport(w io.Writer, report *routeShowReport, includeAll bool,
 	} else {
 		fmt.Fprintf(table, "announcements: %d/%d\n", len(rows), len(report.Announcements))
 	}
-	nonSharedRows := make([]routeShowRow, 0, len(rows))
-	sharedRows := make([]routeShowRow, 0, len(rows))
+	nonSharedRows := make([]inspect.RouteShowRow, 0, len(rows))
+	sharedRows := make([]inspect.RouteShowRow, 0, len(rows))
 	for _, row := range rows {
 		if row.Shared {
 			sharedRows = append(sharedRows, row)
@@ -290,7 +287,7 @@ func routeShowHeader(verbose bool) []string {
 	return []string{"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION"}
 }
 
-func routeShowCells(prefix string, row routeShowRow, verbose bool) []string {
+func routeShowCells(prefix string, row inspect.RouteShowRow, verbose bool) []string {
 	state := "active"
 	if !row.Active {
 		state = "withdrawn"
@@ -309,7 +306,7 @@ func routeShowCells(prefix string, row routeShowRow, verbose bool) []string {
 	return []string{prefix, row.Zone, dash(row.Tag), state, authorized}
 }
 
-func printRouteShowRows(w io.Writer, routeRows []routeShowRow, verbose, groupPrefix bool) error {
+func printRouteShowRows(w io.Writer, routeRows []inspect.RouteShowRow, verbose, groupPrefix bool) error {
 	rows := [][]string{routeShowHeader(verbose)}
 	lastPrefix := ""
 	for _, row := range routeRows {

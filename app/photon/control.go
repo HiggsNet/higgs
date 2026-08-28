@@ -39,6 +39,7 @@ type controlRequest struct {
 	Permissions []zone.Permission       `json:"permissions,omitempty"`
 	Snapshot    *corestate.ZoneSnapshot `json:"snapshot,omitempty"`
 	Apply       bool                    `json:"apply,omitempty"`
+	IncludeAll  bool                    `json:"include_all,omitempty"`
 	Verbose     bool                    `json:"verbose,omitempty"`
 	Orphans     bool                    `json:"orphans,omitempty"`
 	NetNS       string                  `json:"netns,omitempty"`
@@ -75,14 +76,9 @@ type controlResponse struct {
 	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
 	Links             *linkInspectionControl        `json:"links,omitempty"`
 	PeerStatuses      []inspect.PeerStatusInfo      `json:"peer_statuses,omitempty"`
+	GossipPeers       []inspect.PeerDebugView       `json:"gossip_peers,omitempty"`
 	RevocationImpact  []inspect.RevocationImpact    `json:"revocation_impact,omitempty"`
-	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            *inspect.RecordDetailView     `json:"record,omitempty"`
-	Records           *inspect.RecordsDebugView     `json:"records,omitempty"`
-	SyncStatus        *inspect.SyncStatusView       `json:"sync_status,omitempty"`
-	PeerDebug         *inspect.PeerDebugView        `json:"peer_debug,omitempty"`
-	ZoneDebug         *inspect.ZoneDebugView        `json:"zone_debug,omitempty"`
-	ZoneDetail        *inspect.ZoneDetail           `json:"zone_detail,omitempty"`
 	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
 	RecordsApplied    int                           `json:"records_applied,omitempty"`
 	Delegations       int                           `json:"delegations,omitempty"`
@@ -91,6 +87,15 @@ type controlResponse struct {
 	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
 	EndpointACLs      []endpointACL                 `json:"endpoint_acls,omitempty"`
 	StateGC           *stateGCPlan                  `json:"state_gc,omitempty"`
+}
+
+// controlViewResponse is the transport envelope for read-only queries. View
+// is already the canonical inspect DTO; the control layer must not reshape it
+// into another resource-specific response.
+type controlViewResponse[T any] struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	View  T      `json:"view,omitempty"`
 }
 
 type linkInspectionControl struct {
@@ -127,6 +132,25 @@ type healthLinkJSON struct {
 	LastError       string `json:"last_error,omitempty"`
 	NextProbeUnix   int64  `json:"next_probe_unix,omitempty"`
 	CutoverBlocking bool   `json:"cutover_blocking,omitempty"`
+}
+
+type pingTargetJSON struct {
+	ProbeID         string `json:"probe_id,omitempty"`
+	InstanceID      string `json:"instance_id"`
+	GroupID         string `json:"group_id,omitempty"`
+	PeerZone        string `json:"peer_zone"`
+	LocalZone       string `json:"local_zone,omitempty"`
+	Overlay         string `json:"overlay,omitempty"`
+	NetNS           string `json:"netns,omitempty"`
+	InterfaceName   string `json:"interface_name,omitempty"`
+	UnderlayFamily  string `json:"underlay_family,omitempty"`
+	LocalTunnelAddr string `json:"local_tunnel_addr,omitempty"`
+	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
+	Generation      uint64 `json:"generation,omitempty"`
+	ProbeRole       string `json:"probe_role,omitempty"`
+	Role            string `json:"role,omitempty"`
+	State           string `json:"state,omitempty"`
+	Staged          bool   `json:"staged,omitempty"`
 }
 
 func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
@@ -215,6 +239,9 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 }
 
 func daemonStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -223,16 +250,42 @@ func daemonStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func readViewViaControl(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, request)
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
+func readCanonicalViewViaControl[T any](rt *Runtime, request controlRequest) (T, bool, error) {
+	var zero T
+	if rt == nil || rt.DisableControl {
+		return zero, false, nil
 	}
-	return response, true, err
+	var response controlViewResponse[T]
+	if err := controlapi.Send(controlSocketPath(rt.Config), request, &response); err != nil {
+		if isControlSocketUnavailable(err) {
+			return zero, false, nil
+		}
+		return zero, true, err
+	}
+	if !response.OK {
+		if response.Error == "" {
+			response.Error = "daemon control query failed"
+		}
+		return zero, true, errors.New(response.Error)
+	}
+	return response.View, true, nil
+}
+
+func verifyChainViaControl(rt *Runtime, path zone.ZonePath) (bool, error) {
+	if rt == nil || rt.DisableControl {
+		return false, nil
+	}
+	_, err := sendControlRequest(controlSocketPath(rt.Config), controlRequest{Method: "verify_chain", Zone: path.String()})
+	if err != nil && isControlSocketUnavailable(err) {
+		return false, nil
+	}
+	return true, err
 }
 
 func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "bird_status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -242,6 +295,9 @@ func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 }
 
 func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routes_dump"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -269,6 +325,9 @@ func birdDumpViaControl(rt *Runtime, netnsName, view string) (*controlResponse, 
 }
 
 func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "admission_status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -278,6 +337,9 @@ func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 }
 
 func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "links_status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -287,6 +349,9 @@ func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 }
 
 func peersStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "peers_status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -591,12 +656,17 @@ func isControlSocketUnavailable(err error) bool {
 	return controlapi.IsUnavailable(err)
 }
 
-func writeControlResponse(conn net.Conn, response controlResponse) {
-	if !response.OK && response.Error == "" {
-		response.Error = "request failed"
+func writeControlResponse(conn net.Conn, response any) {
+	if legacy, ok := response.(controlResponse); ok && !legacy.OK && legacy.Error == "" {
+		legacy.Error = "request failed"
+		response = legacy
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(controlConnDeadline))
 	_ = json.NewEncoder(conn).Encode(response)
+}
+
+func writeCanonicalView[T any](conn net.Conn, view T) {
+	writeControlResponse(conn, controlViewResponse[T]{OK: true, View: view})
 }
 
 func controlError(err error) controlResponse {

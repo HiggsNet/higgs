@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
@@ -590,6 +590,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 	switch request.Method {
 	case "status":
+		common := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
 		meta := d.StateStore.metaLocked()
 		linkInstances := 0
@@ -603,16 +604,26 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 		d.StateStore.mu.RUnlock()
+		var rootPublicKey ed25519.PublicKey
+		if common.State != nil && common.State.Network != nil {
+			if root := common.State.Network.Zones[zone.RootZone]; root != nil && root.Authority != nil && len(root.Authority.Keys) > 0 {
+				rootPublicKey = append(ed25519.PublicKey(nil), root.Authority.Keys[0].Key...)
+			}
+		}
 		response := controlResponse{
 			OK:            true,
 			PeerID:        d.Sync.Config.PeerID,
 			LinkInstances: linkInstances,
 			DesiredLinks:  desiredLinks,
 			LastLinkError: lastLinkError,
+			RootPublicKey: rootPublicKey,
 			Message:       "daemon online",
 		}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
+	case "status_view":
+		common, runtime := d.StateStore.readCommonAndRuntime()
+		writeCanonicalView(conn, statusViewFromOwners(d.Sync.App, common, runtime, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -691,13 +702,79 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		if view.State != nil {
 			network = view.State.Network
 		}
-		path := zone.ZonePath(request.Zone)
-		if path.Valid() && (network == nil || network.Zones[path] == nil) {
-			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)))
+		records, err := buildRecordsInspection(network, zone.ZonePath(request.Zone), request.Key)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
 			return
 		}
-		records := inspect.BuildRecordsDebug(inspect.RecordsDebugInput{Network: network, Path: path})
-		writeControlResponse(conn, controlResponse{OK: true, Records: &records})
+		writeCanonicalView(conn, records)
+	case "zones_view":
+		view := d.StateStore.common.ReadView()
+		if view.State == nil || view.State.Network == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		writeCanonicalView(conn, buildZoneDetails(view.State.Network, d.Sync.now()))
+	case "services_view":
+		view := d.StateStore.common.ReadView()
+		if view.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		services := buildServiceInspection(view.State, d.Sync.now())
+		writeCanonicalView(conn, services)
+	case "route_view":
+		view := d.StateStore.common.ReadView()
+		if view.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		report, err := buildRouteShowReportFromState(view.State, d.Sync.now(), zone.ZonePath(request.Zone), request.IncludeAll)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeCanonicalView(conn, *report)
+	case "ipam_assignments_view":
+		view := d.StateStore.common.ReadView()
+		rows, err := buildIPAMAssignmentRows(view.State, d.Sync.now(), zone.ZonePath(request.Zone))
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeCanonicalView(conn, rows)
+	case "ipam_mine_view":
+		view := d.StateStore.common.ReadView()
+		report, err := buildIPAMMineReportFromState(view.State, d.Sync.now())
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeCanonicalView(conn, *report)
+	case "ipam_get_view":
+		view := d.StateStore.common.ReadView()
+		report, err := buildIPAMGetReportFromState(view.State, d.Sync.now(), request.ValueText)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeCanonicalView(conn, *report)
+	case "endpoints_view":
+		view := d.StateStore.common.ReadView()
+		if view.State == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		endpoints := buildEndpointDebugView(d.Sync.App, view.State)
+		writeCanonicalView(conn, endpoints)
+	case "ping_targets":
+		common, runtime := d.StateStore.readCommonAndRuntime()
+		if common.State == nil || runtime == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		targets := healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone))
+		writeCanonicalView(conn, pingTargetsForControl(targets))
 	case "sync_view":
 		common, _ := d.StateStore.readCommonAndRuntime()
 		if common.State == nil {
@@ -705,7 +782,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		view := buildSyncStatusView(common.State.Network, syncPeerReadView(common.Gossip), d.Sync.Config, d.Sync.now(), request.Verbose)
-		writeControlResponse(conn, controlResponse{OK: true, SyncStatus: &view})
+		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common, _ := d.StateStore.readCommonAndRuntime()
 		if common.State == nil {
@@ -717,7 +794,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		writeControlResponse(conn, controlResponse{OK: true, PeerDebug: &view})
+		writeCanonicalView(conn, view)
 	case "zone_debug":
 		common := d.StateStore.common.ReadView()
 		if common.State == nil || common.State.Network == nil {
@@ -725,15 +802,12 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		path := zone.ZonePath(request.Zone)
-		debugView, err := buildDebugZoneView(common.State.Network, path, d.Sync.now())
+		inspection, err := buildZoneInspectionView(common.State.Network, path, d.Sync.now(), request.History > 0)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		detail := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path: path, State: common.State.Network.Zones[path], Network: common.State.Network, Now: d.Sync.now(), IncludeHistory: request.History > 0,
-		})
-		writeControlResponse(conn, controlResponse{OK: true, ZoneDebug: &debugView, ZoneDetail: &detail})
+		writeCanonicalView(conn, inspection)
 	case "verify_chain":
 		view := d.StateStore.common.ReadView()
 		if view.State == nil || view.State.Network == nil {
@@ -1042,10 +1116,20 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			OK:           true,
 			PeerID:       d.Sync.Config.PeerID,
 			PeerStatuses: peerStatuses,
+			GossipPeers:  d.gossipPeerSnapshotForControl(),
 			Message:      "peers status",
 		}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
+	case "peer_lifecycle_view":
+		common, runtime := d.StateStore.readCommonAndRuntime()
+		if common.State == nil || runtime == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
+			return
+		}
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Sync.App, common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), runtime))
+	case "gossip_peers_view":
+		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revoke_status":
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
@@ -1070,12 +1154,8 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "health_status":
-		writeControlResponse(conn, controlResponse{
-			OK:      true,
-			PeerID:  d.Sync.Config.PeerID,
-			Health:  d.healthStatusResponse(),
-			Message: "health status",
-		})
+		common, runtime := d.StateStore.readCommonAndRuntime()
+		writeCanonicalView(conn, healthViewFromOwners(common, runtime, d.healthStatusResponse()))
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}

@@ -49,7 +49,7 @@ func TestLookupRecordDetail(t *testing.T) {
 		t.Fatalf("LoadState: %v", err)
 	}
 
-	record, err := lookupRecordDetail(state, managed, "site/name", 0)
+	record, err := lookupRecordDetailFromNetwork(state.Network, managed, "site/name", 0)
 	if err != nil {
 		t.Fatalf("lookupRecordDetail: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestLookupRecordDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState after history writes: %v", err)
 	}
-	record, err = lookupRecordDetail(state, managed, "site/name", 2)
+	record, err = lookupRecordDetailFromNetwork(state.Network, managed, "site/name", 2)
 	if err != nil {
 		t.Fatalf("lookupRecordDetail with history: %v", err)
 	}
@@ -85,13 +85,13 @@ func TestLookupRecordDetail(t *testing.T) {
 		t.Fatalf("history versions = %#v, want latest history first", history)
 	}
 
-	if _, err := lookupRecordDetail(state, managed, "missing", 0); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(state.Network, managed, "missing", 0); err == nil {
 		t.Fatal("lookupRecordDetail missing record error = nil")
 	}
-	if _, err := lookupRecordDetail(state, zone.ZonePath("missing."), "site/name", 0); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(state.Network, zone.ZonePath("missing."), "site/name", 0); err == nil {
 		t.Fatal("lookupRecordDetail missing zone error = nil")
 	}
-	if _, err := lookupRecordDetail(state, managed, "site/name", -1); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(state.Network, managed, "site/name", -1); err == nil {
 		t.Fatal("lookupRecordDetail negative history error = nil")
 	}
 }

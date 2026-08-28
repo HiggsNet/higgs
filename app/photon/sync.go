@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"sort"
@@ -96,28 +95,21 @@ func syncStatus(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "sync_view", Verbose: verbose}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.SyncStatusView](rt, controlRequest{Method: "sync_view", Verbose: verbose}); err != nil {
 		return err
 	} else if ok {
-		if response.SyncStatus == nil {
-			return errors.New("daemon sync response is empty")
-		}
-		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", response.SyncStatus.PeerID)
-		return inspecttext.WriteSyncStatus(os.Stdout, *response.SyncStatus)
+		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", view.PeerID)
+		return inspecttext.WriteSyncStatus(os.Stdout, view)
 	}
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
+	if common.State == nil {
+		return errors.New("common state is not initialized")
 	}
-	return writeSyncStatus(os.Stdout, state, config, rt.Now(), verbose)
-}
-
-func writeSyncStatus(w io.Writer, state *stateFile, config *syncConfigFile, now time.Time, verbose bool) error {
-	return inspecttext.WriteSyncStatus(w, buildSyncStatusView(state.Network, state.SyncPeers, config, now, verbose))
+	config := syncConfigFromAppConfig(rt.Config, common.State)
+	return inspecttext.WriteSyncStatus(os.Stdout, buildSyncStatusView(common.State.Network, syncPeerReadView(common.Gossip), config, rt.Now(), verbose))
 }
 
 func buildSyncStatusView(network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {

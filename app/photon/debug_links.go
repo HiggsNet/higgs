@@ -30,11 +30,12 @@ func debugLinks(filter string) error {
 		)
 		return writeDebugLinksFromBuild(os.Stdout, linkInspectionBuildFromControl(response.Links), filter)
 	}
-	state, err := rt.LoadState()
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	return writeDebugLinks(os.Stdout, rt, state, filter)
+	build := buildLinkInspection(rt, common.State, common.Gossip, runtime, nil)
+	return writeDebugLinksFromBuild(os.Stdout, build, filter)
 }
 
 func showLinks(filter string, verbose bool) error {
@@ -50,16 +51,11 @@ func showLinks(filter string, verbose bool) error {
 		}
 		return inspecttext.WriteLinks(os.Stdout, linkInspectionBuildFromControl(response.Links).Inspection, filter, verbose)
 	}
-	state, err := rt.LoadState()
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteLinks(os.Stdout, buildLinkInspection(rt, state, nil).Inspection, filter, verbose)
-}
-
-func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
-	build := buildLinkInspection(rt, state, nil)
-	return writeDebugLinksFromBuild(w, build, filter)
+	return inspecttext.WriteLinks(os.Stdout, buildLinkInspection(rt, common.State, common.Gossip, runtime, nil).Inspection, filter, verbose)
 }
 
 func linkInspectionBuildFromControl(in *linkInspectionControl) linkInspectionBuild {

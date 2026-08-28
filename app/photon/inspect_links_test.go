@@ -86,7 +86,7 @@ func TestPlannedInspectDesiredLinksResolvesManualDNS(t *testing.T) {
 		TunnelAddressSpec:  ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6},
 	}}
 
-	planned, specs, err := plannedInspectDesiredLinks(rt, state)
+	planned, specs, err := plannedInspectDesiredLinks(rt, verifiedStateForTest(state), nil, linuxRuntimeStateFromLegacy(state))
 	if err != nil {
 		t.Fatalf("plannedInspectDesiredLinks: %v", err)
 	}

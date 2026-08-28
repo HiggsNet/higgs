@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -67,20 +68,60 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:43435"}}
 	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
-	records := controlRequestViaPipe(t, service, controlRequest{Method: "records_view", Zone: "node-b.catofes."})
-	if !records.OK || records.Records == nil {
+	records := controlViewRequestViaPipe[inspect.RecordsDebugView](t, service, controlRequest{Method: "records_view", Zone: "node-b.catofes."})
+	if !records.OK {
 		t.Fatalf("records_view response = %#v", records)
 	}
-	syncView := controlRequestViaPipe(t, service, controlRequest{Method: "sync_view", Verbose: true})
-	if !syncView.OK || syncView.SyncStatus == nil || syncView.SyncStatus.PeerID != config.PeerID {
+	zones := controlViewRequestViaPipe[[]inspect.ZoneDetail](t, service, controlRequest{Method: "zones_view"})
+	if !zones.OK || len(zones.View) == 0 {
+		t.Fatalf("zones_view response = %#v", zones)
+	}
+	services := controlViewRequestViaPipe[inspect.ServiceInspection](t, service, controlRequest{Method: "services_view"})
+	if !services.OK {
+		t.Fatalf("services_view response = %#v", services)
+	}
+	routes := controlViewRequestViaPipe[inspect.RouteShowReport](t, service, controlRequest{Method: "route_view"})
+	if !routes.OK {
+		t.Fatalf("route_view response = %#v", routes)
+	}
+	assignments := controlViewRequestViaPipe[[]inspect.IPAMAssignmentRow](t, service, controlRequest{Method: "ipam_assignments_view"})
+	if !assignments.OK {
+		t.Fatalf("ipam_assignments_view response = %#v", assignments)
+	}
+	endpoints := controlViewRequestViaPipe[inspect.EndpointDebugView](t, service, controlRequest{Method: "endpoints_view"})
+	if !endpoints.OK {
+		t.Fatalf("endpoints_view response = %#v", endpoints)
+	}
+	pingTargets := controlViewRequestViaPipe[[]pingTargetJSON](t, service, controlRequest{Method: "ping_targets"})
+	if !pingTargets.OK {
+		t.Fatalf("ping_targets response = %#v", pingTargets)
+	}
+	statusView := controlViewRequestViaPipe[inspect.StatusView](t, service, controlRequest{Method: "status_view"})
+	if !statusView.OK || !statusView.View.DaemonOnline {
+		t.Fatalf("status_view response = %#v", statusView)
+	}
+	peerLifecycle := controlViewRequestViaPipe[inspect.PeerLifecycleDebugView](t, service, controlRequest{Method: "peer_lifecycle_view"})
+	if !peerLifecycle.OK {
+		t.Fatalf("peer_lifecycle_view response = %#v", peerLifecycle)
+	}
+	gossipPeers := controlViewRequestViaPipe[[]inspect.PeerDebugView](t, service, controlRequest{Method: "gossip_peers_view"})
+	if !gossipPeers.OK {
+		t.Fatalf("gossip_peers_view response = %#v", gossipPeers)
+	}
+	healthView := controlViewRequestViaPipe[inspect.HealthDebugView](t, service, controlRequest{Method: "health_status"})
+	if !healthView.OK {
+		t.Fatalf("health_status response = %#v", healthView)
+	}
+	syncView := controlViewRequestViaPipe[inspect.SyncStatusView](t, service, controlRequest{Method: "sync_view", Verbose: true})
+	if !syncView.OK || syncView.View.PeerID != config.PeerID {
 		t.Fatalf("sync_view response = %#v", syncView)
 	}
-	peer := controlRequestViaPipe(t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})
-	if !peer.OK || peer.PeerDebug == nil || peer.PeerDebug.PeerID != "node-b.catofes." {
+	peer := controlViewRequestViaPipe[inspect.PeerDebugView](t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})
+	if !peer.OK || peer.View.PeerID != "node-b.catofes." {
 		t.Fatalf("peer_debug response = %#v", peer)
 	}
-	zoneView := controlRequestViaPipe(t, service, controlRequest{Method: "zone_debug", Zone: "node-b.catofes.", History: 1})
-	if !zoneView.OK || zoneView.ZoneDebug == nil || zoneView.ZoneDetail == nil {
+	zoneView := controlViewRequestViaPipe[inspect.ZoneInspectionView](t, service, controlRequest{Method: "zone_debug", Zone: "node-b.catofes.", History: 1})
+	if !zoneView.OK || zoneView.View.Detail.Path == "" {
 		t.Fatalf("zone_debug response = %#v", zoneView)
 	}
 	verified := controlRequestViaPipe(t, service, controlRequest{Method: "verify_chain", Zone: "node-b.catofes."})

@@ -131,18 +131,14 @@ func loadRecord(path zone.ZonePath, key string, history int) (*inspect.RecordDet
 }
 
 func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err
 	}
-	return lookupRecordDetail(state, path, key, history)
-}
-
-func lookupRecordDetail(state *stateFile, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
-	if state == nil {
-		return nil, fmt.Errorf("state is nil")
+	if common.State == nil {
+		return nil, fmt.Errorf("common state is not initialized")
 	}
-	return lookupRecordDetailFromNetwork(state.Network, path, key, history)
+	return lookupRecordDetailFromNetwork(common.State.Network, path, key, history)
 }
 
 func lookupRecordDetailFromNetwork(network *zone.NetworkState, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {

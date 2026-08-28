@@ -55,16 +55,17 @@ func firewallViewWithRuntime(rt *Runtime, netns string, hostOnly bool) (inspect.
 	if err != nil {
 		return inspect.FirewallDebugView{}, err
 	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return inspect.FirewallDebugView{}, err
-	}
 	var snapshot *firewallReconcileState
 	if ok && response.FirewallReconcile != nil {
 		snapshot = response.FirewallReconcile
-	} else {
-		configureValidation(state.Network)
-		snapshot = state.FirewallReconcile
+	} else if !ok {
+		_, runtime, err := loadOfflineOwnerViews(rt)
+		if err != nil {
+			return inspect.FirewallDebugView{}, err
+		}
+		if runtime != nil {
+			snapshot = runtime.FirewallReconcile
+		}
 	}
 	instances := []FirewallInstanceConfig{}
 	if rt != nil && rt.Config != nil {
@@ -173,6 +174,9 @@ func firewallInlineHookViews(hooks firewall.NativeHooks) []inspect.FirewallInlin
 }
 
 func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "firewall_status"})
 	if err != nil && isControlSocketUnavailable(err) {

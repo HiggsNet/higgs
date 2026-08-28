@@ -13,6 +13,9 @@ import (
 // revokeStatusViaControl queries the daemon for the live revocation impact
 // snapshot. It returns (response, daemonOnline, error).
 func revokeStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
+	if rt == nil || rt.DisableControl {
+		return nil, false, nil
+	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "revoke_status"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -46,18 +49,22 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 	}
 
 	// Fallback to local state snapshot.
-	state, err := rt.LoadState()
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
+	if common.State == nil || runtime == nil {
+		return fmt.Errorf("state owners are not initialized")
+	}
 	now := rt.Now()
-	syncConfig, _ := rt.SyncConfig(state)
+	peers := syncPeerReadView(common.Gossip)
+	syncConfig := syncConfigFromAppConfig(rt.Config, common.State)
 	var impacts []inspect.RevocationImpact
 	if zoneArg != "" {
-		impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, zone.ZonePath(zoneArg), now)
+		impact := ComputeRevocationImpact(common.State.Network, runtime.LinkInstances, peers, zone.ZonePath(zoneArg), now)
 		impacts = []inspect.RevocationImpact{impact}
 	} else {
-		impacts = AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, syncConfig, now)
+		impacts = AllRevocationImpact(common.State.Network, runtime.LinkInstances, peers, syncConfig, now)
 	}
 	return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)
 }

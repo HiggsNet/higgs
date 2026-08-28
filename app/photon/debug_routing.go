@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -88,7 +89,7 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 	if rt == nil || rt.Config == nil {
 		return &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}, nil
 	}
-	state, err := rt.LoadState()
+	_, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +107,8 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 		}
 		controlSocket := inst.ControlSocket
 		configPath := inst.ConfigFile
-		if state != nil && state.BirdInstances != nil {
-			if bi := state.BirdInstances[inst.NetNS]; bi != nil {
+		if runtime != nil && runtime.BirdInstances != nil {
+			if bi := runtime.BirdInstances[inst.NetNS]; bi != nil {
 				if bi.ControlSocket != "" {
 					controlSocket = bi.ControlSocket
 				}
@@ -142,7 +143,9 @@ func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspec
 			}
 			item.Raw[cmd] = out
 		}
-		enrichBirdDumpInstance(&item, state.LinkInstances, state.IPsecReconcile)
+		if runtime != nil {
+			enrichBirdDumpInstance(&item, runtime.LinkInstances, runtime.IPsecReconcile)
+		}
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
@@ -364,27 +367,28 @@ func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
-	}
+	var runtime *linuxRuntimeState
 	if !ok {
 		response = nil
+		_, runtime, err = loadOfflineOwnerViews(rt)
+		if err != nil {
+			return err
+		}
 	}
-	return writeDebugBabel(w, rt, state, response)
+	return writeDebugBabel(w, rt, runtime, response)
 }
 
-func writeDebugBabel(w io.Writer, rt *Runtime, state *stateFile, response *controlResponse) error {
-	return inspecttext.WriteBabelDebug(w, buildBabelDebugView(rt, state, response))
+func writeDebugBabel(w io.Writer, rt *Runtime, runtime *linuxRuntimeState, response *controlResponse) error {
+	return inspecttext.WriteBabelDebug(w, buildBabelDebugView(rt, runtime, response))
 }
 
-func buildBabelDebugView(rt *Runtime, state *stateFile, response *controlResponse) inspect.BabelDebugView {
+func buildBabelDebugView(rt *Runtime, runtime *linuxRuntimeState, response *controlResponse) inspect.BabelDebugView {
 	instances := map[string]*BirdInstanceState{}
 	if response != nil && response.BirdInstances != nil {
 		maps.Copy(instances, response.BirdInstances)
 	}
-	if len(instances) == 0 && state != nil && state.BirdInstances != nil {
-		maps.Copy(instances, state.BirdInstances)
+	if len(instances) == 0 && runtime != nil && runtime.BirdInstances != nil {
+		maps.Copy(instances, runtime.BirdInstances)
 	}
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
@@ -424,19 +428,25 @@ func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
 		return err
 	}
 	var dump *inspecthttp.RoutesResponse
-	if ok && response.RoutesDump != nil {
+	if ok {
+		if response.RoutesDump == nil {
+			return errors.New("daemon routes_dump response is empty")
+		}
 		dump = response.RoutesDump
 	} else {
-		state, err := rt.LoadState()
+		common, _, err := loadOfflineOwnerViews(rt)
 		if err != nil {
 			return err
 		}
-		configureValidation(state.Network)
-		ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+		if common.State == nil {
+			return fmt.Errorf("common state is not initialized")
+		}
+		configureValidation(common.State.Network)
+		ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
 		if err != nil {
 			return err
 		}
-		dump = inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
+		dump = inspecthttp.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
 	}
 	return inspecttext.WriteRoutesDebug(w, dump)
 }
@@ -463,19 +473,25 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 		return err
 	}
 	var dump *inspecthttp.RoutesResponse
-	if ok && response.RoutesDump != nil {
+	if ok {
+		if response.RoutesDump == nil {
+			return errors.New("daemon routes_dump response is empty")
+		}
 		dump = response.RoutesDump
 	} else {
-		state, err := rt.LoadState()
+		common, _, err := loadOfflineOwnerViews(rt)
 		if err != nil {
 			return err
 		}
-		configureValidation(state.Network)
-		ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+		if common.State == nil {
+			return fmt.Errorf("common state is not initialized")
+		}
+		configureValidation(common.State.Network)
+		ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
 		if err != nil {
 			return err
 		}
-		dump = inspecthttp.RoutesFromAuthorizedSet(state.ManagedZone, ars)
+		dump = inspecthttp.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
 	}
 	return inspecttext.WriteRouteDebug(w, prefix, dump)
 }

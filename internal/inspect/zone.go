@@ -53,6 +53,14 @@ type ZoneDebugView struct {
 	ActiveRevocation *RevocationView
 }
 
+// ZoneInspectionView is the canonical result for a zone inspection query.
+// Detail serves JSON consumers while Debug contains the derived validation
+// context used by the human presenter; both come from the same owner snapshot.
+type ZoneInspectionView struct {
+	Detail ZoneDetail    `json:"detail"`
+	Debug  ZoneDebugView `json:"debug"`
+}
+
 type RecordView struct {
 	Zone         string `json:"zone"`
 	Key          string `json:"key"`

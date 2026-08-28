@@ -125,15 +125,16 @@ func debugAdmission() error {
 		if response.Admission != nil {
 			return inspecttext.WriteAdmissionDiagnosis(os.Stdout, *response.Admission)
 		}
-		fmt.Printf("admission: not available from daemon\n")
+		return fmt.Errorf("daemon admission_status response is empty")
 	}
-	state, err := rt.LoadState()
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	diagnosis := diagnoseAutoJoinAdmission(&corestate.VerifiedState{
-		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-	}, state.Admission, rt.Now())
+	if common.State == nil || runtime == nil {
+		return fmt.Errorf("state owners are not initialized")
+	}
+	diagnosis := diagnoseAutoJoinAdmission(common.State, runtime.Admission, rt.Now())
 	return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 }
 

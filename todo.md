@@ -866,6 +866,26 @@ package dependency: app -> host -> gossip -> state -> zone
       随后 sync/peer/zone/BIRD control read model、配置 reload、手动 IPsec port rotate 与 state-changed hook 也已切走，
       production `currentState()` 已删除；线上 daemon/controller/composition 不再调用聚合 `Snapshot()`，完整组合读取仅剩
       `state.go` 的离线 CLI/旧数据库读取入口，测试断言 helper 只存在于 `_test.go`。
+    - [x] 只读 CLI 已改为 online-first：daemon 在线时由 zone/service/route/IPAM/peer/endpoint/health 等面向命令的 control read model
+      读取 daemon 内存 owner 与实时观测，不打开 bbolt；socket 不可用时才由 `loadOfflineOwnerViews` 复用启动迁移并返回 detached
+      common/Linux owner，不创建第三套 Store。links/firewall/BIRD/status/admission/revocation 等同样只在离线分支读盘；`debug rotate --direct` 改用与 daemon
+      相同的 common typed intent + Linux runtime 提交。production `Runtime.LoadState` 目前只服务旧 schema 首次迁移引导，
+      以及尚待改造的测试 fixture，不再是 CLI read path。
+  - [ ] E2k：收敛 inspect/query/transport/presenter，删除 online-first 切换中新增和既有的多层 View/DTO 换壳。
+    - 目标调用链固定为 `common/Linux owners -> 唯一查询投影 -> canonical inspect DTO -> control/CLI/HTTP presenter`。
+      control 只传输 canonical DTO，不拥有第二套业务 View；CLI text writer 与 HTTP encoder 只做协议包装、过滤、排序和格式化，
+      不重新推导 peer lifecycle、health、route authorization 等语义。
+    - [x] E2k1：引入按 control method 类型化的 canonical view envelope；zone/service/route/IPAM/endpoint 直接传输最终 inspect DTO，
+      ping 传输 CLI 执行探测所需的 typed target plan；上述字段以及 records/sync/peer/zone debug DTO 已从巨型 `controlResponse` 删除。
+      online/offline 复用同一查询函数，route/IPAM read model 已归入 `internal/inspect`，control 不再按资源重复定义响应结构。
+    - [ ] E2k2：收敛 status/peers/health/links/firewall/BIRD；daemon 一次读取 owner/observability 后生成最终 inspect DTO，
+      CLI 不再把 `PeerStatusInfo`、health targets/live、link control wrapper 二次 Build 成另一层 View。
+    - [ ] E2k3：将 routes 的 canonical DTO 从 `internal/inspect/http` 移到 `internal/inspect`，CLI 不再依赖 HTTP 包；Observer HTTP
+      仅保留稳定 JSON envelope。同步盘点 zones/peers/links/status 的 HTTP 专用重复结构，只保留确有 API 契约差异的投影。
+    - [ ] E2k4：逐项拆除巨型 `controlRequest/controlResponse` 的只读分支，删除单次 wrapper、重复排序/过滤、旧 builder 和失去调用者的 DTO；
+      mutation/event 回包另行按命令类型收敛，不与只读迁移混做一次大提交。
+    - [ ] 每个子阶段独立提交并运行 `make check`；增加 online daemon 持有 Bolt 写锁时 CLI 查询仍成功、offline fallback 复用相同 DTO、
+      control/CLI/HTTP 对同一 owner fixture 语义一致的回归测试。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

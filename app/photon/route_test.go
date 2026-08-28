@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -251,9 +252,9 @@ func TestBuildRouteShowReportIncludesAssignmentTag(t *testing.T) {
 }
 
 func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
-	report := &routeShowReport{
+	report := &inspect.RouteShowReport{
 		ManagedZone: "node-a.catofes.",
-		Announcements: []routeShowRow{
+		Announcements: []inspect.RouteShowRow{
 			{
 				Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Tag: "edge.cn", Active: true,
 				Authorized: true, Controller: "service", Version: 2,
@@ -282,7 +283,7 @@ func TestPrintRouteShowReportUsesFilteredVerboseTable(t *testing.T) {
 }
 
 func TestSortRouteShowRowsUsesPrefixBeforeZone(t *testing.T) {
-	rows := []routeShowRow{
+	rows := []inspect.RouteShowRow{
 		{Zone: "a.example.", Prefix: "2001:db8:2::/64", Key: "z"},
 		{Zone: "z.example.", Prefix: "10.0.0.0/8", Key: "z"},
 		{Zone: "c.example.", Prefix: "2.0.0.0/8", Key: "z"},
@@ -290,7 +291,7 @@ func TestSortRouteShowRowsUsesPrefixBeforeZone(t *testing.T) {
 		{Zone: "a.example.", Prefix: "10.0.0.0/8", Key: "a"},
 	}
 	sortRouteShowRows(rows)
-	want := []routeShowRow{
+	want := []inspect.RouteShowRow{
 		{Zone: "c.example.", Prefix: "2.0.0.0/8", Key: "z"},
 		{Zone: "a.example.", Prefix: "10.0.0.0/8", Key: "a"},
 		{Zone: "z.example.", Prefix: "10.0.0.0/8", Key: "z"},
@@ -303,9 +304,9 @@ func TestSortRouteShowRowsUsesPrefixBeforeZone(t *testing.T) {
 }
 
 func TestPrintRouteShowReportSeparatesAndGroupsSharedAnnouncements(t *testing.T) {
-	report := &routeShowReport{
+	report := &inspect.RouteShowReport{
 		ManagedZone: "node-a.catofes.",
-		Announcements: []routeShowRow{
+		Announcements: []inspect.RouteShowRow{
 			{Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true, Authorized: true},
 			{Zone: "node-b.catofes.", Prefix: "10.0.9.0/24", Shared: true, Active: true, Authorized: true},
 			{Zone: "node-c.catofes.", Prefix: "10.0.9.0/24", Shared: true, Active: true, Authorized: true},
@@ -332,8 +333,8 @@ func TestPrintRouteShowReportSeparatesAndGroupsSharedAnnouncements(t *testing.T)
 }
 
 func TestPrintRouteShowReportRightAlignsZoneColumn(t *testing.T) {
-	report := &routeShowReport{
-		Announcements: []routeShowRow{
+	report := &inspect.RouteShowReport{
+		Announcements: []inspect.RouteShowRow{
 			{Zone: ".", Prefix: "10.0.0.0/8", Active: true, Authorized: true},
 			{Zone: "node-a.catofes.", Prefix: "10.1.0.0/16", Active: true, Authorized: true},
 		},

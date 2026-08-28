@@ -24,6 +24,26 @@ func applyOfflineCommonIntent(rt *Runtime, intent corestate.LocalIntent, dryRun 
 	return startup.Common.ApplyLocalIntent(context.Background(), intent, rt.Now())
 }
 
+// loadOfflineOwnerViews runs the same one-way schema migration as daemon
+// startup, then closes the shared Bolt handle and returns detached snapshots
+// of the two persisted owners. This is only the fallback for an unavailable
+// daemon or an explicit direct operation; online readers use command-oriented
+// control views and never contend for the daemon's Bolt handle.
+func loadOfflineOwnerViews(rt *Runtime) (corestate.View, *linuxRuntimeState, error) {
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		return corestate.View{}, nil, err
+	}
+	view := startup.Common.ReadView()
+	runtime := cloneLinuxRuntimeState(startup.Runtime)
+	startup.Common.Close()
+	boltCloseErr := boltStore.Close()
+	if boltCloseErr != nil {
+		return corestate.View{}, nil, boltCloseErr
+	}
+	return view, runtime, nil
+}
+
 const daemonBoltLockTimeout = time.Second
 
 var errRuntimeStateSourceRevisionMismatch = errors.New("runtime state source verified revision does not match current state")

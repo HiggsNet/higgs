@@ -16,25 +16,22 @@ func debugPeer(peerID string) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "peer_debug", Zone: peerID}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.PeerDebugView](rt, controlRequest{Method: "peer_debug", Zone: peerID}); err != nil {
 		return err
 	} else if ok {
-		if response.PeerDebug == nil {
-			return fmt.Errorf("daemon peer response is empty")
-		}
-		fmt.Printf("daemon: online peer_id=%s\n", response.PeerDebug.PeerID)
-		return inspecttext.WritePeerDebug(os.Stdout, *response.PeerDebug)
+		fmt.Printf("daemon: online peer_id=%s\n", view.PeerID)
+		return inspecttext.WritePeerDebug(os.Stdout, view)
 	}
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		return err
+	if common.State == nil {
+		return fmt.Errorf("common state is not initialized")
 	}
+	config := syncConfigFromAppConfig(rt.Config, common.State)
 	now := rt.Now()
-	view, err := buildDebugPeerView(state.ManagedZone, state.Network, state.SyncPeers, config, peerID, now)
+	view, err := buildDebugPeerView(common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), config, peerID, now)
 	if err != nil {
 		return err
 	}

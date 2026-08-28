@@ -1207,6 +1207,28 @@ func controlRequestViaPipe(t *testing.T, service *DaemonService, request control
 	return response
 }
 
+func controlViewRequestViaPipe[T any](t *testing.T, service *DaemonService, request controlRequest) controlViewResponse[T] {
+	t.Helper()
+	client, server := net.Pipe()
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = server.SetDeadline(time.Now().Add(5 * time.Second))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.handleControlConn(context.Background(), server)
+	}()
+	if err := json.NewEncoder(client).Encode(request); err != nil {
+		t.Fatalf("Encode(request): %v", err)
+	}
+	var response controlViewResponse[T]
+	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatalf("Decode(response): %v", err)
+	}
+	<-done
+	return response
+}
+
 func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
 	if ctx == nil {
 		ctx = context.Background()

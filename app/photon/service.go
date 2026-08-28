@@ -6,9 +6,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
@@ -19,16 +21,29 @@ func showServices(filter string, includeAll, localOnly, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	if view, ok, err := readCanonicalViewViaControl[inspect.ServiceInspection](rt, controlRequest{Method: "services_view"}); err != nil {
+		return err
+	} else if ok {
+		return inspecttext.WriteServices(os.Stdout, view, filter, includeAll, localOnly, verbose)
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	view := inspect.BuildServiceInspection(inspect.ServiceInspectionInput{
-		Network:     state.Network,
-		ManagedZone: state.ManagedZone,
-		Now:         rt.Now(),
-	})
+	if common.State == nil {
+		return errors.New("common state is not initialized")
+	}
+	view := buildServiceInspection(common.State, rt.Now())
 	return inspecttext.WriteServices(os.Stdout, view, filter, includeAll, localOnly, verbose)
+}
+
+func buildServiceInspection(state *corestate.VerifiedState, now time.Time) inspect.ServiceInspection {
+	if state == nil {
+		return inspect.ServiceInspection{}
+	}
+	return inspect.BuildServiceInspection(inspect.ServiceInspectionInput{
+		Network: state.Network, ManagedZone: state.ManagedZone, Now: now,
+	})
 }
 
 type serviceMutationRequest struct {

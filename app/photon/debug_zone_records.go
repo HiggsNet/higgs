@@ -20,39 +20,43 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	if includeHistory {
 		history = 1
 	}
-	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "zone_debug", Zone: path.String(), History: history}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.ZoneInspectionView](rt, controlRequest{Method: "zone_debug", Zone: path.String(), History: history}); err != nil {
 		return err
 	} else if ok {
 		if jsonOutput {
-			if response.ZoneDetail == nil {
-				return fmt.Errorf("daemon zone detail response is empty")
-			}
-			return inspecttext.WriteJSON(os.Stdout, *response.ZoneDetail)
+			return inspecttext.WriteJSON(os.Stdout, view.Detail)
 		}
-		if response.ZoneDebug == nil {
-			return fmt.Errorf("daemon zone debug response is empty")
-		}
-		return inspecttext.WriteZoneDebug(os.Stdout, *response.ZoneDebug)
+		return inspecttext.WriteZoneDebug(os.Stdout, view.Debug)
 	}
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	view, err := buildDebugZoneView(state.Network, path, rt.Now())
+	if common.State == nil || common.State.Network == nil {
+		return fmt.Errorf("common state is not initialized")
+	}
+	network := common.State.Network
+	view, err := buildZoneInspectionView(network, path, rt.Now(), includeHistory)
 	if err != nil {
 		return err
 	}
 	if jsonOutput {
-		detail := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path:           path,
-			State:          state.Network.Zones[path],
-			Network:        state.Network,
-			Now:            rt.Now(),
-			IncludeHistory: includeHistory,
-		})
-		return inspecttext.WriteJSON(os.Stdout, detail)
+		return inspecttext.WriteJSON(os.Stdout, view.Detail)
 	}
-	return inspecttext.WriteZoneDebug(os.Stdout, view)
+	return inspecttext.WriteZoneDebug(os.Stdout, view.Debug)
+}
+
+func buildZoneInspectionView(network *zone.NetworkState, path zone.ZonePath, now time.Time, includeHistory bool) (inspect.ZoneInspectionView, error) {
+	debug, err := buildDebugZoneView(network, path, now)
+	if err != nil {
+		return inspect.ZoneInspectionView{}, err
+	}
+	return inspect.ZoneInspectionView{
+		Debug: debug,
+		Detail: inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path: path, State: network.Zones[path], Network: network, Now: now, IncludeHistory: includeHistory,
+		}),
+	}, nil
 }
 
 func buildDebugZoneView(network *zone.NetworkState, path zone.ZonePath, now time.Time) (inspect.ZoneDebugView, error) {
@@ -76,23 +80,39 @@ func debugRecords(path zone.ZonePath, prefix string, values bool) error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	if view, ok, err := readCanonicalViewViaControl[inspect.RecordsDebugView](rt, controlRequest{Method: "records_view", Zone: path.String(), Key: prefix}); err != nil {
+		return err
+	} else if ok {
+		return inspecttext.WriteRecordsDebug(os.Stdout, view, values)
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	return writeDebugRecords(os.Stdout, state, path, prefix, values)
+	if common.State == nil {
+		return fmt.Errorf("common state is not initialized")
+	}
+	return writeDebugRecords(os.Stdout, common.State.Network, path, prefix, values)
 }
 
-func writeDebugRecords(w io.Writer, state *stateFile, path zone.ZonePath, prefix string, values bool) error {
-	if state == nil || state.Network == nil {
-		return fmt.Errorf("state is nil")
+func writeDebugRecords(w io.Writer, network *zone.NetworkState, path zone.ZonePath, prefix string, values bool) error {
+	view, err := buildRecordsInspection(network, path, prefix)
+	if err != nil {
+		return err
 	}
-	if path.Valid() && state.Network.Zones[path] == nil {
-		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	return inspecttext.WriteRecordsDebug(w, view, values)
+}
+
+func buildRecordsInspection(network *zone.NetworkState, path zone.ZonePath, prefix string) (inspect.RecordsDebugView, error) {
+	if network == nil {
+		return inspect.RecordsDebugView{}, fmt.Errorf("network is nil")
 	}
-	return inspecttext.WriteRecordsDebug(w, inspect.BuildRecordsDebug(inspect.RecordsDebugInput{
-		Network: state.Network,
+	if path.Valid() && network.Zones[path] == nil {
+		return inspect.RecordsDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	return inspect.BuildRecordsDebug(inspect.RecordsDebugInput{
+		Network: network,
 		Path:    path,
 		Prefix:  prefix,
-	}), values)
+	}), nil
 }

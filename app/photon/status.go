@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"os"
 
 	"github.com/HiggsNet/photon/internal/inspect"
@@ -14,48 +13,29 @@ func showStatus() error {
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	if view, online, err := readCanonicalViewViaControl[inspect.StatusView](rt, controlRequest{Method: "status_view"}); err != nil {
+		return err
+	} else if online {
+		return inspecttext.WriteStatus(os.Stdout, view)
+	}
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-
-	input := statusInputFromState(rt, state)
-	if _, online, err := daemonStatusViaControl(rt); err != nil {
-		return err
-	} else if online {
-		input.DaemonOnline = true
-		if response, ok, err := admissionStatusViaControl(rt); err != nil {
-			return err
-		} else if ok && response != nil && response.Admission != nil {
-			input.Admission = *response.Admission
-		}
-		if response, ok, err := peersStatusViaControl(rt); err != nil {
-			return err
-		} else if ok && response != nil {
-			input.Peers = response.PeerStatuses
-		}
-		if response, ok, err := linksStatusViaControl(rt); err != nil {
-			return err
-		} else if ok && (response == nil || response.Links == nil) {
-			return errors.New("daemon links_status response missing links")
-		} else if ok {
-			input.Links = response.Links.Inspection
-		}
-	}
-
-	return inspecttext.WriteStatus(os.Stdout, inspect.BuildStatus(input))
+	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, false))
 }
 
-func statusInputFromState(rt *Runtime, state *stateFile) inspect.StatusInput {
-	if state == nil {
-		return inspect.StatusInput{}
+func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRuntimeState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+	if common.State == nil || runtime == nil {
+		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
+	verified := common.State
+	peers := syncPeerReadView(common.Gossip)
 	input := inspect.StatusInput{
-		ManagedZone: state.ManagedZone,
-		Admission: diagnoseAutoJoinAdmission(&corestate.VerifiedState{
-			ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-		}, state.Admission, rt.Now()),
-		Links: buildLinkInspection(rt, state, nil).Inspection,
+		DaemonOnline: daemonOnline,
+		ManagedZone:  verified.ManagedZone,
+		Admission:    diagnoseAutoJoinAdmission(verified, runtime.Admission, rt.Now()),
+		Links:        buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, health).Inspection,
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false
@@ -63,6 +43,6 @@ func statusInputFromState(rt *Runtime, state *stateFile) inspect.StatusInput {
 		cfg = rt.Config.PeerLifecycle
 		hasOverlay = len(rt.Config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, rt.Now(), cfg, hasOverlay)
-	return input
+	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, peers, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, rt.Now(), cfg, hasOverlay)
+	return inspect.BuildStatus(input)
 }

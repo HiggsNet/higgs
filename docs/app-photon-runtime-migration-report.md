@@ -267,5 +267,11 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
    在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
-   聚合 `Snapshot()` 目前只剩 `state.go` 的离线 CLI/旧数据库读取入口；下一步是逐项迁移只读 CLI，再删除组合 view 与旧 loader。
+   CLI 查询已改为 online-first：daemon 在线时通过面向命令的 control read model 读取其内存 common/Linux owner 和实时观测，
+   不打开 bbolt；daemon 不可用或显式 direct 时才读取 detached owner。跨域离线展示显式接收两个 owner，纯 common 查询不加载 Linux 字段。
+   read model 随后开始收敛为 typed canonical view envelope：zone/service/route/IPAM/endpoint、records/sync/peer/zone debug、
+   status/peer lifecycle/gossip peers/health 均由 daemon 或离线 owner 调用同一查询函数生成最终 inspect DTO，CLI 只负责呈现；
+   对应资源字段已从巨型 `controlResponse` 删除。links/firewall/BIRD 与 HTTP routes DTO 仍在后续 E2k 阶段继续收口。
+   `debug rotate --direct` 已改用正式 typed intent/runtime commit。聚合 `Snapshot()` 目前只剩旧 schema 首次迁移引导与测试 fixture；
+   下一步是改写该 migration bootstrap 并迁移测试 fixture，随后删除组合 view 与旧 loader。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。

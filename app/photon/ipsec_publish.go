@@ -726,27 +726,6 @@ func ipsecPortRangesEqual(a, b *ipsec.PortRange) bool {
 	return a.From == b.From && a.To == b.To
 }
 
-func putSignedIPsecRecordIfChanged(state *stateFile, path zone.ZonePath, key, recordType string, value any, now time.Time) (bool, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return false, err
-	}
-	zs := state.Network.Zones[path]
-	if zs != nil {
-		if existing := zs.Records[key]; existing != nil && bytes.Equal(existing.Value, data) {
-			return false, nil
-		}
-	}
-	record, err := buildSignedRecordAt(state, path, key, data, recordType, now)
-	if err != nil {
-		return false, err
-	}
-	if err := state.Network.Put(record); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func localIPsecFamilies(record ipsec.AddressRecord) []string {
 	seen := map[string]bool{}
 	var out []string

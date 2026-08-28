@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/urfave/cli/v3"
@@ -297,31 +299,41 @@ func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error
 	return listIPAMAssignmentsWithRuntimeTo(os.Stdout, rt, filterZone)
 }
 
-type ipamAssignmentRow struct {
-	Prefix     string
-	Source     string
-	AssignedTo string
-	Shared     bool
-	Tag        string
+func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.ZonePath) error {
+	if rows, ok, err := readCanonicalViewViaControl[[]inspect.IPAMAssignmentRow](rt, controlRequest{Method: "ipam_assignments_view", Zone: filterZone.String()}); err != nil {
+		return err
+	} else if ok {
+		return writeIPAMAssignments(w, rows)
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
+	if err != nil {
+		return err
+	}
+	if common.State == nil {
+		return fmt.Errorf("common state is not initialized")
+	}
+	rows, err := buildIPAMAssignmentRows(common.State, rt.Now(), filterZone)
+	if err != nil {
+		return err
+	}
+	return writeIPAMAssignments(w, rows)
 }
 
-func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.ZonePath) error {
-	state, err := rt.LoadState()
-	if err != nil {
-		return err
+func buildIPAMAssignmentRows(state *corestate.VerifiedState, now time.Time, filterZone zone.ZonePath) ([]inspect.IPAMAssignmentRow, error) {
+	if state == nil {
+		return nil, fmt.Errorf("common state is not initialized")
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	rows := make([]ipamAssignmentRow, 0, len(ars.AllAssignments))
+	rows := make([]inspect.IPAMAssignmentRow, 0, len(ars.AllAssignments))
 	filter := string(filterZone)
 	for _, entry := range ars.AllAssignments {
 		if filter != "" && string(entry.Source) != filter && string(entry.AssignedTo) != filter {
 			continue
 		}
-		rows = append(rows, ipamAssignmentRow{
+		rows = append(rows, inspect.IPAMAssignmentRow{
 			Prefix:     entry.Prefix.String(),
 			Source:     string(entry.Source),
 			AssignedTo: string(entry.AssignedTo),
@@ -330,10 +342,10 @@ func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.
 		})
 	}
 	sortIPAMAssignmentRows(rows)
-	return writeIPAMAssignments(w, rows)
+	return rows, nil
 }
 
-func sortIPAMAssignmentRows(rows []ipamAssignmentRow) {
+func sortIPAMAssignmentRows(rows []inspect.IPAMAssignmentRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		if cmp := comparePrefixStrings(rows[i].Prefix, rows[j].Prefix); cmp != 0 {
 			return cmp < 0
@@ -348,7 +360,7 @@ func sortIPAMAssignmentRows(rows []ipamAssignmentRow) {
 	})
 }
 
-func writeIPAMAssignments(w io.Writer, rows []ipamAssignmentRow) error {
+func writeIPAMAssignments(w io.Writer, rows []inspect.IPAMAssignmentRow) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(table, "assignments: %d\n", len(rows))
 	tableRows := [][]string{{"PREFIX", "SOURCE", "ASSIGNED_TO", "MODE", "TAG"}}
@@ -391,27 +403,7 @@ func showLocalIPAMWithRuntime(rt *Runtime, jsonOut bool) error {
 	return writeIPAMMineReport(os.Stdout, report)
 }
 
-type ipamMineReport struct {
-	ManagedZone string                  `json:"managed_zone"`
-	Assignments []ipamMineAssignmentRow `json:"assignments"`
-	Pools       []ipamMinePoolRow       `json:"pools"`
-}
-
-type ipamMineAssignmentRow struct {
-	Prefix string `json:"prefix"`
-	Source string `json:"source"`
-	Shared bool   `json:"shared,omitempty"`
-	Tag    string `json:"tag,omitempty"`
-}
-
-type ipamMinePoolRow struct {
-	Prefix      string   `json:"prefix"`
-	Source      string   `json:"source"`
-	DelegatedTo string   `json:"delegated_to"`
-	Relation    []string `json:"relation"`
-}
-
-func writeIPAMMineReport(w io.Writer, report *ipamMineReport) error {
+func writeIPAMMineReport(w io.Writer, report *inspect.IPAMMineReport) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(table, "managed_zone: %s\n", report.ManagedZone)
 	fmt.Fprintf(table, "assignments: %d\n", len(report.Assignments))
@@ -444,10 +436,25 @@ func writeIPAMMineReport(w io.Writer, report *ipamMineReport) error {
 	return table.Flush()
 }
 
-func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
-	state, err := rt.LoadState()
+func buildIPAMMineReport(rt *Runtime) (*inspect.IPAMMineReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMMineReport](rt, controlRequest{Method: "ipam_mine_view"}); err != nil {
+		return nil, err
+	} else if ok {
+		return &report, nil
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err
+	}
+	if common.State == nil {
+		return nil, fmt.Errorf("common state is not initialized")
+	}
+	return buildIPAMMineReportFromState(common.State, rt.Now())
+}
+
+func buildIPAMMineReportFromState(state *corestate.VerifiedState, now time.Time) (*inspect.IPAMMineReport, error) {
+	if state == nil {
+		return nil, fmt.Errorf("common state is not initialized")
 	}
 	if state.ManagedZone == "" || !state.ManagedZone.Valid() {
 		return nil, fmt.Errorf("managed_zone is not set")
@@ -455,22 +462,22 @@ func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
 	if state.Network == nil {
 		return nil, fmt.Errorf("network state is nil")
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
 	if err != nil {
 		return nil, err
 	}
 
 	managed := state.ManagedZone
-	report := &ipamMineReport{
+	report := &inspect.IPAMMineReport{
 		ManagedZone: string(managed),
-		Assignments: []ipamMineAssignmentRow{},
-		Pools:       []ipamMinePoolRow{},
+		Assignments: []inspect.IPAMMineAssignmentRow{},
+		Pools:       []inspect.IPAMMinePoolRow{},
 	}
 	for _, entry := range ars.AllAssignments {
 		if entry.AssignedTo != managed {
 			continue
 		}
-		report.Assignments = append(report.Assignments, ipamMineAssignmentRow{
+		report.Assignments = append(report.Assignments, inspect.IPAMMineAssignmentRow{
 			Prefix: entry.Prefix.String(),
 			Source: string(entry.Source),
 			Shared: entry.Shared,
@@ -482,7 +489,7 @@ func buildIPAMMineReport(rt *Runtime) (*ipamMineReport, error) {
 		if len(relation) == 0 {
 			continue
 		}
-		report.Pools = append(report.Pools, ipamMinePoolRow{
+		report.Pools = append(report.Pools, inspect.IPAMMinePoolRow{
 			Prefix:      entry.Prefix.String(),
 			Source:      string(entry.Source),
 			DelegatedTo: string(entry.DelegatedTo),
@@ -538,66 +545,46 @@ func getIPAM(query string, jsonOut bool) error {
 	return writeIPAMGetReport(os.Stdout, report)
 }
 
-type ipamGetReport struct {
-	Query       string                 `json:"query"`
-	PoolChain   []ipamGetPoolRow       `json:"pool_chain"`
-	BestPool    *ipamGetPoolRow        `json:"best_pool"`
-	Assignments []ipamGetAssignmentRow `json:"assignments"`
-	AssignedTo  *string                `json:"assigned_to"`
-	Routes      []ipamGetRouteRow      `json:"routes"`
-	Diagnostics []ipamGetDiagnosticRow `json:"diagnostics"`
-}
-
-type ipamGetPoolRow struct {
-	Prefix      string `json:"prefix"`
-	Source      string `json:"source"`
-	DelegatedTo string `json:"delegated_to"`
-	Relation    string `json:"relation,omitempty"`
-}
-
-type ipamGetAssignmentRow struct {
-	Prefix     string `json:"prefix"`
-	Source     string `json:"source"`
-	AssignedTo string `json:"assigned_to"`
-	Shared     bool   `json:"shared,omitempty"`
-	Tag        string `json:"tag,omitempty"`
-}
-
-type ipamGetRouteRow struct {
-	Prefix string `json:"prefix"`
-	Source string `json:"source"`
-}
-
-type ipamGetDiagnosticRow struct {
-	Code   string `json:"code"`
-	Detail string `json:"detail"`
-}
-
-func buildIPAMGetReport(rt *Runtime, query string) (*ipamGetReport, error) {
-	state, err := rt.LoadState()
+func buildIPAMGetReport(rt *Runtime, query string) (*inspect.IPAMGetReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMGetReport](rt, controlRequest{Method: "ipam_get_view", ValueText: query}); err != nil {
+		return nil, err
+	} else if ok {
+		return &report, nil
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err
+	}
+	if common.State == nil {
+		return nil, fmt.Errorf("common state is not initialized")
+	}
+	return buildIPAMGetReportFromState(common.State, rt.Now(), query)
+}
+
+func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, query string) (*inspect.IPAMGetReport, error) {
+	if state == nil {
+		return nil, fmt.Errorf("common state is not initialized")
 	}
 	prefix, err := normalizeIPAMGetQuery(query)
 	if err != nil {
 		return nil, err
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
+	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
 	if err != nil {
 		return nil, err
 	}
-	report := &ipamGetReport{
+	report := &inspect.IPAMGetReport{
 		Query:       prefix.String(),
-		PoolChain:   []ipamGetPoolRow{},
-		Assignments: []ipamGetAssignmentRow{},
-		Routes:      []ipamGetRouteRow{},
-		Diagnostics: []ipamGetDiagnosticRow{},
+		PoolChain:   []inspect.IPAMGetPoolRow{},
+		Assignments: []inspect.IPAMGetAssignmentRow{},
+		Routes:      []inspect.IPAMGetRouteRow{},
+		Diagnostics: []inspect.IPAMGetDiagnosticRow{},
 	}
 	for _, pool := range ars.AllPools {
 		if !containsIPAMQuery(pool.Prefix, prefix) {
 			continue
 		}
-		report.PoolChain = append(report.PoolChain, ipamGetPoolRow{
+		report.PoolChain = append(report.PoolChain, inspect.IPAMGetPoolRow{
 			Prefix:      pool.Prefix.String(),
 			Source:      string(pool.Source),
 			DelegatedTo: string(pool.DelegatedTo),
@@ -623,7 +610,7 @@ func buildIPAMGetReport(rt *Runtime, query string) (*ipamGetReport, error) {
 		if !prefixesRelatedForIPAMQuery(prefix, assignment.Prefix) {
 			continue
 		}
-		report.Assignments = append(report.Assignments, ipamGetAssignmentRow{
+		report.Assignments = append(report.Assignments, inspect.IPAMGetAssignmentRow{
 			Prefix:     assignment.Prefix.String(),
 			Source:     string(assignment.Source),
 			AssignedTo: string(assignment.AssignedTo),
@@ -643,7 +630,7 @@ func buildIPAMGetReport(rt *Runtime, query string) (*ipamGetReport, error) {
 			if !prefixesRelatedForIPAMQuery(prefix, p) {
 				continue
 			}
-			report.Routes = append(report.Routes, ipamGetRouteRow{Prefix: p.String(), Source: string(source)})
+			report.Routes = append(report.Routes, inspect.IPAMGetRouteRow{Prefix: p.String(), Source: string(source)})
 		}
 	}
 	sort.Slice(report.Routes, func(i, j int) bool {
@@ -659,12 +646,12 @@ func buildIPAMGetReport(rt *Runtime, query string) (*ipamGetReport, error) {
 		if authErr.Prefix.IsValid() && !prefixesRelatedForIPAMQuery(prefix, authErr.Prefix) {
 			continue
 		}
-		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: authErr.Code, Detail: authErr.Detail})
+		report.Diagnostics = append(report.Diagnostics, inspect.IPAMGetDiagnosticRow{Code: authErr.Code, Detail: authErr.Detail})
 	}
 	if report.BestPool == nil {
-		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: "ipam_no_pool", Detail: fmt.Sprintf("no valid pool covers %s", prefix)})
+		report.Diagnostics = append(report.Diagnostics, inspect.IPAMGetDiagnosticRow{Code: "ipam_no_pool", Detail: fmt.Sprintf("no valid pool covers %s", prefix)})
 	} else if len(report.Assignments) == 0 {
-		report.Diagnostics = append(report.Diagnostics, ipamGetDiagnosticRow{Code: "ipam_unassigned", Detail: fmt.Sprintf("no assignment covers %s", prefix)})
+		report.Diagnostics = append(report.Diagnostics, inspect.IPAMGetDiagnosticRow{Code: "ipam_unassigned", Detail: fmt.Sprintf("no assignment covers %s", prefix)})
 	}
 	return report, nil
 }
@@ -709,7 +696,7 @@ func containsPrefixLocal(outer, inner netip.Prefix) bool {
 	return outer.Contains(inner.Masked().Addr())
 }
 
-func writeIPAMGetReport(w io.Writer, report *ipamGetReport) error {
+func writeIPAMGetReport(w io.Writer, report *inspect.IPAMGetReport) error {
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(table, "query: %s\n", report.Query)
 

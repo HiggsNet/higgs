@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 // debugPing resolves the IPsec link targets for a peer zone and pings each one
@@ -19,16 +21,27 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	if err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	controlTargets, online, err := readCanonicalViewViaControl[[]pingTargetJSON](rt, controlRequest{Method: "ping_targets"})
 	if err != nil {
 		return err
 	}
-	if state == nil {
-		fmt.Println("no state loaded")
-		return nil
+	var targets []health.ProbeTarget
+	if online {
+		targets, err = healthTargetsFromControl(controlTargets)
+		if err != nil {
+			return err
+		}
+	} else {
+		common, runtime, err := loadOfflineOwnerViews(rt)
+		if err != nil {
+			return err
+		}
+		if common.State == nil || runtime == nil {
+			fmt.Println("no state loaded")
+			return nil
+		}
+		targets = healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone))
 	}
-	localZone := string(state.ManagedZone)
-	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, localZone)
 	if rt.Config != nil {
 		opts.FallbackCount = rt.Config.Health.Burst
 		opts.FallbackTimeout = rt.Config.Health.Timeout
@@ -40,4 +53,47 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	outcomes := pingdebug.Run(ctx, prober, selected, resolved.ProbeConfig())
 	view := pingdebug.BuildDebugView(string(peerZone), outcomes, pingdebug.DistinctPeerZones(targets), resolved.Count, resolved.Timeout)
 	return inspecttext.WritePingDebug(os.Stdout, view)
+}
+
+func pingTargetsForControl(targets []health.ProbeTarget) []pingTargetJSON {
+	out := make([]pingTargetJSON, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, pingTargetJSON{
+			ProbeID: target.ProbeID, InstanceID: target.InstanceID, GroupID: target.GroupID,
+			PeerZone: target.PeerZone, LocalZone: target.LocalZone, Overlay: target.Overlay,
+			NetNS: target.NetNS, InterfaceName: target.InterfaceName, UnderlayFamily: target.UnderlayFamily,
+			LocalTunnelAddr: target.LocalTunnelAddr.String(), PeerTunnelAddr: target.PeerTunnelAddr.String(),
+			Generation: target.Generation, ProbeRole: target.ProbeRole, Role: target.Role, State: target.State, Staged: target.Staged,
+		})
+	}
+	return out
+}
+
+func healthTargetsFromControl(targets []pingTargetJSON) ([]health.ProbeTarget, error) {
+	out := make([]health.ProbeTarget, 0, len(targets))
+	for _, target := range targets {
+		local, err := parseOptionalAddr(target.LocalTunnelAddr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid daemon local tunnel address for %s: %w", target.InstanceID, err)
+		}
+		peer, err := parseOptionalAddr(target.PeerTunnelAddr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid daemon peer tunnel address for %s: %w", target.InstanceID, err)
+		}
+		out = append(out, health.ProbeTarget{
+			ProbeID: target.ProbeID, InstanceID: target.InstanceID, GroupID: target.GroupID,
+			PeerZone: target.PeerZone, LocalZone: target.LocalZone, Overlay: target.Overlay,
+			NetNS: target.NetNS, InterfaceName: target.InterfaceName, UnderlayFamily: target.UnderlayFamily,
+			LocalTunnelAddr: local, PeerTunnelAddr: peer, Generation: target.Generation,
+			ProbeRole: target.ProbeRole, Role: target.Role, State: target.State, Staged: target.Staged,
+		})
+	}
+	return out, nil
+}
+
+func parseOptionalAddr(value string) (netip.Addr, error) {
+	if value == "" || value == "invalid IP" {
+		return netip.Addr{}, nil
+	}
+	return netip.ParseAddr(value)
 }

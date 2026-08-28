@@ -22,8 +22,8 @@ type linkInspectionBuild struct {
 	PlanError         error
 }
 
-func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
-	return buildLinkInspectionWithOptions(rt, state, health, true, "live")
+func buildLinkInspection(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState, health []healthLinkJSON) linkInspectionBuild {
+	return buildLinkInspectionWithOptions(rt, verified, checkpoint, runtime, health, true, "live")
 }
 
 // buildStoredLinkInspection reports the last persisted Linux runtime result.
@@ -68,13 +68,13 @@ func linkInspectionControlFromBuild(build linkInspectionBuild) *linkInspectionCo
 	}
 }
 
-func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []healthLinkJSON, allowReplan bool, planSource string) linkInspectionBuild {
+func buildLinkInspectionWithOptions(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState, health []healthLinkJSON, allowReplan bool, planSource string) linkInspectionBuild {
 	input := inspect.LinkInput{}
 	plannedSpecs := map[string]ipsec.TransportLinkSpec{}
-	if state == nil {
+	if verified == nil || runtime == nil {
 		return linkInspectionBuild{Inspection: inspect.BuildLinks(input), PlannedSpecs: plannedSpecs}
 	}
-	reconcile := state.IPsecReconcile
+	reconcile := runtime.IPsecReconcile
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
 		input.DesiredLinks = reconcile.DesiredLinks
@@ -85,11 +85,11 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 		input.Skipped = inspectLinkSkips(reconcile.Skipped)
 	}
 	input.Health = inspectLinkHealth(health)
-	ids := sortedLinkInstanceIDs(state.LinkInstances)
+	ids := sortedLinkInstanceIDs(runtime.LinkInstances)
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
 	for _, id := range ids {
-		inst := state.LinkInstances[id]
-		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, state.BirdInstances, inst.GroupID)
+		inst := runtime.LinkInstances[id]
+		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, runtime.BirdInstances, inst.GroupID)
 		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
 			BirdState:      birdState,
 			BirdNeighbors:  birdNeighbors,
@@ -104,7 +104,7 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 	if allowReplan {
 		var planned []inspect.DesiredLink
 		var specs map[string]ipsec.TransportLinkSpec
-		planned, specs, planErr = plannedInspectDesiredLinks(rt, state)
+		planned, specs, planErr = plannedInspectDesiredLinks(rt, verified, checkpoint, runtime)
 		replannedDesired = len(planned)
 		desiredPlanSource = "live"
 		replanIgnored = shouldIgnorePartialReplan(reconcile, replannedDesired, planErr)
@@ -121,7 +121,7 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 	}
 	return linkInspectionBuild{
 		Inspection:        inspection,
-		Outputs:           buildLinkOutputs(state.LinkInstances, state.IPsecReconcile),
+		Outputs:           buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile),
 		PlannedSpecs:      plannedSpecs,
 		ReplannedDesired:  replannedDesired,
 		ReplanIgnored:     replanIgnored,
@@ -158,23 +158,20 @@ func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
 	return ids
 }
 
-func plannedInspectDesiredLinks(rt *Runtime, state *stateFile) ([]inspect.DesiredLink, map[string]ipsec.TransportLinkSpec, error) {
+func plannedInspectDesiredLinks(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState) ([]inspect.DesiredLink, map[string]ipsec.TransportLinkSpec, error) {
 	specs := map[string]ipsec.TransportLinkSpec{}
-	if rt == nil || rt.Config == nil || state == nil || state.Network == nil || state.ManagedZone.IsRoot() || !state.ManagedZone.Valid() || len(rt.Config.IPsec.LinkGroups) == 0 {
+	if rt == nil || rt.Config == nil || verified == nil || verified.Network == nil || runtime == nil || verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() || len(rt.Config.IPsec.LinkGroups) == 0 {
 		return nil, specs, nil
 	}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
 		Now:           rt.Now(),
 		DNSResolver:   net.DefaultResolver,
-		ExcludedPeers: peerLifecycleExcludedPeers(state.PeerCleanups, state.SyncPeers, rt.Now(), rt.Config.PeerLifecycle),
+		ExcludedPeers: peerLifecycleExcludedPeers(runtime.PeerCleanups, syncPeerReadView(checkpoint), rt.Now(), rt.Config.PeerLifecycle),
 	})
 	if err != nil {
 		return nil, specs, err
 	}
-	desired := injectIPsecKeyMaterial(&corestate.VerifiedState{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-	}, state.IPsecTransportKey, plan.Desired)
+	desired := injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)
 	out := make([]inspect.DesiredLink, 0, len(desired))
 	for _, spec := range desired {
 		item := desiredLinkState{

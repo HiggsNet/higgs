@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,15 +43,8 @@ func debugRotatePort(direct bool) error {
 		printManualPortRotateResult("daemon", result)
 		return nil
 	}
-	state, err := rt.LoadState()
+	result, err := rotateIPsecPortDirect(rt)
 	if err != nil {
-		return err
-	}
-	result, err := forceLocalIPsecPortRotate(rt.Config, state, rt.Now())
-	if err != nil {
-		return err
-	}
-	if err := rt.SaveState(state); err != nil {
 		return err
 	}
 	printManualPortRotateResult("direct", result)
@@ -78,7 +72,7 @@ func debugRotate(ctx context.Context, filter string) error {
 		storedSAs := append([]linkSAState(nil), response.Links.ActualSAs...)
 		return writeDebugRotateFromBuild(os.Stdout, build, filter, storedSAs, nil, nil, "daemon_sas", "direct_live_sas")
 	}
-	state, err := rt.LoadState()
+	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
@@ -98,16 +92,12 @@ func debugRotate(ctx context.Context, filter string) error {
 			}
 		}
 	}
-	return writeDebugRotate(os.Stdout, rt, state, filter, liveSAs, liveErr)
-}
-
-func writeDebugRotate(w io.Writer, rt *Runtime, state *stateFile, filter string, liveSAs []linkSAState, liveErr error) error {
-	build := buildLinkInspection(rt, state, nil)
+	build := buildLinkInspection(rt, common.State, common.Gossip, runtime, nil)
 	storedSAs := []linkSAState(nil)
-	if state != nil && state.IPsecReconcile != nil {
-		storedSAs = state.IPsecReconcile.ActualSAs
+	if runtime != nil && runtime.IPsecReconcile != nil {
+		storedSAs = runtime.IPsecReconcile.ActualSAs
 	}
-	return writeDebugRotateFromBuild(w, build, filter, storedSAs, liveSAs, liveErr, "stored_sas", "live_sas")
+	return writeDebugRotateFromBuild(os.Stdout, build, filter, storedSAs, liveSAs, liveErr, "stored_sas", "live_sas")
 }
 
 func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter string, storedSAs, liveSAs []linkSAState, liveErr error, storedLabel, liveLabel string) error {
@@ -176,24 +166,39 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 	})
 }
 
-func forceLocalIPsecPortRotate(config *appConfig, state *stateFile, now time.Time) (*manualPortRotateResult, error) {
-	verified := &corestate.VerifiedState{
-		ManagedZone:        state.ManagedZone,
-		Network:            state.Network,
-		IdentityPrivateKey: state.ZonePrivateKey,
-	}
-	record, runtime, result, err := planLocalIPsecPortRotation(config, verified, linuxRuntimeStateFromLegacy(state), now)
+func rotateIPsecPortDirect(rt *Runtime) (*manualPortRotateResult, error) {
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return nil, err
 	}
-	changed, err := putSignedIPsecRecordIfChanged(state, state.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, record, now)
+	defer boltStore.Close()
+	defer startup.Common.Close()
+	store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
 	if err != nil {
 		return nil, err
 	}
-	if !changed {
-		return nil, fmt.Errorf("manual port rotate produced unchanged ipsec/ports record")
+	common, runtime := store.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
+		return nil, fmt.Errorf("state owners are not initialized")
 	}
-	state.IPsecPortRecord = runtime
+	record, portRuntime, result, err := planLocalIPsecPortRotation(rt.Config, common.State, runtime, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+	value, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	runtime.IPsecPortRecord = portRuntime
+	committed, err := store.publishLocalProtocols(context.Background(), uint64(common.Revision), []corestate.LocalIntent{
+		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
+	}, runtime, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+	if !committed.RuntimeCommitted && !committed.Common.Committed {
+		return nil, fmt.Errorf("manual port rotate produced unchanged state")
+	}
 	return result, nil
 }
 

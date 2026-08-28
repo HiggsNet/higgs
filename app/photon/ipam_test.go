@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -517,7 +518,7 @@ func TestSharedAssignmentTagRoundTrip(t *testing.T) {
 }
 
 func TestSortIPAMAssignmentRowsUsesPrefixThenAssignedZone(t *testing.T) {
-	rows := []ipamAssignmentRow{
+	rows := []inspect.IPAMAssignmentRow{
 		{Prefix: "2001:db8::/32", AssignedTo: "a.example."},
 		{Prefix: "10.0.0.0/8", AssignedTo: "z.example."},
 		{Prefix: "2.0.0.0/8", AssignedTo: "c.example."},
@@ -541,7 +542,7 @@ func stringSliceContains(values []string, want string) bool {
 	return slices.Contains(values, want)
 }
 
-func ipamDiagnosticsContain(values []ipamGetDiagnosticRow, want string) bool {
+func ipamDiagnosticsContain(values []inspect.IPAMGetDiagnosticRow, want string) bool {
 	for _, value := range values {
 		if value.Code == want {
 			return true

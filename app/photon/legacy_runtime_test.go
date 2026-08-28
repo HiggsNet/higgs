@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"slices"
 	"time"
 
@@ -79,6 +80,11 @@ func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone})
 	}
 	return nil
+}
+
+func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
+	build := buildLinkInspection(rt, verifiedStateForTest(state), nil, linuxRuntimeStateFromLegacy(state), nil)
+	return writeDebugLinksFromBuild(w, build, filter)
 }
 
 func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {

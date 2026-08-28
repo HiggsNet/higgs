@@ -12,18 +12,21 @@ func verifyChain(path zone.ZonePath) error {
 	if err != nil {
 		return err
 	}
-	if _, ok, err := readViewViaControl(rt, controlRequest{Method: "verify_chain", Zone: path.String()}); err != nil {
+	if ok, err := verifyChainViaControl(rt, path); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("verified chain for %s\n", path)
 		return nil
 	}
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	configureValidation(state.Network)
-	if err := photoncrypto.VerifyChain(state.Network, path, rt.Now()); err != nil {
+	if common.State == nil || common.State.Network == nil {
+		return fmt.Errorf("common state is not initialized")
+	}
+	configureValidation(common.State.Network)
+	if err := photoncrypto.VerifyChain(common.State.Network, path, rt.Now()); err != nil {
 		return err
 	}
 	fmt.Printf("verified chain for %s\n", path)
