@@ -305,7 +305,8 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 	}
 	defer startup.Common.Close()
 	if key == nil {
-		key, err = joinAcceptKeyFromStateFile(composeLinuxStateView(startup.Common.ReadView(), startup.Runtime), bundle.Zone)
+		view := startup.Common.ReadView()
+		key, err = joinAcceptKeyFromIdentity(view.State, bundle.Zone)
 		if err != nil {
 			return nil, err
 		}
@@ -329,21 +330,21 @@ func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) 
 	return nil, nil
 }
 
-func joinAcceptKeyFromStateFile(state *stateFile, expectedZone zone.ZonePath) (*privateKeyFile, error) {
+func joinAcceptKeyFromIdentity(state *corestate.VerifiedState, expectedZone zone.ZonePath) (*privateKeyFile, error) {
 	if state == nil {
 		return nil, errors.New("join accept requires key.json because no existing state is available")
 	}
 	if state.ManagedZone != expectedZone {
 		return nil, fmt.Errorf("join accept requires key.json because existing state manages %s, not %s", state.ManagedZone, expectedZone)
 	}
-	if len(state.ZonePrivateKey) != ed25519.PrivateKeySize {
+	if len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
 		return nil, errors.New("join accept requires key.json because existing state has no zone_private_key")
 	}
-	pub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
+	pub := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
 	return &privateKeyFile{
 		Type:       "photon.ed25519.private.v1",
 		PublicKey:  append([]byte(nil), pub...),
-		PrivateKey: append([]byte(nil), state.ZonePrivateKey...),
+		PrivateKey: append([]byte(nil), state.IdentityPrivateKey...),
 	}, nil
 }
 

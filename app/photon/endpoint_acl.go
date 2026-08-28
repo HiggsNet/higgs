@@ -192,24 +192,24 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	snapshot, rev := d.StateStore.Snapshot()
-	if snapshot == nil || snapshot.Network == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
 	if !d.hasEnforcingHostFirewall() {
 		return false, errors.New("endpoint ACL requires an enabled managed host firewall instance with an available nftables or iptables backend")
 	}
-	if current, ok := snapshot.EndpointACLs[validated.Name]; ok && endpointACLEqual(current, validated) {
+	if current, ok := runtime.EndpointACLs[validated.Name]; ok && endpointACLEqual(current, validated) {
 		return false, nil
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(snapshot.Network, d.Sync.now())
+	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, d.Sync.now())
 	if err != nil {
 		return false, fmt.Errorf("build route authorization: %w", err)
 	}
 	destination, _ := netip.ParseAddr(validated.Destination)
 	owned := false
 	for _, assignment := range ars.AllAssignments {
-		if assignment.AssignedTo == snapshot.ManagedZone && assignment.Prefix.Contains(destination) {
+		if assignment.AssignedTo == common.State.ManagedZone && assignment.Prefix.Contains(destination) {
 			owned = true
 			break
 		}
@@ -217,11 +217,11 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, erro
 	if !owned {
 		return false, fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
 	}
-	if snapshot.EndpointACLs == nil {
-		snapshot.EndpointACLs = make(map[string]endpointACL)
+	if runtime.EndpointACLs == nil {
+		runtime.EndpointACLs = make(map[string]endpointACL)
 	}
-	snapshot.EndpointACLs[validated.Name] = validated
-	if err := d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile); err != nil {
+	runtime.EndpointACLs[validated.Name] = validated
+	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs, runtime.FirewallReconcile); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -232,15 +232,15 @@ func (d *DaemonService) handleEndpointACLRemoveEvent(name string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	snapshot, rev := d.StateStore.Snapshot()
-	if snapshot == nil {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
-	if _, ok := snapshot.EndpointACLs[name]; !ok {
+	if _, ok := runtime.EndpointACLs[name]; !ok {
 		return false, nil
 	}
-	delete(snapshot.EndpointACLs, name)
-	if err := d.commitEndpointACLMutation(rev, snapshot.EndpointACLs, snapshot.FirewallReconcile); err != nil {
+	delete(runtime.EndpointACLs, name)
+	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs, runtime.FirewallReconcile); err != nil {
 		return false, err
 	}
 	return true, nil

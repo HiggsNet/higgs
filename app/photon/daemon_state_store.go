@@ -374,16 +374,27 @@ func (s *DaemonStateStore) refreshMeta() {
 }
 
 func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
-	if s == nil || s.common == nil {
+	common, runtime := s.readCommonAndRuntime()
+	if common.State == nil {
 		return nil, 0
+	}
+	return composeLinuxStateView(common, runtime), uint64(common.Revision)
+}
+
+// readCommonAndRuntime returns detached snapshots of the two actual state
+// owners at one serialized revision. It deliberately does not construct the
+// temporary aggregate stateFile compatibility view.
+func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntimeState) {
+	if s == nil || s.common == nil {
+		return corestate.View{}, nil
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	common := s.common.ReadView()
 	s.mu.RLock()
-	snapshot := composeLinuxStateView(common, s.runtime)
+	runtime := cloneLinuxRuntimeState(s.runtime)
 	s.mu.RUnlock()
-	return snapshot, uint64(common.Revision)
+	return common, runtime
 }
 
 func (s *DaemonStateStore) metadata() daemonStateStoreMeta {

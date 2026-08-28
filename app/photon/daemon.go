@@ -1423,8 +1423,8 @@ func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSn
 	}
 	revocations := 0
 	if result.Apply != nil {
-		if current := d.currentState(); current != nil && current.Network != nil {
-			if zs := current.Network.Zones[result.Apply.Zone]; zs != nil {
+		if current := d.StateStore.common.ReadView(); current.State != nil && current.State.Network != nil {
+			if zs := current.State.Network.Zones[result.Apply.Zone]; zs != nil {
 				revocations = len(zs.Revocations)
 			}
 		}
@@ -1459,15 +1459,18 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	if err != nil {
 		return nil, err
 	}
-	state, revision := d.StateStore.Snapshot()
-	plan := mergePurgePlan(commonPlan, linuxRuntimeStateFromLegacy(state))
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
+		return nil, errors.New("daemon state is not loaded")
+	}
+	plan := mergePurgePlan(commonPlan, runtime)
 	if !apply {
 		return plan, nil
 	}
-	if err := d.cleanupPurgePlanIPsecLinks(ctx, state, plan); err != nil {
+	if err := d.cleanupPurgePlanIPsecLinks(ctx, runtime, plan); err != nil {
 		return nil, err
 	}
-	if _, _, err := d.StateStore.commitPurgeRuntimeIfRevision(revision, plan.LinkInstances, plan.SyncPeers); err != nil {
+	if _, _, err := d.StateStore.commitPurgeRuntimeIfRevision(uint64(common.Revision), plan.LinkInstances, plan.SyncPeers); err != nil {
 		return nil, err
 	}
 	result, err := d.StateStore.PurgeCommon(ctx, now, target)
@@ -1486,18 +1489,18 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	return plan, nil
 }
 
-func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, state *stateFile, plan *purgePlan) error {
+func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
-	if d == nil || d.Sync == nil || state == nil || d.Sync.App == nil {
+	if d == nil || d.Sync == nil || runtime == nil || d.Sync.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	platformRuntime := d.linuxRuntime
 	if platformRuntime == nil {
 		return errors.New("linux runtime is not initialized")
 	}
-	_, err := cleanupIPsecLinkInstancesByID(ctx, state, plan.LinkInstances, platformRuntime, d.Sync.now())
+	_, err := cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, platformRuntime, d.Sync.now())
 	return err
 }
 
@@ -1510,7 +1513,7 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	}
 	if key == nil {
 		var err error
-		key, err = joinAcceptKeyFromStateFile(d.currentState(), bundle.Zone)
+		key, err = joinAcceptKeyFromIdentity(d.StateStore.common.ReadView().State, bundle.Zone)
 		if err != nil {
 			return nil, err
 		}
@@ -1557,7 +1560,10 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 		return false, err
 	}
 	if authority.Adopted || authority.Refreshed {
-		d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": d.currentState().ManagedZone})
+		view := d.StateStore.common.ReadView()
+		if view.State != nil {
+			d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": view.State.ManagedZone})
+		}
 	}
 	published, err := d.publishLocalProtocols(true)
 	return commit.Committed || published, err

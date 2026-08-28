@@ -263,5 +263,7 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
 2. 公共 HostRuntime：协议 receive、timer、object-pull、discovery 和 controller 周期调度已完成；`sync.go` 与
    `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。
 3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
-4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；daemon Snapshot 和只读 CLI 仍依赖聚合形状，这是当前主线。
+4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
+   state GC 和 reconcile completion 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。主 reconcile planner、protocol publish、
+   少量 control/hook 及只读 CLI 仍依赖聚合形状，这是当前主线。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。

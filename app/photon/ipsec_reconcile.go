@@ -376,7 +376,7 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateF
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	summary.Committed = true
 	nextInstances := linkInstancesFromIPsec(instances)
-	if ipsecReconcileResultEqual(workspace, nextInstances, summary) {
+	if ipsecReconcileResultEqual(workspace.LinkInstances, workspace.IPsecReconcile, nextInstances, summary) {
 		return nil
 	}
 	currentRev, committed, err := d.commitIPsecRuntime(rev, workspace.IPsecTransportKey, workspace.IPsecPortRecord, nextInstances, summary)
@@ -395,14 +395,11 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, workspace *stateF
 	return nil
 }
 
-func ipsecReconcileResultEqual(base *stateFile, nextInstances map[string]linkInstanceState, nextReconcile *ipsecReconcileState) bool {
-	if base == nil {
+func ipsecReconcileResultEqual(baseInstances map[string]linkInstanceState, baseReconcile *ipsecReconcileState, nextInstances map[string]linkInstanceState, nextReconcile *ipsecReconcileState) bool {
+	if !reflect.DeepEqual(baseInstances, nextInstances) {
 		return false
 	}
-	if !reflect.DeepEqual(base.LinkInstances, nextInstances) {
-		return false
-	}
-	return ipsecReconcileSummaryEqual(base.IPsecReconcile, nextReconcile)
+	return ipsecReconcileSummaryEqual(baseReconcile, nextReconcile)
 }
 
 func ipsecReconcileSummaryEqual(base, next *ipsecReconcileState) bool {
@@ -452,18 +449,18 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	if d == nil || d.StateStore == nil || err == nil {
 		return
 	}
-	snapshot, snapshotRev := d.StateStore.Snapshot()
-	if snapshot == nil || snapshotRev != rev {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil || uint64(common.Revision) != rev {
 		d.ipsecDirty = true
 		d.publishStateStoreRuntimeFlags()
 		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
 			"source_revision":  rev,
-			"current_revision": snapshotRev,
+			"current_revision": common.Revision,
 			"error":            err,
 		})
 		return
 	}
-	reconcile := cloneIPsecReconcileState(snapshot.IPsecReconcile)
+	reconcile := cloneIPsecReconcileState(runtime.IPsecReconcile)
 	if reconcile == nil {
 		reconcile = &ipsecReconcileState{}
 	}
@@ -472,10 +469,10 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	reconcile.Committed = true
 	reconcile.Stale = false
 	reconcile.LastError = err.Error()
-	if ipsecReconcileResultEqual(snapshot, snapshot.LinkInstances, reconcile) {
+	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, runtime.LinkInstances, reconcile) {
 		return
 	}
-	currentRev, committed, commitErr := d.commitIPsecRuntime(rev, snapshot.IPsecTransportKey, snapshot.IPsecPortRecord, snapshot.LinkInstances, reconcile)
+	currentRev, committed, commitErr := d.commitIPsecRuntime(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, runtime.LinkInstances, reconcile)
 	if commitErr != nil {
 		d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": commitErr})
 		return

@@ -849,6 +849,12 @@ package dependency: app -> host -> gossip -> state -> zone
       peer cleanup 和测试保活入口。只读 show/list 的 `LoadState` 不在本项冒充 writer。
     - [x] fresh join accept 直接初始化 common/Linux bucket，不先写 legacy `stateFile` 再依赖下次启动迁移；首次 identity 先由公共 Store 完整验证，再在同一 Bolt 事务原子写入两个 bucket，避免崩溃留下半初始化数据库。
     - [x] `state_gc --direct` 只读/提交 Linux runtime owner，不再 `LoadState -> SaveState` 聚合状态；提交绑定当前 common verified revision，但不会推进该 revision。
+  - [ ] E2j：删除在线 daemon 对聚合 `stateFile` Snapshot 的依赖，再处理离线只读 CLI。
+    - [x] 增加同一写入边界内直接克隆 common view 与 Linux runtime 的内部读取，返回两个真实 owner 而不构造第三套状态；
+      IPsec cleanup、revoked purge、Endpoint ACL、state GC、IPsec error completion 与 Firewall completion 已改用该边界。
+      同时删除仅服务聚合状态的 IPsec cleanup wrappers，join key 恢复与 recovery revocation 统计直接读取 common verified state。
+    - [ ] 将 IPsec、routing、firewall 主 reconcile planner 输入和 `publishLocalProtocols` 从聚合 Snapshot 改为明确的
+      common verified/checkpoint 与 Linux runtime 输入；随后删除 daemon `currentState()` 以及仅剩 hook/composition 所需的完整 Snapshot。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

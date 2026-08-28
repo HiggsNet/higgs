@@ -522,7 +522,6 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 }
 
 func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
 	now := time.Unix(5100, 0)
 	spec := ipsec.TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
@@ -533,19 +532,19 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 		XFRMIfID:      5100,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	runtime := &linuxRuntimeState{LinkInstances: linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})}
 	driver := &ipsec.DryRunDriver{}
 
 	platformRuntime := newTestLinuxRuntime(driver, driver)
-	cleaned, err := cleanupIPsecLinkInstances(context.Background(), state, platformRuntime, now)
+	cleaned, err := cleanupLinuxRuntimeIPsecLinks(context.Background(), runtime, []string{inst.ID}, platformRuntime, now)
 	if err != nil {
-		t.Fatalf("cleanupIPsecLinkInstances: %v", err)
+		t.Fatalf("cleanupLinuxRuntimeIPsecLinks: %v", err)
 	}
 	if cleaned != 1 {
 		t.Fatalf("cleaned = %d, want 1", cleaned)
 	}
-	if len(state.LinkInstances) != 0 {
-		t.Fatalf("link instances = %+v, want empty", state.LinkInstances)
+	if len(runtime.LinkInstances) != 0 {
+		t.Fatalf("link instances = %+v, want empty", runtime.LinkInstances)
 	}
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
 		t.Fatalf("terminated = %+v, want %s", driver.Terminated, spec.TransportID)
@@ -556,8 +555,8 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
 	}
-	if state.IPsecReconcile == nil || state.IPsecReconcile.LastRunUnix != now.Unix() || state.IPsecReconcile.LastError != "" {
-		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp and no error", state.IPsecReconcile)
+	if runtime.IPsecReconcile == nil || runtime.IPsecReconcile.LastRunUnix != now.Unix() || runtime.IPsecReconcile.LastError != "" {
+		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp and no error", runtime.IPsecReconcile)
 	}
 }
 
@@ -654,7 +653,6 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 }
 
 func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
 	now := time.Unix(5111, 0)
 	spec := ipsec.TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
@@ -665,7 +663,7 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 		XFRMIfID:      5111,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	links := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{
 			{Name: "ipsec-managed"},
@@ -675,9 +673,9 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 	}
 
 	platformRuntime := newTestLinuxRuntime(driver, driver)
-	cleaned, err := cleanupIPsecOrphanConnections(context.Background(), state, platformRuntime)
+	cleaned, err := platformRuntime.CleanupIPsecOrphans(context.Background(), managedIPsecConnectionNamesFromLinks(links))
 	if err != nil {
-		t.Fatalf("cleanupIPsecOrphanConnections: %v", err)
+		t.Fatalf("CleanupIPsecOrphans: %v", err)
 	}
 	if cleaned != 1 {
 		t.Fatalf("cleaned = %d, want 1", cleaned)

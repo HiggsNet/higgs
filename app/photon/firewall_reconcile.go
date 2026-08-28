@@ -175,17 +175,17 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 	if d == nil || d.StateStore == nil || summary == nil {
 		return nil
 	}
-	snapshot, snapshotRev := d.StateStore.Snapshot()
-	if snapshot == nil || snapshotRev != rev {
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil || uint64(common.Revision) != rev {
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()
 		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
-			"current_revision": snapshotRev,
+			"current_revision": common.Revision,
 		})
 		return nil
 	}
-	if firewallReconcileResultEqual(snapshot.EndpointACLs, snapshot.FirewallReconcile, endpointACLs, summary) {
+	if firewallReconcileResultEqual(runtime.EndpointACLs, runtime.FirewallReconcile, endpointACLs, summary) {
 		return nil
 	}
 	currentRev, committed, err := d.commitFirewallRuntime(rev, endpointACLs, summary)

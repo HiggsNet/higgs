@@ -100,12 +100,12 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	workspace, rev := d.StateStore.Snapshot()
-	if workspace == nil {
+	common, runtimeCandidate := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtimeCandidate == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
 	platformRuntime := d.linuxRuntime
-	if len(workspace.LinkInstances) > 0 || includeOrphans {
+	if len(runtimeCandidate.LinkInstances) > 0 || includeOrphans {
 		if platformRuntime == nil {
 			return 0, 0, errors.New("linux runtime is not initialized")
 		}
@@ -113,35 +113,32 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 
 	cleaned := 0
 	orphans := 0
-	cleanupState := func(state *stateFile) error {
-		now := d.Sync.now()
-		var err error
-		if len(state.LinkInstances) > 0 {
-			cleaned, err = cleanupIPsecLinkInstances(ctx, state, platformRuntime, now)
-			if err != nil {
-				return err
-			}
-		} else {
-			markIPsecCleanupSnapshot(state, now)
+	now := d.Sync.now()
+	var err error
+	if len(runtimeCandidate.LinkInstances) > 0 {
+		ids := make([]string, 0, len(runtimeCandidate.LinkInstances))
+		for id := range runtimeCandidate.LinkInstances {
+			ids = append(ids, id)
 		}
-		if includeOrphans {
-			orphans, err = cleanupIPsecOrphanConnections(ctx, state, platformRuntime)
-			if err != nil {
-				return err
-			}
+		cleaned, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtimeCandidate, ids, platformRuntime, now)
+		if err != nil {
+			return cleaned, orphans, err
 		}
-		return nil
+	} else {
+		runtimeCandidate.IPsecReconcile = markIPsecCleanupReconcile(runtimeCandidate.IPsecReconcile, now)
 	}
-
-	if err := cleanupState(workspace); err != nil {
-		return cleaned, orphans, err
+	if includeOrphans {
+		orphans, err = platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
+		if err != nil {
+			return cleaned, orphans, err
+		}
 	}
 	if _, committed, err := d.commitIPsecRuntime(
-		rev,
-		workspace.IPsecTransportKey,
-		workspace.IPsecPortRecord,
-		workspace.LinkInstances,
-		workspace.IPsecReconcile,
+		uint64(common.Revision),
+		runtimeCandidate.IPsecTransportKey,
+		runtimeCandidate.IPsecPortRecord,
+		runtimeCandidate.LinkInstances,
+		runtimeCandidate.IPsecReconcile,
 	); err != nil {
 		return cleaned, orphans, err
 	} else if !committed {
@@ -178,38 +175,6 @@ func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, er
 	}
 }
 
-func cleanupIPsecLinkInstances(ctx context.Context, state *stateFile, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
-	if state == nil {
-		return 0, errors.New("state is nil")
-	}
-	ids := make([]string, 0, len(state.LinkInstances))
-	for id := range state.LinkInstances {
-		ids = append(ids, id)
-	}
-	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, state.LinkInstances, ids, platformRuntime)
-	if err != nil {
-		return cleaned, err
-	}
-	state.LinkInstances = links
-	markIPsecCleanupSnapshot(state, now)
-	return cleaned, nil
-}
-
-func cleanupIPsecLinkInstancesByID(ctx context.Context, state *stateFile, ids []string, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
-	if state == nil {
-		return 0, errors.New("state is nil")
-	}
-	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, state.LinkInstances, ids, platformRuntime)
-	if err != nil {
-		return cleaned, err
-	}
-	state.LinkInstances = links
-	if cleaned > 0 {
-		state.IPsecReconcile = markIPsecCleanupReconcile(state.IPsecReconcile, now)
-	}
-	return cleaned, nil
-}
-
 func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, ids []string, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
 	if runtime == nil {
 		return 0, errors.New("linux runtime state is nil")
@@ -234,17 +199,6 @@ func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]l
 	return linkInstancesFromIPsec(remaining), cleaned, nil
 }
 
-func cleanupIPsecOrphanConnections(ctx context.Context, state *stateFile, platformRuntime *photonlinux.Runtime) (int, error) {
-	return platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNames(state))
-}
-
-func managedIPsecConnectionNames(state *stateFile) map[string]bool {
-	if state == nil {
-		return make(map[string]bool)
-	}
-	return managedIPsecConnectionNamesFromLinks(state.LinkInstances)
-}
-
 func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) map[string]bool {
 	out := make(map[string]bool)
 	for _, inst := range linkInstancesToIPsec(links) {
@@ -255,10 +209,6 @@ func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) ma
 		}
 	}
 	return out
-}
-
-func markIPsecCleanupSnapshot(state *stateFile, now time.Time) {
-	state.IPsecReconcile = markIPsecCleanupReconcile(state.IPsecReconcile, now)
 }
 
 func markIPsecCleanupReconcile(reconcile *ipsecReconcileState, now time.Time) *ipsecReconcileState {

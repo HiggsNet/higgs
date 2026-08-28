@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 )
@@ -48,15 +49,15 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil, fmt.Errorf("daemon service is not initialized")
 	}
-	d.StateStore.mu.RLock()
-	instances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
-	revision := d.StateStore.revision
-	d.StateStore.mu.RUnlock()
-	plan := buildStateGCPlan(d.Sync.App.Config, instances)
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil || runtime == nil {
+		return nil, errors.New("daemon state is not loaded")
+	}
+	plan := buildStateGCPlan(d.Sync.App.Config, runtime.BirdInstances)
 	if !apply {
 		return plan, nil
 	}
-	_, _, err := d.StateStore.commitBirdGCIfRevision(revision, plan.OrphanBirdInstances)
+	_, _, err := d.StateStore.commitBirdGCIfRevision(uint64(common.Revision), plan.OrphanBirdInstances)
 	if err != nil {
 		return nil, err
 	}
