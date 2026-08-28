@@ -103,6 +103,27 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	}
 }
 
+func TestDaemonServiceStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	if err := service.closeLinuxRuntime(); err != nil {
+		t.Fatalf("close Linux runtime: %v", err)
+	}
+	var flushed []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		flushed = append(flushed, layer)
+	}
+
+	service.notifyStateChanged()
+
+	if len(flushed) != 0 {
+		t.Fatalf("platform reconcile flushed without Linux runtime: %v", flushed)
+	}
+	if service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatalf("platform dirty flags set without Linux runtime: ipsec:%v routing:%v firewall:%v", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)

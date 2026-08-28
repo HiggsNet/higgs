@@ -92,32 +92,40 @@ func loadAndMigrateLinuxState(store *corestate.BoltStore, trustedRoot ed25519.Pu
 		if err != nil {
 			return false, err
 		}
-		candidate, revision, commonReport, commonFound, err := corestate.LoadBoltState(tx)
+		loaded, commonFound, err := loadLinuxStateTx(tx)
 		if err != nil {
 			return false, err
 		}
 		if !commonFound {
 			return migrated, nil
 		}
-		runtimeState, runtimeFound, err := loadLinuxRuntimeStateTx(tx)
-		if err != nil {
-			return false, err
-		}
-		if !runtimeFound {
-			return false, fmt.Errorf("%w: runtime bucket is missing", errLinuxRuntimeStateCorrupt)
-		}
-		snapshot = linuxStateSnapshot{
-			Candidate:       candidate,
-			Revision:        revision,
-			Runtime:         runtimeState,
-			CommonReport:    commonReport,
-			MigrationReport: migrationReport,
-			Migrated:        migrated,
-		}
+		snapshot = loaded
+		snapshot.MigrationReport = migrationReport
+		snapshot.Migrated = migrated
 		found = true
 		return migrated, nil
 	})
 	return snapshot, found, err
+}
+
+func loadLinuxStateTx(tx *bolt.Tx) (linuxStateSnapshot, bool, error) {
+	candidate, revision, commonReport, found, err := corestate.LoadBoltState(tx)
+	if err != nil || !found {
+		return linuxStateSnapshot{}, found, err
+	}
+	runtimeState, runtimeFound, err := loadLinuxRuntimeStateTx(tx)
+	if err != nil {
+		return linuxStateSnapshot{}, false, err
+	}
+	if !runtimeFound {
+		return linuxStateSnapshot{}, false, fmt.Errorf("%w: runtime bucket is missing", errLinuxRuntimeStateCorrupt)
+	}
+	return linuxStateSnapshot{
+		Candidate:    candidate,
+		Revision:     revision,
+		Runtime:      runtimeState,
+		CommonReport: commonReport,
+	}, true, nil
 }
 
 // loadAndRestoreLinuxState performs the complete persistent startup boundary:

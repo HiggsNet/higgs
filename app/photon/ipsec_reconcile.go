@@ -20,7 +20,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev := d.StateStore.ipsecSnapshot()
+	snapshot, rev := d.StateStore.Snapshot()
 	if snapshot == nil {
 		return nil
 	}
@@ -452,7 +452,7 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	if d == nil || d.StateStore == nil || err == nil {
 		return
 	}
-	snapshot, snapshotRev := d.StateStore.ipsecSnapshot()
+	snapshot, snapshotRev := d.StateStore.Snapshot()
 	if snapshot == nil || snapshotRev != rev {
 		d.ipsecDirty = true
 		d.publishStateStoreRuntimeFlags()

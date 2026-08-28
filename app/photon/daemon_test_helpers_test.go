@@ -29,7 +29,7 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 		view := store.common.ReadView()
 		view.State.TrustedRootPublicKey = append(ed25519.PublicKey(nil), rt.Config.TrustedRootPublicKey...)
 		store.common = corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil)
-		store.refreshView()
+		store.refreshMeta()
 	}
 	service := newDaemonServiceWithStore(rt, store, config, interval)
 	dryRun := &ipsec.DryRunDriver{}
@@ -99,7 +99,7 @@ func replaceTestDaemonState(store *DaemonStateStore, state *stateFile) {
 	store.common = replacement.common
 	store.runtime = replacement.runtime
 	store.writeMu.Unlock()
-	store.refreshView()
+	store.refreshMeta()
 }
 
 func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
@@ -893,21 +893,12 @@ func freeDaemonTestUDPAddr(t *testing.T) string {
 	return addr
 }
 
-func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, rtA, rtB *Runtime, groupA, groupB ipsec.LinkGroupSpec) (*stateFile, *stateFile) {
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *DaemonService, groupA, groupB ipsec.LinkGroupSpec) (*stateFile, *stateFile) {
 	t.Helper()
 	var lastA, lastB *stateFile
-	var lastErr error
 	for {
-		if stateA, err := rtA.LoadState(); err == nil {
-			lastA = stateA
-		} else {
-			lastErr = err
-		}
-		if stateB, err := rtB.LoadState(); err == nil {
-			lastB = stateB
-		} else {
-			lastErr = err
-		}
+		lastA = serviceA.currentState()
+		lastB = serviceB.currentState()
 		if lastA != nil && lastB != nil && daemonRunGossipStrongSwanReady(lastA, groupA) && daemonRunGossipStrongSwanReady(lastB, groupB) {
 			return lastA, lastB
 		}
@@ -918,9 +909,6 @@ func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, rtA, rtB
 			}
 			if lastB != nil {
 				t.Logf("last node-b reconcile = %+v instances=%+v", lastB.IPsecReconcile, lastB.LinkInstances)
-			}
-			if lastErr != nil {
-				t.Fatalf("timeout waiting for daemon gossip StrongSwan up; last load error: %v", lastErr)
 			}
 			t.Fatalf("timeout waiting for daemon gossip StrongSwan up")
 		default:

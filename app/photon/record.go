@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -89,21 +91,25 @@ func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, 
 	if err := validateGenericRecordPut(key, recordType); err != nil {
 		return err
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return err
 	}
-	record, err := buildSignedRecordAt(state, path, key, value, recordType, rt.Now())
+	defer boltStore.Close()
+	store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
 	if err != nil {
 		return err
 	}
-	if err := state.Network.Put(record); err != nil {
+	result, err := store.ApplyCommonLocalIntent(context.Background(), corestate.PutRecordIntent{
+		Zone: path, Key: key, Type: recordType, Value: append([]byte(nil), value...),
+	}, false, rt.Now())
+	if err != nil {
 		return err
 	}
-	if err := rt.SaveState(state); err != nil {
-		return err
+	if result.Record == nil {
+		return fmt.Errorf("record put did not return a record")
 	}
-	fmt.Printf("put %s/%s version %d\n", path, key, record.Version)
+	fmt.Printf("put %s/%s version %d\n", path, key, result.Record.Version)
 	return nil
 }
 

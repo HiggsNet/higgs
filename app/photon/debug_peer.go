@@ -16,6 +16,15 @@ func debugPeer(peerID string) error {
 	if err != nil {
 		return err
 	}
+	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "peer_debug", Zone: peerID}); err != nil {
+		return err
+	} else if ok {
+		if response.PeerDebug == nil {
+			return fmt.Errorf("daemon peer response is empty")
+		}
+		fmt.Printf("daemon: online peer_id=%s\n", response.PeerDebug.PeerID)
+		return inspecttext.WritePeerDebug(os.Stdout, *response.PeerDebug)
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
@@ -28,11 +37,6 @@ func debugPeer(peerID string) error {
 	view, err := buildDebugPeerView(state, config, peerID, now)
 	if err != nil {
 		return err
-	}
-	if response, ok, err := daemonStatusViaControl(rt); err != nil {
-		return err
-	} else if ok {
-		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
 	}
 	return inspecttext.WritePeerDebug(os.Stdout, view)
 }

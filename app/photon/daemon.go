@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observer"
@@ -666,6 +667,59 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		response := controlResponse{OK: true, Record: record}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
+	case "records_view":
+		view := d.StateStore.common.ReadView()
+		var network *zone.NetworkState
+		if view.State != nil {
+			network = view.State.Network
+		}
+		path := zone.ZonePath(request.Zone)
+		if path.Valid() && (network == nil || network.Zones[path] == nil) {
+			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)))
+			return
+		}
+		records := inspect.BuildRecordsDebug(inspect.RecordsDebugInput{Network: network, Path: path})
+		writeControlResponse(conn, controlResponse{OK: true, Records: &records})
+	case "sync_view":
+		state := d.currentState()
+		if state == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		view := buildSyncStatusView(state, d.Sync.Config, d.Sync.now(), request.Verbose)
+		writeControlResponse(conn, controlResponse{OK: true, SyncStatus: &view})
+	case "peer_debug":
+		state := d.currentState()
+		view, err := buildDebugPeerView(state, d.Sync.Config, request.Zone, d.Sync.now())
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, PeerDebug: &view})
+	case "zone_debug":
+		state := d.currentState()
+		path := zone.ZonePath(request.Zone)
+		debugView, err := buildDebugZoneView(state, path, d.Sync.now())
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		detail := inspect.BuildZoneDetail(inspect.ZoneDetailInput{
+			Path: path, State: state.Network.Zones[path], Network: state.Network, Now: d.Sync.now(), IncludeHistory: request.History > 0,
+		})
+		writeControlResponse(conn, controlResponse{OK: true, ZoneDebug: &debugView, ZoneDetail: &detail})
+	case "verify_chain":
+		view := d.StateStore.common.ReadView()
+		if view.State == nil || view.State.Network == nil {
+			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
+			return
+		}
+		configureValidation(view.State.Network)
+		if err := photoncrypto.VerifyChain(view.State.Network, zone.ZonePath(request.Zone), d.Sync.now()); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true})
 	case "endpoint_acl_apply":
 		if request.EndpointACL == nil {
 			writeControlResponse(conn, controlError(errors.New("endpoint_acl is required")))
@@ -1646,6 +1700,13 @@ func (d *DaemonService) notifyStateChanged() {
 	// Long-offline peers use a separate persisted local marker: their cache is
 	// removed here and IPsec planning excludes them until a successful sync.
 	d.flushPeerLifecycleCleanup()
+	// Gossip-only commands construct the common host runtime without a Linux
+	// platform runtime. Their committed state is still valid, but platform
+	// reconciliation belongs to the full daemon that owns those drivers.
+	if d.linuxRuntime == nil {
+		d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
+		return
+	}
 
 	if d.drainingEvents {
 		d.ipsecDirty = true

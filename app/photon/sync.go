@@ -98,10 +98,14 @@ func syncStatus(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := daemonStatusViaControl(rt); err != nil {
+	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "sync_view", Verbose: verbose}); err != nil {
 		return err
 	} else if ok {
-		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", response.PeerID)
+		if response.SyncStatus == nil {
+			return errors.New("daemon sync response is empty")
+		}
+		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", response.SyncStatus.PeerID)
+		return inspecttext.WriteSyncStatus(os.Stdout, *response.SyncStatus)
 	}
 	state, err := rt.LoadState()
 	if err != nil {
@@ -266,6 +270,11 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	defer service.hostRuntime.Stop()
+	stopControl, err := service.startControlServer(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopControl()
 	logger.Info("sync", "serve_started", map[string]any{
 		"peer_id": config.PeerID,
 		"addr":    transport.LocalAddr(),

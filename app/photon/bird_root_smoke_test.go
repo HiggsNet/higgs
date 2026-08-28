@@ -92,10 +92,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	// Verify BIRD is running.
 	if !service.birdProcessManager.IsRunning(ctx) {
-		latest, err := rt.LoadState()
-		if err != nil {
-			t.Fatalf("BIRD process is not running after reconcileRouting; LoadState: %v", err)
-		}
+		latest := service.currentState()
 		inst := latest.BirdInstances[nsName]
 		if inst == nil {
 			t.Fatal("BIRD process is not running after reconcileRouting; instance state is missing")
@@ -113,10 +110,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	sockPath := filepath.Join(dataDir, "netns-"+nsName, "bird.ctl")
 	if _, err := os.Stat(sockPath); err != nil {
 		// The socket path may be derived differently; find it in state.
-		latest, err2 := rt.LoadState()
-		if err2 != nil {
-			t.Fatalf("LoadState: %v", err2)
-		}
+		latest := service.currentState()
 		if birdState := latest.BirdInstances[nsName]; birdState != nil {
 			sockPath = birdState.ControlSocket
 		}
@@ -207,10 +201,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD process is not running after initial reconcile")
 	}
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState after initial reconcile: %v", err)
-	}
+	latest := service1.currentState()
 	birdState := latest.BirdInstances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)
@@ -224,10 +215,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
 	}
 
-	restartedState, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState before restart reconcile: %v", err)
-	}
+	restartedState := service1.currentState()
 	service2 := newTestDaemonService(rt, restartedState, syncConfig, time.Second)
 	service2.birdProcessManager = bird.NewExecProcessManager("")
 	service2.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
@@ -606,10 +594,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	// Read generated config and verify upstream interface block.
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	birdState := latest.BirdInstances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)

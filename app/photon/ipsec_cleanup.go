@@ -100,7 +100,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	workspace, rev := d.StateStore.ipsecSnapshot()
+	workspace, rev := d.StateStore.Snapshot()
 	if workspace == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}

@@ -260,6 +260,14 @@ authorization 和 transport records 作为可信事实来源。
     transport key 转换保留其真实组合逻辑，但统一改成 `build/merge/stored` 业务命名，不再用 `FromOwners/FromRuntime`
     暗示迁移层。接口实现、平台 Runtime 对 driver 的封装、以及真正被多个调用方使用的默认参数/序列化边界不按
     “一行函数”机械删除。
+    `DaemonStateStore` 已进一步删除长期缓存的完整 `committed *stateFile`：common Store 与 Linux runtime 是仅有的
+    常驻 owner，旧 planner 需要聚合形状时才在单写边界内按需生成一次 detached snapshot。routing/IPsec/firewall
+    专用 snapshot 包装和 root-sharing clone 随之删除；公共 Store 提供不克隆 payload 的 `VerifiedRevision()` 标量
+    读取，common/runtime commit 只更新 revision/timestamp 元数据，不再为每次写入重建完整 Network 聚合副本。
+    root smoke 中遗留的 daemon BIRD/IPsec 断言也已停止调用旧 `Runtime.LoadState()`：BIRD control socket、managed
+    process adopt、XFRM/StrongSwan reconcile 与 daemon-run 等待条件直接读取活动 `DaemonStateStore`。底层数据面原本
+    正常，旧测试因读取迁移前 legacy owner 得到空 `BirdInstances/IPsecReconcile` 而误报；修正后完整 `root-smoke`
+    已覆盖 IPsec/XFRM、BIRD/Babel、firewall、health fault 与 revocation deny-first 并通过。
 
 ### 10.0 冻结 v1 契约与威胁模型
 
@@ -760,6 +768,13 @@ package dependency: app -> host -> gossip -> state -> zone
         writer、`saveCommittedMeta/saveCommittedState`、在线数据库重载与 self-write marker；不存在新旧在线双写模式。
         `stateFile` 目前只是 daemon planner/inspect 的 detached 聚合读形状，不再是持久化根，后续替换公共 host runtime
         时再按 consumer 逐项缩小，而不是为切换继续增加 adapter。
+        常驻 BoltStore 切换后，离线 CLI 读取已优先组合 common + Linux runtime 分区；只有尚无 common schema 的旧库
+        才进入保留的一次迁移/bootstrap 路径。`record put --direct` 也已改为在 daemon 停止后打开唯一 BoltStore 并提交
+        公共 `PutRecordIntent`，不再把新 common 状态反向写回旧 Network/meta。daemon 与长期 `advanced sync serve` 均
+        提供 control IPC；在线 records、sync、peer、zone 和 chain verify 读取 typed view，不与服务进程争抢 bbolt 文件锁。
+        纯 gossip service 未配置 Linux runtime 时只提交/清理 common gossip 状态，不标记或执行 platform reconcile。
+        相关切换已由完整 `make smoke` 验证，覆盖 phase1/2/3、admin、多节点、relay/discovery、bootstrap/NAT、revoke、
+        object-pull/chunk fallback 及各 dry-run/observer smoke。
         公共 Store 已补充批量本机 intent 原语：多条 publisher mutation 在同一 detached candidate 中按顺序校验、
         签名，任一失败整批回滚，只执行一次持久化且 VerifiedRevision 最多推进一次；原单条 API 反向复用该实现，
         避免形成两套 mutation 语义。startup/endpoint、admin、remote snapshot、discovery、cleanup 与全部 controller

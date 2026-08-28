@@ -47,10 +47,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	installTestIPsecDrivers(service, &observedIPsecDriver{}, ipsec.NewSystemXFRMDriver(group.NetNS))
 	service.recoverIPsecLinksOnStart(ctx)
 
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
+	latest := service.currentState()
 	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastError != "" {
 		t.Fatalf("ipsec reconcile = %+v, want successful system xfrm apply", latest.IPsecReconcile)
 	}
@@ -71,13 +68,9 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 		t.Fatalf("daemon-assigned tunnel address not visible on %s/%s: %v", ns, inst.InterfaceName, err)
 	}
 
-	service.setState(latest)
 	service.Sync.App.Config.IPsec.LinkGroups = nil
 	service.recoverIPsecLinksOnStart(ctx)
-	removed, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(after teardown): %v", err)
-	}
+	removed := service.currentState()
 	if removed.IPsecReconcile == nil || removed.IPsecReconcile.LastError != "" {
 		t.Fatalf("teardown reconcile = %+v, want successful system xfrm teardown", removed.IPsecReconcile)
 	}
@@ -222,14 +215,8 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	latestA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a connecting): %v", err)
-	}
-	latestB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b connecting): %v", err)
-	}
+	latestA := serviceA.currentState()
+	latestB := serviceB.currentState()
 	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -239,8 +226,6 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 		t.Fatalf("wait for daemon SA on B: %v", err)
 	}
 
-	serviceA.setState(latestA)
-	serviceB.setState(latestB)
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	latestA = serviceA.currentState()
@@ -253,17 +238,11 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
-	restartedA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a before restart): %v", err)
-	}
+	restartedA := serviceA.currentState()
 	restartServiceA := newTestDaemonService(rtA, restartedA, configA, time.Second)
 	installTestIPsecDrivers(restartServiceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
-	recoveredA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a after restart): %v", err)
-	}
+	recoveredA := restartServiceA.currentState()
 	assertDaemonSystemLinkUp(t, recoveredA, specA)
 	if recoveredA.IPsecReconcile == nil || len(recoveredA.IPsecReconcile.Actions) != 1 {
 		t.Fatalf("restart reconcile = %+v, want one recovery observation action", recoveredA.IPsecReconcile)
@@ -297,10 +276,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	}
 	restartServiceA.setState(recoveredA)
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
-	revokedA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a revoked): %v", err)
-	}
+	revokedA := restartServiceA.currentState()
 	if len(revokedA.LinkInstances) != 0 {
 		t.Fatalf("node-a link instances after revoke = %+v, want none", revokedA.LinkInstances)
 	}
@@ -458,14 +434,8 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	latestA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a connecting): %v", err)
-	}
-	latestB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b connecting): %v", err)
-	}
+	latestA := serviceA.currentState()
+	latestB := serviceB.currentState()
 	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -475,18 +445,10 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 		t.Fatalf("wait for daemon SA on B: %v", err)
 	}
 
-	serviceA.setState(latestA)
-	serviceB.setState(latestB)
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	latestA, err = rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a up): %v", err)
-	}
-	latestB, err = rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b up): %v", err)
-	}
+	latestA = serviceA.currentState()
+	latestB = serviceB.currentState()
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
@@ -634,14 +596,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	latestA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a connecting): %v", err)
-	}
-	latestB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b connecting): %v", err)
-	}
+	latestA := serviceA.currentState()
+	latestB := serviceB.currentState()
 	specA := daemonSystemDesiredSpec(t, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -651,18 +607,10 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 		t.Fatalf("wait for daemon SA on B: %v", err)
 	}
 
-	serviceA.setState(latestA)
-	serviceB.setState(latestB)
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	latestA, err = rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a up): %v", err)
-	}
-	latestB, err = rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b up): %v", err)
-	}
+	latestA = serviceA.currentState()
+	latestB = serviceB.currentState()
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 	addTunnelRoute(t, ctx, nsA, specA)
@@ -690,14 +638,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.setState(rotateA)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	preparedA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a prepared rotate): %v", err)
-	}
-	preparedB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b prepared rotate): %v", err)
-	}
+	preparedA := serviceA.currentState()
+	preparedB := serviceB.currentState()
 	instA := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
 	if instA.RotatePhase != ipsec.RotatePhaseTestingNew || instA.StagedGeneration != 2 {
 		t.Fatalf("prepared rotate instance A = %+v, want testing_new generation 2", instA)
@@ -737,14 +679,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.setState(preparedB)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	committedA, err := rtA.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-a committed rotate): %v", err)
-	}
-	committedB, err := rtB.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(node-b committed rotate): %v", err)
-	}
+	committedA := serviceA.currentState()
+	committedB := serviceB.currentState()
 	rotatedSpecA := daemonSystemDesiredSpec(t, committedA, groupA, now.Add(time.Minute))
 	rotatedSpecB := daemonSystemDesiredSpec(t, committedB, groupB, now.Add(time.Minute))
 	// After commit the active XFRM interface and IKE name are the staged ones;
@@ -942,7 +878,7 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 		}
 	}()
 
-	latestA, latestB := waitDaemonRunGossipStrongSwanUp(ctx, t, rtA, rtB, groupA, groupB)
+	latestA, latestB := waitDaemonRunGossipStrongSwanUp(ctx, t, serviceA, serviceB, groupA, groupB)
 	specA := daemonSystemDesiredSpec(t, latestA, groupA, time.Now())
 	specB := daemonSystemDesiredSpec(t, latestB, groupB, time.Now())
 	assertGossipedIPsecRecords(t, latestA, "node-b.catofes.")

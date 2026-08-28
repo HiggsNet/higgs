@@ -39,6 +39,7 @@ type controlRequest struct {
 	Permissions []zone.Permission       `json:"permissions,omitempty"`
 	Snapshot    *corestate.ZoneSnapshot `json:"snapshot,omitempty"`
 	Apply       bool                    `json:"apply,omitempty"`
+	Verbose     bool                    `json:"verbose,omitempty"`
 	Orphans     bool                    `json:"orphans,omitempty"`
 	NetNS       string                  `json:"netns,omitempty"`
 	BirdView    string                  `json:"bird_view,omitempty"`
@@ -77,6 +78,11 @@ type controlResponse struct {
 	RevocationImpact  []inspect.RevocationImpact    `json:"revocation_impact,omitempty"`
 	Health            []healthLinkJSON              `json:"health,omitempty"`
 	Record            *inspect.RecordDetailView     `json:"record,omitempty"`
+	Records           *inspect.RecordsDebugView     `json:"records,omitempty"`
+	SyncStatus        *inspect.SyncStatusView       `json:"sync_status,omitempty"`
+	PeerDebug         *inspect.PeerDebugView        `json:"peer_debug,omitempty"`
+	ZoneDebug         *inspect.ZoneDebugView        `json:"zone_debug,omitempty"`
+	ZoneDetail        *inspect.ZoneDetail           `json:"zone_detail,omitempty"`
 	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
 	RecordsApplied    int                           `json:"records_applied,omitempty"`
 	Delegations       int                           `json:"delegations,omitempty"`
@@ -211,6 +217,15 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 func daemonStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "status"})
+	if err != nil && isControlSocketUnavailable(err) {
+		return nil, false, nil
+	}
+	return response, true, err
+}
+
+func readViewViaControl(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+	path := controlSocketPath(rt.Config)
+	response, err := sendControlRequest(path, request)
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}

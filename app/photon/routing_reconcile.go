@@ -72,7 +72,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev := d.StateStore.routingSnapshot()
+	snapshot, rev := d.StateStore.Snapshot()
 	if snapshot == nil {
 		return nil
 	}
@@ -122,7 +122,7 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	// Refresh only in that uncommon case; a no-op keeps the routing-owned
 	// snapshot and avoids another complete state copy.
 	if autoAnnounceChanged {
-		snapshot, rev = d.StateStore.routingSnapshot()
+		snapshot, rev = d.StateStore.Snapshot()
 		if snapshot == nil {
 			return firstErr
 		}

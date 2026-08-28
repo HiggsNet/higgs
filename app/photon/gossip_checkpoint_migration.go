@@ -45,6 +45,16 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 	if err := corestate.ValidateStateRoot(candidate.Verified); err != nil {
 		return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, err)
 	}
+	if len(candidate.Verified.TrustedRootPublicKey) == 0 {
+		root := network.Zones[zone.RootZone]
+		if root == nil || root.Authority == nil || len(root.Authority.Keys) != 1 || len(root.Authority.Keys[0].Key) != ed25519.PublicKeySize {
+			return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w: legacy trusted root pin is unavailable", errLegacyCommonStateInvalid, corestate.ErrInvalidStateRoot)
+		}
+		candidate.Verified.TrustedRootPublicKey = append(ed25519.PublicKey(nil), root.Authority.Keys[0].Key...)
+		if err := corestate.ValidateStateRoot(candidate.Verified); err != nil {
+			return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, err)
+		}
+	}
 	configureValidation(candidate.Verified.Network)
 	return candidate, report, nil
 }

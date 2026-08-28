@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"slices"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -330,6 +332,37 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 	var existing *stateFile
 	if loaded, err := rt.LoadState(); err == nil {
 		existing = loaded
+	}
+	_, partitioned, err := loadPartitionedState(rt.StatePath, rt.Config)
+	if err != nil {
+		return nil, err
+	}
+	if partitioned {
+		if key == nil {
+			key, err = joinAcceptKeyFromStateFile(existing, bundle.Zone)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := validatePrivateKeyFile(key); err != nil {
+			return nil, err
+		}
+		boltStore, startup, err := openLinuxDaemonState(rt)
+		if err != nil {
+			return nil, err
+		}
+		defer boltStore.Close()
+		store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := store.InstallCommonIdentity(context.Background(), corestate.IdentityInstall{
+			ManagedZone: bundle.Zone, Network: bundle.Network,
+			TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
+		}, rt.Now()); err != nil {
+			return nil, err
+		}
+		return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 	}
 	state, result, err := prepareJoinAcceptedState(rt, existing, bundle, key)
 	if err != nil {

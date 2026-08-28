@@ -205,6 +205,17 @@ func (store *Store) ReadView() View {
 	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revision: store.revision}
 }
 
+// VerifiedRevision returns the currently published verified-state revision
+// without cloning the verified state or gossip checkpoint.
+func (store *Store) VerifiedRevision() VerifiedRevision {
+	if store == nil {
+		return 0
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.revision
+}
+
 func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
 	if store == nil {
 		return nil, 0

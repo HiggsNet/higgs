@@ -62,6 +62,33 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonControlCommonReadViews(t *testing.T) {
+	state, config := buildTestNetworkState(t)
+	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:43435"}}
+	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+
+	records := controlRequestViaPipe(t, service, controlRequest{Method: "records_view", Zone: "node-b.catofes."})
+	if !records.OK || records.Records == nil {
+		t.Fatalf("records_view response = %#v", records)
+	}
+	syncView := controlRequestViaPipe(t, service, controlRequest{Method: "sync_view", Verbose: true})
+	if !syncView.OK || syncView.SyncStatus == nil || syncView.SyncStatus.PeerID != config.PeerID {
+		t.Fatalf("sync_view response = %#v", syncView)
+	}
+	peer := controlRequestViaPipe(t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})
+	if !peer.OK || peer.PeerDebug == nil || peer.PeerDebug.PeerID != "node-b.catofes." {
+		t.Fatalf("peer_debug response = %#v", peer)
+	}
+	zoneView := controlRequestViaPipe(t, service, controlRequest{Method: "zone_debug", Zone: "node-b.catofes.", History: 1})
+	if !zoneView.OK || zoneView.ZoneDebug == nil || zoneView.ZoneDetail == nil {
+		t.Fatalf("zone_debug response = %#v", zoneView)
+	}
+	verified := controlRequestViaPipe(t, service, controlRequest{Method: "verify_chain", Zone: "node-b.catofes."})
+	if !verified.OK {
+		t.Fatalf("verify_chain response = %#v", verified)
+	}
+}
+
 func TestPrepareControlSocketPathRejectsActiveListener(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.sock")
 	listener, err := net.Listen("unix", path)

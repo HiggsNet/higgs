@@ -107,8 +107,10 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 		if revision != 0 || candidate.RoutingReconcile == nil || candidate.RoutingReconcile.LastError != "planned" {
 			t.Fatalf("runtime commit candidate = revision %d, state %+v", revision, candidate.RoutingReconcile)
 		}
-		current, _ := store.Snapshot()
-		if current.RoutingReconcile != nil {
+		store.mu.RLock()
+		published := cloneRoutingReconcileState(store.runtime.RoutingReconcile)
+		store.mu.RUnlock()
+		if published != nil {
 			t.Fatal("runtime view published before persistence callback")
 		}
 		return nil

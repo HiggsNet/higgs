@@ -14,6 +14,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	bolt "go.etcd.io/bbolt"
 )
 
 const cliMetaKey = "cli_state"
@@ -258,6 +259,13 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 	if config == nil {
 		config = defaultAppConfig()
 	}
+	partitioned, found, err := loadPartitionedState(path, config)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return partitioned, nil
+	}
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		return nil, err
@@ -314,6 +322,46 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		return nil, err
 	}
 	return &state, nil
+}
+
+func loadPartitionedState(path string, config *appConfig) (*stateFile, bool, error) {
+	store, err := corestate.OpenBoltStore(path, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		return nil, false, err
+	}
+	var snapshot linuxStateSnapshot
+	var found bool
+	loadErr := store.View(func(tx *bolt.Tx) error {
+		var err error
+		snapshot, found, err = loadLinuxStateTx(tx)
+		return err
+	})
+	closeErr := store.Close()
+	if loadErr != nil {
+		return nil, false, loadErr
+	}
+	if closeErr != nil {
+		return nil, false, closeErr
+	}
+	if !found {
+		return nil, false, nil
+	}
+	common, err := corestate.RestoreStore(snapshot.Candidate, snapshot.Revision, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	combined, err := NewDaemonStateStore(common, snapshot.Runtime)
+	if err != nil {
+		return nil, false, err
+	}
+	state, _ := combined.Snapshot()
+	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
+		return nil, false, err
+	}
+	if err := applyConfiguredIdentityOverlay(state, config); err != nil {
+		return nil, false, err
+	}
+	return state, true, nil
 }
 
 func saveStateAt(path string, state *stateFile) error {

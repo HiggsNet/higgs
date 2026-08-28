@@ -55,6 +55,18 @@ func showZones(filter string, verbose bool) error {
 }
 
 func showRecords(path zone.ZonePath, filter string, verbose bool) error {
+	rt, err := NewRuntime()
+	if err != nil {
+		return err
+	}
+	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "records_view", Zone: path.String()}); err != nil {
+		return err
+	} else if ok {
+		if response.Records == nil {
+			return fmt.Errorf("daemon records response is empty")
+		}
+		return inspecttext.WriteRecords(os.Stdout, *response.Records, filter, verbose)
+	}
 	state, err := loadState()
 	if err != nil {
 		return err

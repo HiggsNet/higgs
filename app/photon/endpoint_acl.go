@@ -192,7 +192,7 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	snapshot, rev := d.StateStore.firewallSnapshot()
+	snapshot, rev := d.StateStore.Snapshot()
 	if snapshot == nil || snapshot.Network == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
@@ -232,7 +232,7 @@ func (d *DaemonService) handleEndpointACLRemoveEvent(name string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	snapshot, rev := d.StateStore.firewallSnapshot()
+	snapshot, rev := d.StateStore.Snapshot()
 	if snapshot == nil {
 		return false, errors.New("daemon state is not loaded")
 	}

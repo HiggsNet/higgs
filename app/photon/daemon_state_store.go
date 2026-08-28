@@ -35,7 +35,6 @@ type daemonStateStoreMeta struct {
 type DaemonStateStore struct {
 	writeMu           sync.Mutex
 	mu                sync.RWMutex
-	committed         *stateFile
 	common            *corestate.Store
 	runtime           *linuxRuntimeState
 	commitRuntime     func(corestate.VerifiedRevision, *linuxRuntimeState) error
@@ -76,10 +75,7 @@ func newDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, co
 		commitRuntime: commitRuntime,
 		now:           time.Now,
 	}
-	store.refreshView()
-	if store.committed == nil {
-		return nil, errors.New("daemon state view is nil")
-	}
+	store.refreshMeta()
 	return store, nil
 }
 
@@ -99,7 +95,7 @@ func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent co
 		return corestate.LocalIntentResult{}, err
 	}
 	if result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, nil
 }
@@ -115,7 +111,7 @@ func (s *DaemonStateStore) ApplyCommonLocalIntents(ctx context.Context, intents 
 		return corestate.LocalIntentBatchResult{}, err
 	}
 	if result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, nil
 }
@@ -128,7 +124,7 @@ func (s *DaemonStateStore) InstallCommonIdentity(ctx context.Context, install co
 	defer s.writeMu.Unlock()
 	result, err := s.common.InstallIdentity(ctx, install, now)
 	if err == nil && result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, err
 }
@@ -141,7 +137,7 @@ func (s *DaemonStateStore) RefreshCommonManagedAuthority(ctx context.Context, no
 	defer s.writeMu.Unlock()
 	commit, authority, err := s.common.RefreshManagedAuthority(ctx, now)
 	if err == nil && commit.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return commit, authority, err
 }
@@ -154,7 +150,7 @@ func (s *DaemonStateStore) ImportCommonRecovery(ctx context.Context, input cores
 	defer s.writeMu.Unlock()
 	result, err := s.common.ImportRecoverySnapshot(ctx, input, now)
 	if err == nil && result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, err
 }
@@ -174,7 +170,7 @@ func (s *DaemonStateStore) PurgeCommon(ctx context.Context, now time.Time, targe
 	defer s.writeMu.Unlock()
 	result, err := s.common.PurgeRevoked(ctx, now, target)
 	if err == nil && result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, err
 }
@@ -211,13 +207,13 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 	if len(intents) > 0 {
 		result, err := s.common.ApplyLocalIntents(ctx, intents, now)
 		if err != nil {
-			s.refreshView()
+			s.refreshMeta()
 			return out, err
 		}
 		out.Common = result
 	}
 	if out.RuntimeCommitted || out.Common.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return out, nil
 }
@@ -233,7 +229,7 @@ func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID st
 		return corestate.RemoteBatchResult{}, err
 	}
 	if result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, nil
 }
@@ -253,7 +249,7 @@ func (s *DaemonStateStore) UpdatePeerCheckpoints(ctx context.Context, patches ma
 		return corestate.CommitResult{}, err
 	}
 	if result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, nil
 }
@@ -266,7 +262,7 @@ func (s *DaemonStateStore) DeleteCommonPeerCheckpoints(ctx context.Context, peer
 	defer s.writeMu.Unlock()
 	result, err := s.common.DeletePeerCheckpoints(ctx, peerIDs)
 	if err == nil && result.Committed {
-		s.refreshView()
+		s.refreshMeta()
 	}
 	return result, err
 }
@@ -303,8 +299,6 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 		return s.revision, false, errDaemonStateRevisionStale
 	}
 	s.runtime = candidate
-	commonView := s.common.ReadView()
-	s.committed = composeLinuxStateView(commonView, s.runtime)
 	if s.now != nil {
 		s.snapshotTime = s.now()
 	} else {
@@ -361,15 +355,17 @@ func (s *DaemonStateStore) commitPeerCleanupsIfRevision(revision uint64, cleanup
 	})
 }
 
-func (s *DaemonStateStore) refreshView() {
+// refreshMeta records publication metadata after either owner changes. The
+// aggregate stateFile is intentionally not cached; legacy consumers compose a
+// detached snapshot only when they request one.
+func (s *DaemonStateStore) refreshMeta() {
 	if s == nil || s.common == nil {
 		return
 	}
-	commonView := s.common.ReadView()
+	revision := s.common.VerifiedRevision()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.committed = composeLinuxStateView(commonView, s.runtime)
-	s.revision = uint64(commonView.Revision)
+	s.revision = uint64(revision)
 	if s.now != nil {
 		s.snapshotTime = s.now()
 	} else {
@@ -378,14 +374,16 @@ func (s *DaemonStateStore) refreshView() {
 }
 
 func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
-	if s == nil {
+	if s == nil || s.common == nil {
 		return nil, 0
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	common := s.common.ReadView()
 	s.mu.RLock()
-	committed := s.committed
-	rev := s.revision
+	snapshot := composeLinuxStateView(common, s.runtime)
 	s.mu.RUnlock()
-	return cloneStateFile(committed), rev
+	return snapshot, uint64(common.Revision)
 }
 
 func (s *DaemonStateStore) metadata() daemonStateStoreMeta {
@@ -406,73 +404,14 @@ func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	}
 }
 
-// routingSnapshot returns a routing-owned workspace without serializing the
-// complete daemon state. Network and unrelated children remain shared and must
-// be treated as immutable. The fields routing reconcile mutates are detached.
-func (s *DaemonStateStore) routingSnapshot() (*stateFile, uint64) {
-	if s == nil {
-		return nil, 0
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, s.revision
-	}
-	snapshot := cloneStateFileRootSharingChildren(s.committed)
-	snapshot.BirdInstances = cloneBirdInstances(s.committed.BirdInstances)
-	snapshot.RoutingReconcile = cloneRoutingReconcileState(s.committed.RoutingReconcile)
-	return snapshot, s.revision
-}
-
-// ipsecSnapshot returns a workspace that owns the complete IPsec field family.
-// Network and unrelated controller state remain shared and read-only.
-func (s *DaemonStateStore) ipsecSnapshot() (*stateFile, uint64) {
-	if s == nil {
-		return nil, 0
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, s.revision
-	}
-	snapshot := cloneStateFileRootSharingChildren(s.committed)
-	snapshot.IPsecTransportKey = cloneIPsecTransportKeyState(s.committed.IPsecTransportKey)
-	snapshot.IPsecPortRecord = cloneIPsecPortRecordState(s.committed.IPsecPortRecord)
-	snapshot.LinkInstances = cloneLinkInstances(s.committed.LinkInstances)
-	snapshot.IPsecReconcile = cloneIPsecReconcileState(s.committed.IPsecReconcile)
-	return snapshot, s.revision
-}
-
-// firewallSnapshot returns a workspace that owns the complete firewall field
-// family. Network and unrelated controller state remain shared and read-only.
-func (s *DaemonStateStore) firewallSnapshot() (*stateFile, uint64) {
-	if s == nil {
-		return nil, 0
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil, s.revision
-	}
-	snapshot := cloneStateFileRootSharingChildren(s.committed)
-	snapshot.EndpointACLs = cloneEndpointACLs(s.committed.EndpointACLs)
-	snapshot.FirewallReconcile = cloneFirewallReconcileState(s.committed.FirewallReconcile)
-	return snapshot, s.revision
-}
-
-// ZoneDigests returns a detached digest projection of the committed state.
-// It keeps the state pointer private and avoids cloning the complete Network
-// for callers that only need its gossip digest.
+// ZoneDigests delegates directly to the common owner and never constructs the
+// legacy aggregate state shape.
 func (s *DaemonStateStore) ZoneDigests() []corestate.ZoneDigest {
-	if s == nil {
+	if s == nil || s.common == nil {
 		return nil
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.committed == nil {
-		return nil
-	}
-	return corestate.ZoneDigests(s.committed.Network)
+	digests, _ := s.common.ZoneDigests()
+	return digests
 }
 
 func (s *DaemonStateStore) Meta() daemonStateStoreMeta {

@@ -12,6 +12,12 @@ func verifyChain(path zone.ZonePath) error {
 	if err != nil {
 		return err
 	}
+	if _, ok, err := readViewViaControl(rt, controlRequest{Method: "verify_chain", Zone: path.String()}); err != nil {
+		return err
+	} else if ok {
+		fmt.Printf("verified chain for %s\n", path)
+		return nil
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err

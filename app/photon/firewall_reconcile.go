@@ -31,7 +31,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	snapshot, rev := d.StateStore.firewallSnapshot()
+	snapshot, rev := d.StateStore.Snapshot()
 	if snapshot == nil {
 		return nil
 	}
@@ -210,7 +210,7 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 	if d == nil || d.StateStore == nil || summary == nil {
 		return nil
 	}
-	snapshot, snapshotRev := d.StateStore.firewallSnapshot()
+	snapshot, snapshotRev := d.StateStore.Snapshot()
 	if snapshot == nil || snapshotRev != rev {
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()

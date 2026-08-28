@@ -98,7 +98,8 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 	d := &DaemonService{
 		StateStore:  newTestDaemonStateStore(state),
 		observerHub: hub,
-		// Sync is nil: layer reconciles early-return, only notifications matter.
+		// Sync and Linux runtime are nil: common peer notifications remain,
+		// while platform link/route notifications must not be fabricated.
 	}
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
@@ -116,16 +117,8 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 		default:
 		}
 	}
-	if linkEvent == nil {
-		t.Fatal("link_updated event not received")
-	}
-	payload, ok := linkEvent.Payload.(map[string]any)
-	if !ok {
-		t.Fatalf("link_updated payload type = %T, want map", linkEvent.Payload)
-	}
-	ids, ok := payload["link_ids"].([]string)
-	if !ok || len(ids) != 1 || ids[0] != "link-a" {
-		t.Errorf("link_updated payload = %v, want link_ids [link-a]", payload)
+	if linkEvent != nil {
+		t.Fatalf("link_updated event emitted without Linux runtime: %+v", linkEvent)
 	}
 	if peerEvent == nil {
 		t.Fatal("peer_updated event not received")

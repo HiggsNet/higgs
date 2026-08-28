@@ -16,6 +16,24 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	if err != nil {
 		return err
 	}
+	history := 0
+	if includeHistory {
+		history = 1
+	}
+	if response, ok, err := readViewViaControl(rt, controlRequest{Method: "zone_debug", Zone: path.String(), History: history}); err != nil {
+		return err
+	} else if ok {
+		if jsonOutput {
+			if response.ZoneDetail == nil {
+				return fmt.Errorf("daemon zone detail response is empty")
+			}
+			return inspecttext.WriteJSON(os.Stdout, *response.ZoneDetail)
+		}
+		if response.ZoneDebug == nil {
+			return fmt.Errorf("daemon zone debug response is empty")
+		}
+		return inspecttext.WriteZoneDebug(os.Stdout, *response.ZoneDebug)
+	}
 	state, err := rt.LoadState()
 	if err != nil {
 		return err
