@@ -275,15 +275,11 @@ func (d *DaemonService) hasEnforcingHostFirewall() bool {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return false
 	}
-	preflight := firewall.PreflightProbe(context.Background())
 	for _, instance := range firewallInstancesEnabled(d.Sync.App.Config) {
 		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
-			if d.firewallDriver != nil {
-				return true
-			}
-			backend, err := firewall.ResolveBackendForInstance(firewall.FirewallInstanceSpec{
+			backend, _, err := d.linuxRuntime.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,
-			}, preflight)
+			})
 			if err != nil {
 				continue
 			}

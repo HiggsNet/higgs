@@ -86,10 +86,12 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true,
-		Mode: firewall.ModeManaged, Backend: firewall.BackendNFT,
+		Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
 	}}
 	service := newTestDaemonService(&Runtime{Config: appConfig}, state, &syncConfigFile{}, time.Second)
-	service.firewallDriver = &captureFirewallOwnerDriver{}
+	driver := &captureFirewallOwnerDriver{}
+	driver.Backend = firewall.BackendNFT
+	installTestFirewallDriver(service, driver)
 	beforeRevision := service.StateStore.Meta().Revision
 	notifications := 0
 	service.Hooks.OnStateChanged = func(*stateFile) { notifications++ }

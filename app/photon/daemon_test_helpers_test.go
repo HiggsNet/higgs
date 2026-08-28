@@ -11,6 +11,8 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net"
 	"net/netip"
@@ -52,10 +54,38 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 }
 
 func installTestIPsecDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
+	installTestPlatformDrivers(service, ipsecDriver, xfrmDriver, nil)
+}
+
+func installTestFirewallDriver(service *DaemonService, firewallDriver firewall.FirewallDriver) {
+	dryRun := &ipsec.DryRunDriver{}
+	installTestPlatformDrivers(service, dryRun, dryRun, firewallDriver)
+}
+
+func installTestPlatformDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, firewallDriver firewall.FirewallDriver) {
 	if service == nil {
 		return
 	}
-	if err := service.installLinuxRuntime(newTestLinuxRuntime(ipsecDriver, xfrmDriver)); err != nil {
+	if err := service.installLinuxRuntime(newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+		IPsecDriver:    ipsecDriver,
+		XFRMDriver:     xfrmDriver,
+		FirewallDriver: firewallDriver,
+	})); err != nil {
+		panic(err)
+	}
+}
+
+func installTestRoutingDrivers(service *DaemonService, vethManager bird.VethManager, upstreamRoutes photonlinux.UpstreamRouteManager) {
+	if service == nil {
+		return
+	}
+	dryRun := &ipsec.DryRunDriver{}
+	if err := service.installLinuxRuntime(newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+		IPsecDriver:    dryRun,
+		XFRMDriver:     dryRun,
+		VethManager:    vethManager,
+		UpstreamRoutes: upstreamRoutes,
+	})); err != nil {
 		panic(err)
 	}
 }

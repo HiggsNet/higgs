@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -16,12 +18,16 @@ import (
 // execution context such as a network namespace. They should not cause a
 // matching set of speculative common controller interfaces to be introduced.
 type Runtime struct {
-	ipsecDriver transportipsec.IPsecDriver
-	xfrmDriver  transportipsec.XFRMDriver
-	close       func() error
-	logger      Logger
-	closeOnce   sync.Once
-	closeErr    error
+	ipsecDriver       transportipsec.IPsecDriver
+	xfrmDriver        transportipsec.XFRMDriver
+	firewallDriver    firewall.FirewallDriver
+	networkNamespaces map[string]transportipsec.NetNSSpec
+	vethManager       bird.VethManager
+	upstreamRoutes    UpstreamRouteManager
+	close             func() error
+	logger            Logger
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 type Logger interface {
@@ -30,10 +36,14 @@ type Logger interface {
 }
 
 type RuntimeOptions struct {
-	IPsecDriver transportipsec.IPsecDriver
-	XFRMDriver  transportipsec.XFRMDriver
-	Close       func() error
-	Logger      Logger
+	IPsecDriver       transportipsec.IPsecDriver
+	XFRMDriver        transportipsec.XFRMDriver
+	FirewallDriver    firewall.FirewallDriver
+	NetworkNamespaces map[string]transportipsec.NetNSSpec
+	VethManager       bird.VethManager
+	UpstreamRoutes    UpstreamRouteManager
+	Close             func() error
+	Logger            Logger
 }
 
 func NewRuntime(options RuntimeOptions) (*Runtime, error) {
@@ -43,12 +53,35 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 	if options.XFRMDriver == nil {
 		return nil, errors.New("xfrm driver is required")
 	}
+	vethManager := options.VethManager
+	if vethManager == nil {
+		vethManager = bird.NewExecVethManager()
+	}
+	upstreamRoutes := options.UpstreamRoutes
+	if upstreamRoutes == nil {
+		upstreamRoutes = newExecUpstreamRouteManager()
+	}
 	return &Runtime{
-		ipsecDriver: options.IPsecDriver,
-		xfrmDriver:  options.XFRMDriver,
-		close:       options.Close,
-		logger:      options.Logger,
+		ipsecDriver:       options.IPsecDriver,
+		xfrmDriver:        options.XFRMDriver,
+		firewallDriver:    options.FirewallDriver,
+		networkNamespaces: cloneNetworkNamespaces(options.NetworkNamespaces),
+		vethManager:       vethManager,
+		upstreamRoutes:    upstreamRoutes,
+		close:             options.Close,
+		logger:            options.Logger,
 	}, nil
+}
+
+func cloneNetworkNamespaces(source map[string]transportipsec.NetNSSpec) map[string]transportipsec.NetNSSpec {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]transportipsec.NetNSSpec, len(source))
+	for alias, spec := range source {
+		cloned[alias] = spec
+	}
+	return cloned
 }
 
 func (r *Runtime) ListIPsecSAs(ctx context.Context) ([]transportipsec.SAState, error) {

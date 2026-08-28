@@ -823,6 +823,15 @@ package dependency: app -> host -> gossip -> state -> zone
     bucket 的迁移仍由 `loadAndMigrateLinuxState -> migrateLegacyRuntimeStateTx` 在启动事务内单向执行，属于必须保留的数据库迁移，
     不再把它误删成在线兼容层。最终复核覆盖全部 74 个非测试 Go 文件，production staticcheck 清零；迁移报告已
     区分永久 composition、待下沉 Linux controller/driver 和必须保留的数据库迁移，未发现测试保活或在线双路径 wrapper。
+  - [ ] E2g：继续把 Linux controller 的实际 observe/apply 边界从 daemon 下沉到唯一 `photonlinux.Runtime`，
+    但不预建统一 `PlatformCapabilities`/Controller 接口；公共侧保留 desired policy、调度、事件顺序与 completion commit。
+    - [x] firewall backend preflight/选择、netns alias 解析、nftables/iptables driver 构造及 owned observe/plan/apply
+      已整组迁入 Linux runtime。daemon 只构造 verified-derived desired state 与 owner，消费 apply result 后提交
+      Linux runtime summary；app 私有 driver 接口、重复 backend probe、netns helper 和 test override 均已删除。
+    - [x] routing upstream 的 veth/netns 与 `ip addr/route replace` 执行已迁入 Linux runtime；daemon 只根据
+      authorized route set 构造 veth 与 upstream route spec，不再持有 veth/route manager 或 Linux 命令实现。
+    - [ ] 按真实调用链继续处理 BIRD process/client 与 health probe 的 Linux 执行部分；每一刀
+      都先删除旧 app 入口再进入下一项，避免以迁移名义保留双路径或一次调用 wrapper。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

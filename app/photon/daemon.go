@@ -61,12 +61,9 @@ type DaemonService struct {
 	syncIngressRoutes  map[string]syncIngressRoute
 
 	// Test overrides for BIRD routing reconcile.
-	birdProcessManager   birdProcessManager
-	birdProcessManagers  map[string]birdProcessManager
-	birdClientFactory    func(socketPath string, timeout time.Duration) birdClient
-	vethManager          vethManager
-	upstreamRouteManager upstreamRouteManager
-	firewallDriver       firewallDriver
+	birdProcessManager  birdProcessManager
+	birdProcessManagers map[string]birdProcessManager
+	birdClientFactory   func(socketPath string, timeout time.Duration) birdClient
 }
 
 type DaemonHooks struct {
@@ -1336,7 +1333,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	}
 	syncConfig := syncConfigFromAppConfig(config, latest)
 	nextLogger := newAppLogger(syncConfig)
-	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, nextLogger)
+	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, config.Netns.Names, nextLogger)
 	if err != nil {
 		return err
 	}
@@ -2103,14 +2100,14 @@ func (d *DaemonService) configureLinuxRuntimeFromConfig() error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
 	}
-	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, d.Log)
+	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, d.Sync.App.Config.Netns.Names, d.Log)
 	if err != nil {
 		return err
 	}
 	return d.installLinuxRuntime(runtime)
 }
 
-func newConfiguredLinuxRuntime(config ipsecConfig, logger photonlinux.Logger) (*photonlinux.Runtime, error) {
+func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]ipsec.NetNSSpec, logger photonlinux.Logger) (*photonlinux.Runtime, error) {
 	var logConfig func(event string, fields map[string]any)
 	if logger != nil {
 		logConfig = func(event string, fields map[string]any) {
@@ -2125,17 +2122,19 @@ func newConfiguredLinuxRuntime(config ipsecConfig, logger photonlinux.Logger) (*
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
 		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
-			IPsecDriver: dryRun,
-			XFRMDriver:  dryRun,
-			Logger:      logger,
+			IPsecDriver:       dryRun,
+			XFRMDriver:        dryRun,
+			NetworkNamespaces: networkNamespaces,
+			Logger:            logger,
 		})
 	case ipsecDriverStrongSwan:
 		if len(config.LinkGroups) == 0 {
 			dryRun := &ipsec.DryRunDriver{}
 			return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
-				IPsecDriver: dryRun,
-				XFRMDriver:  dryRun,
-				Logger:      logger,
+				IPsecDriver:       dryRun,
+				XFRMDriver:        dryRun,
+				NetworkNamespaces: networkNamespaces,
+				Logger:            logger,
 			})
 		}
 		client, err := ipsec.NewReconnectingGoviciClient(config.VICISocket)
@@ -2156,9 +2155,10 @@ func newConfiguredLinuxRuntime(config ipsecConfig, logger photonlinux.Logger) (*
 				InitiateAsync:         true,
 				InitiateClientFactory: initiateClientFactory,
 			},
-			XFRMDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
-			Close:      client.Close,
-			Logger:     logger,
+			XFRMDriver:        ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			NetworkNamespaces: networkNamespaces,
+			Close:             client.Close,
+			Logger:            logger,
 		})
 	default:
 		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)

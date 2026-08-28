@@ -23,7 +23,7 @@ func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
 }
 
 func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsUsesDryRunObservation(t *testing.T) {
-	runtime, err := newConfiguredLinuxRuntime(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil)
+	runtime, err := newConfiguredLinuxRuntime(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil, nil)
 	if err != nil {
 		t.Fatalf("newConfiguredLinuxRuntime: %v", err)
 	}

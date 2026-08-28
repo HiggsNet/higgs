@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -39,25 +40,6 @@ type birdProcessManager interface {
 	Stop(ctx context.Context, spec bird.BirdInstanceSpec) error
 	IsRunning(ctx context.Context) bool
 	LastExit() *bird.ProcessExit
-}
-
-// vethManager is the subset of bird.VethManager used by the daemon.
-type vethManager interface {
-	EnsureVethPair(ctx context.Context, spec bird.VethSpec) error
-	DeleteVethPair(ctx context.Context, spec bird.VethSpec) error
-}
-
-type upstreamRouteManager interface {
-	EnsureRoutes(ctx context.Context, spec upstreamRouteSpec) error
-}
-
-type upstreamRouteSpec struct {
-	NetNS          string
-	Interface      string
-	Prefixes       []netip.Prefix
-	SourcePrefixes []netip.Prefix
-	MeshIPv4LL     string
-	MeshIPv6LL     string
 }
 
 // birdClient is the subset of bird.Client used by the daemon.
@@ -312,11 +294,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			PeerIPv4LL:    inst.Upstream.ExternalIPv4LL,
 			PeerIPv6LL:    inst.Upstream.ExternalIPv6LL,
 		}
-		vm := d.vethManager
-		if vm == nil {
-			vm = bird.NewExecVethManager()
-		}
-		if err := vm.EnsureVethPair(ctx, vspec); err != nil {
+		if err := d.linuxRuntime.EnsureRoutingVeth(ctx, vspec); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = fmt.Sprintf("ensure veth: %s", err)
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
@@ -324,10 +302,6 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 	}
 	if inst.Upstream != nil && inst.Upstream.Enabled &&
 		(inst.Upstream.Mode == upstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
-		rm := d.upstreamRouteManager
-		if rm == nil {
-			rm = newExecUpstreamRouteManager()
-		}
 		var routePrefixes []netip.Prefix
 		if inst.Upstream.Mode == upstreamModeStatic {
 			routePrefixes = externalUpstreamRoutePrefixes(ars, state.ManagedZone)
@@ -336,7 +310,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 		if inst.Upstream.InstallSourceAddresses {
 			sourcePrefixes = externalUpstreamSourcePrefixes(ars, state.ManagedZone)
 		}
-		rspec := upstreamRouteSpec{
+		rspec := photonlinux.UpstreamRouteSpec{
 			NetNS:          inst.Upstream.ExternalNetns,
 			Interface:      inst.Upstream.ExternalInterface,
 			Prefixes:       routePrefixes,
@@ -344,7 +318,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			MeshIPv4LL:     inst.Upstream.MeshIPv4LL,
 			MeshIPv6LL:     inst.Upstream.MeshIPv6LL,
 		}
-		if err := rm.EnsureRoutes(ctx, rspec); err != nil {
+		if err := d.linuxRuntime.EnsureUpstreamRoutes(ctx, rspec); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = fmt.Sprintf("ensure upstream routes: %s", err)
 			return fmt.Errorf("ensure upstream routes for netns %q: %w", netnsName, err)

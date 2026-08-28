@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -78,8 +79,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = pm
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
-	service.vethManager = fakeVM
-	service.upstreamRouteManager = fakeRM
+	installTestRoutingDrivers(service, fakeVM, fakeRM)
 
 	ctx := context.Background()
 	if err := service.reconcileRouting(ctx); err != nil {
@@ -344,8 +344,7 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.birdProcessManager = &fakeBirdProcessManager{running: false}
 	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} }
-	service.vethManager = &fakeVethManager{}
-	service.upstreamRouteManager = fakeRM
+	installTestRoutingDrivers(service, &fakeVethManager{}, fakeRM)
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -426,10 +425,10 @@ func (m *fakeVethManager) DeleteVethPair(ctx context.Context, spec bird.VethSpec
 
 type fakeUpstreamRouteManager struct {
 	ensureCalled bool
-	ensureSpec   upstreamRouteSpec
+	ensureSpec   photonlinux.UpstreamRouteSpec
 }
 
-func (m *fakeUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec upstreamRouteSpec) error {
+func (m *fakeUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec photonlinux.UpstreamRouteSpec) error {
 	m.ensureCalled = true
 	m.ensureSpec = spec
 	return nil

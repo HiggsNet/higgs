@@ -1,4 +1,4 @@
-package main
+package photonlinux
 
 import (
 	"context"
@@ -8,8 +8,36 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+type UpstreamRouteSpec struct {
+	NetNS          string
+	Interface      string
+	Prefixes       []netip.Prefix
+	SourcePrefixes []netip.Prefix
+	MeshIPv4LL     string
+	MeshIPv6LL     string
+}
+
+type UpstreamRouteManager interface {
+	EnsureRoutes(context.Context, UpstreamRouteSpec) error
+}
+
+func (r *Runtime) EnsureRoutingVeth(ctx context.Context, spec bird.VethSpec) error {
+	if r == nil || r.vethManager == nil {
+		return fmt.Errorf("linux routing runtime is not configured")
+	}
+	return r.vethManager.EnsureVethPair(ctx, spec)
+}
+
+func (r *Runtime) EnsureUpstreamRoutes(ctx context.Context, spec UpstreamRouteSpec) error {
+	if r == nil || r.upstreamRoutes == nil {
+		return fmt.Errorf("linux routing runtime is not configured")
+	}
+	return r.upstreamRoutes.EnsureRoutes(ctx, spec)
+}
 
 type execUpstreamRouteManager struct {
 	runner func(ctx context.Context, name string, args ...string) *exec.Cmd
@@ -19,12 +47,12 @@ func newExecUpstreamRouteManager() *execUpstreamRouteManager {
 	return &execUpstreamRouteManager{runner: exec.CommandContext}
 }
 
-func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec upstreamRouteSpec) error {
+func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec UpstreamRouteSpec) error {
 	if spec.Interface == "" {
 		return fmt.Errorf("upstream route interface is required")
 	}
 	sourcePrefixes := append([]netip.Prefix(nil), spec.SourcePrefixes...)
-	sort.Slice(sourcePrefixes, func(i, j int) bool { return netipPrefixLess(sourcePrefixes[i], sourcePrefixes[j]) })
+	sort.Slice(sourcePrefixes, func(i, j int) bool { return prefixLess(sourcePrefixes[i], sourcePrefixes[j]) })
 	for _, source := range sourcePrefixes {
 		if err := m.replaceAddress(ctx, spec.NetNS, spec.Interface, source); err != nil {
 			return err
@@ -36,7 +64,7 @@ func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec upstre
 	}
 	sourceByFamily := upstreamSourceByFamily(sourcePrefixes)
 	prefixes := append([]netip.Prefix(nil), spec.Prefixes...)
-	sort.Slice(prefixes, func(i, j int) bool { return netipPrefixLess(prefixes[i], prefixes[j]) })
+	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
 	for _, prefix := range prefixes {
 		is4 := prefix.Addr().Is4()
 		if err := m.replaceRoute(ctx, spec.NetNS, spec.Interface, prefix, sourceByFamily[is4], nextHopByFamily[is4]); err != nil {
@@ -51,8 +79,7 @@ func (m *execUpstreamRouteManager) replaceAddress(ctx context.Context, netnsName
 	if prefix.Addr().Is4() {
 		family = "-4"
 	}
-	args := []string{family, "addr", "replace", prefix.String(), "dev", iface}
-	return m.runIP(ctx, netnsName, args)
+	return m.runIP(ctx, netnsName, []string{family, "addr", "replace", prefix.String(), "dev", iface})
 }
 
 func (m *execUpstreamRouteManager) replaceRoute(ctx context.Context, netnsName, iface string, prefix netip.Prefix, source netip.Addr, nextHop netip.Addr) error {
@@ -71,7 +98,7 @@ func (m *execUpstreamRouteManager) replaceRoute(ctx context.Context, netnsName, 
 }
 
 func (m *execUpstreamRouteManager) runIP(ctx context.Context, netnsName string, args []string) error {
-	if netnsName != "" && netnsName != ipsec.NetNSHost {
+	if netnsName != "" && netnsName != transportipsec.NetNSHost {
 		args = append([]string{"netns", "exec", netnsName, "ip"}, args...)
 	}
 	cmd := m.runner(ctx, "ip", args...)
@@ -110,4 +137,14 @@ func upstreamNextHopByFamily(ipv4LL, ipv6LL string) (map[bool]netip.Addr, error)
 		out[false] = prefix.Addr()
 	}
 	return out, nil
+}
+
+func prefixLess(left, right netip.Prefix) bool {
+	if left.Addr().Less(right.Addr()) {
+		return true
+	}
+	if right.Addr().Less(left.Addr()) {
+		return false
+	}
+	return left.Bits() < right.Bits()
 }

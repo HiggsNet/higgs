@@ -775,7 +775,7 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	}
 	driver := &captureFirewallOwnerDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.firewallDriver = driver
+	installTestFirewallDriver(service, driver)
 	if err := service.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
 	}
@@ -815,7 +815,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		started: make(chan struct{}),
 		unblock: make(chan struct{}),
 	}
-	service.firewallDriver = driver
+	installTestFirewallDriver(service, driver)
 
 	done := make(chan error, 1)
 	go func() {
@@ -907,7 +907,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		}
 		driver.onApply = nil
 	}
-	service.firewallDriver = driver
+	installTestFirewallDriver(service, driver)
 
 	if err := service.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
@@ -921,28 +921,6 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	}
 	if snapshot.FirewallReconcile != nil {
 		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", snapshot.FirewallReconcile)
-	}
-}
-
-func TestFirewallDriverNetNSResolvesDefaultAlias(t *testing.T) {
-	appConfig := defaultAppConfig()
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"default":      {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-		"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-	}}
-	got, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "photon", NetNS: "default"}, appConfig)
-	if err != nil {
-		t.Fatalf("firewallDriverNetNS: %v", err)
-	}
-	if got != "photontesth2" {
-		t.Fatalf("driver netns = %q, want photontesth2", got)
-	}
-	host, err := firewallDriverNetNS(FirewallInstanceConfig{ID: "host-ipsec", IsHost: true}, appConfig)
-	if err != nil {
-		t.Fatalf("host firewallDriverNetNS: %v", err)
-	}
-	if host != "" {
-		t.Fatalf("host driver netns = %q, want empty host namespace", host)
 	}
 }
 
