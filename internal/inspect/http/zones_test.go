@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func TestZonesFromNetworkSortsAndSummarizesZones(t *testing.T) {
+func TestZonesResponsePreservesCanonicalZoneSummarySchema(t *testing.T) {
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -29,7 +31,7 @@ func TestZonesFromNetworkSortsAndSummarizesZones(t *testing.T) {
 	ns.Zones["node-b.catofes."].Delegations["child.node-b.catofes."] = &zone.Delegation{}
 	ns.Zones["node-b.catofes."].Revocations["old.node-b.catofes."] = &zone.DelegationRevocation{}
 
-	got := ZonesFromNetwork(ns, 100)
+	got := inspect.BuildZonesView(ns, time.Unix(100, 0))
 	var paths []string
 	for _, item := range got.Zones {
 		paths = append(paths, item.Path)

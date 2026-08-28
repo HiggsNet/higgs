@@ -118,14 +118,11 @@ func debugAdmission() error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := admissionStatusViaControl(rt); err != nil {
+	if diagnosis, ok, err := admissionStatusViaControl(rt); err != nil {
 		return err
 	} else if ok {
-		fmt.Printf("daemon: online peer_id=%s\n", response.PeerID)
-		if response.Admission != nil {
-			return inspecttext.WriteAdmissionDiagnosis(os.Stdout, *response.Admission)
-		}
-		return fmt.Errorf("daemon admission_status response is empty")
+		fmt.Fprintln(os.Stdout, "daemon: online")
+		return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 	}
 	common, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {

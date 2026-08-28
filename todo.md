@@ -890,14 +890,17 @@ package dependency: app -> host -> gossip -> state -> zone
         canonical inspect DTO；health/links/firewall/BIRD/ping/peer lifecycle 均要求在线 daemon，CLI 不再从 bbolt 冒充 live。
         gossip peer 离线 fallback 明确标为 checkpoint；status 分别报告 gossip/platform source，离线不展示 platform runtime。
         ping target 复用 `HealthProbeTargetView`，删除 app 私有 JSON DTO；BIRD raw query 和 rotate SA live query 均由 daemon 执行。
-    - [ ] E2k3：将 routes 的 canonical DTO 从 `internal/inspect/http` 移到 `internal/inspect`，CLI 不再依赖 HTTP 包；Observer HTTP
+    - [x] E2k3：将 routes 的 canonical DTO 从 `internal/inspect/http` 移到 `internal/inspect`，CLI 不再依赖 HTTP 包；Observer HTTP
       仅保留稳定 JSON envelope。同步盘点 zones/peers/links/status 的 HTTP 专用重复结构，只保留确有 API 契约差异的投影。
       - [x] routes 类型/builder 已整体迁到 `internal/inspect`；CLI/control 直接使用 canonical DTO，HTTP 包只留保持既有 JSON
-        schema 的类型别名。zones/peers/links/status 的 REST 契约差异仍待逐项确认。
+        schema 的类型别名。zones/peers/status 的排序、来源和聚合投影也已下沉到 `internal/inspect`，HTTP 包只保留稳定
+        schema alias；links 因 REST 契约明确同时暴露扁平兼容字段与 `raw` canonical view，保留薄的 HTTP adapter，不重复规划状态。
     - [ ] E2k4：逐项拆除巨型 `controlRequest/controlResponse` 的只读分支，删除单次 wrapper、重复排序/过滤、旧 builder 和失去调用者的 DTO；
       mutation/event 回包另行按命令类型收敛，不与只读迁移混做一次大提交。
       - 已删除 `links_status`、`firewall_status`、`bird_status`、`peers_status`、`routes_dump`、`revoke_status` 及其
         resource-specific response 字段/helper；BIRD dump 和 revocation impact 也已直接使用 canonical envelope。
+      - `record_get`、`admission_status` 与 `endpoint_acl_list` 已改为直接传输 typed view，删除巨型
+        `controlResponse` 中的 Record/Admission/EndpointACLs 字段以及只为这些字段附加 metadata 的重复回包逻辑。
     - [ ] 每个子阶段独立提交并运行 `make check`；增加 online daemon 持有 Bolt 写锁时 CLI 查询仍成功、offline fallback 复用相同 DTO、
       control/CLI/HTTP 对同一 owner fixture 语义一致的回归测试。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport

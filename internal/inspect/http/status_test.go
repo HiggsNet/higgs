@@ -3,6 +3,8 @@ package http
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func TestStatusResponsePreservesObserverSchema(t *testing.T) {
@@ -38,8 +40,8 @@ func TestStatusResponsePreservesObserverSchema(t *testing.T) {
 	}
 }
 
-func TestBuildStatusResponseComputesLastReconcile(t *testing.T) {
-	got := BuildStatusResponse(StatusInput{
+func TestStatusResponseUsesCanonicalLastReconcileProjection(t *testing.T) {
+	got := inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             "node-a.catofes.",
 		ManagedZone:        "node-a.catofes.",
 		ListenAddr:         "127.0.0.1:33434",

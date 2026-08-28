@@ -100,6 +100,14 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !statusView.OK || !statusView.View.DaemonOnline {
 		t.Fatalf("status_view response = %#v", statusView)
 	}
+	admission := controlViewRequestViaPipe[inspect.AdmissionDiagnosis](t, service, controlRequest{Method: "admission_status"})
+	if !admission.OK {
+		t.Fatalf("admission_status response = %#v", admission)
+	}
+	endpointACLs := controlViewRequestViaPipe[[]endpointACL](t, service, controlRequest{Method: "endpoint_acl_list"})
+	if !endpointACLs.OK {
+		t.Fatalf("endpoint_acl_list response = %#v", endpointACLs)
+	}
 	peerLifecycle := controlViewRequestViaPipe[inspect.PeerLifecycleDebugView](t, service, controlRequest{Method: "peer_lifecycle_view"})
 	if !peerLifecycle.OK {
 		t.Fatalf("peer_lifecycle_view response = %#v", peerLifecycle)
@@ -416,7 +424,7 @@ func TestDaemonControlRecordGet(t *testing.T) {
 	}
 	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
-	response := controlRequestViaPipe(t, service, controlRequest{
+	response := controlViewRequestViaPipe[*inspect.RecordDetailView](t, service, controlRequest{
 		Method:  "record_get",
 		Zone:    "node-b.catofes.",
 		Key:     "site/name",
@@ -425,10 +433,10 @@ func TestDaemonControlRecordGet(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("record_get response = %#v", response)
 	}
-	if response.Record.Key != "site/name" || response.Record.Value != `{"name":"node-b-2"}` || response.Record.RecordHash == "" {
-		t.Fatalf("record_get record = %#v", response.Record)
+	if response.View == nil || response.View.Key != "site/name" || response.View.Value != `{"name":"node-b-2"}` || response.View.RecordHash == "" {
+		t.Fatalf("record_get record = %#v", response.View)
 	}
-	history := response.Record.RecordHistory
+	history := response.View.RecordHistory
 	if len(history) != 1 {
 		t.Fatalf("record_get history len = %d, want 1", len(history))
 	}
@@ -436,12 +444,12 @@ func TestDaemonControlRecordGet(t *testing.T) {
 		t.Fatalf("record_get history = %#v", history)
 	}
 
-	response = controlRequestViaPipe(t, service, controlRequest{
+	legacyError := controlRequestViaPipe(t, service, controlRequest{
 		Method: "record_get",
 		Zone:   "node-b.catofes.",
 		Key:    "missing",
 	})
-	if response.OK || response.Error == "" {
-		t.Fatalf("missing record_get response = %#v, want error", response)
+	if legacyError.OK || legacyError.Error == "" {
+		t.Fatalf("missing record_get response = %#v, want error", legacyError)
 	}
 }

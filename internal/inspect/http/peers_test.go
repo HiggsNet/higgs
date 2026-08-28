@@ -14,7 +14,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 		PeerID:         "node-b.catofes.",
 		Source:         "bootstrap",
 		ConfiguredAddr: "192.0.2.10:33434",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{
+		PeerRuntimeView: inspect.BuildPeerRuntimeView(photonstate.PeerRuntimeState{
 			LastSyncUnix:     900,
 			LastAttemptUnix:  850,
 			BackoffUntilUnix: 950,
@@ -55,7 +55,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
 	got := PeersResponse{Peers: []PeerJSON{{
 		PeerID:          "node-b.catofes.",
-		PeerRuntimeJSON: PeerRuntimeJSONFromState(photonstate.PeerRuntimeState{}, observability.PeerDiagnostics{}),
+		PeerRuntimeView: inspect.BuildPeerRuntimeView(photonstate.PeerRuntimeState{}, observability.PeerDiagnostics{}),
 	}}}
 	data, err := json.Marshal(got)
 	if err != nil {

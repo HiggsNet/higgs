@@ -22,6 +22,65 @@ type ZoneDetailInput struct {
 	IncludeHistory bool
 }
 
+// ZonesView is the canonical summary projection used by list-oriented
+// consumers. ZoneDetail remains the richer single-zone representation.
+type ZonesView struct {
+	Zones      []ZoneSummaryView `json:"zones"`
+	GlobalRoot string            `json:"global_root"`
+}
+
+type ZoneSummaryView struct {
+	Path        string `json:"path"`
+	Records     int    `json:"records"`
+	Delegations int    `json:"delegations"`
+	Revocations int    `json:"revocations"`
+	Revoked     bool   `json:"revoked"`
+	RootHashHex string `json:"root_hash"`
+}
+
+func BuildZonesView(ns *zone.NetworkState, now time.Time) ZonesView {
+	if ns == nil {
+		return ZonesView{Zones: []ZoneSummaryView{}}
+	}
+	paths := make([]zone.ZonePath, 0, len(ns.Zones))
+	for path := range ns.Zones {
+		paths = append(paths, path)
+	}
+	SortZonePaths(paths)
+	zones := make([]ZoneSummaryView, 0, len(paths))
+	for _, path := range paths {
+		zs := ns.Zones[path]
+		if zs == nil {
+			continue
+		}
+		rootHash := ""
+		if zs.Authority != nil {
+			rootHash = hex.EncodeToString(photoncrypto.AuthorityHash(zs.Authority))
+		}
+		zones = append(zones, ZoneSummaryView{
+			Path:        string(path),
+			Records:     len(zs.Records),
+			Delegations: len(zs.Delegations),
+			Revocations: len(zs.Revocations),
+			Revoked:     ns.IsZoneRevoked(path, now),
+			RootHashHex: rootHash,
+		})
+	}
+	globalRoot := ""
+	if root := zonesGlobalRoot(corestate.ZoneDigests(ns)); root != nil {
+		globalRoot = hex.EncodeToString(root)
+	}
+	return ZonesView{Zones: zones, GlobalRoot: globalRoot}
+}
+
+func zonesGlobalRoot(digests []corestate.ZoneDigest) []byte {
+	parts := make([][]byte, 0, len(digests)*2)
+	for _, digest := range digests {
+		parts = append(parts, []byte(digest.Zone), digest.RootHash)
+	}
+	return photoncrypto.Hash(parts...)
+}
+
 type ZoneDebugInput struct {
 	Network *zone.NetworkState
 	Path    zone.ZonePath

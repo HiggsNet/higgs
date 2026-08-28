@@ -50,34 +50,31 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK                bool                        `json:"ok"`
-	Error             string                      `json:"error,omitempty"`
-	StateRevision     uint64                      `json:"state_revision"`
-	SnapshotTimeUnix  int64                       `json:"snapshot_time_unix,omitempty"`
-	Dirty             daemonDirtyFlags            `json:"dirty,omitempty"`
-	ReconcileProgress daemonReconcileStatus       `json:"reconcile_in_progress,omitempty"`
-	PeerID            string                      `json:"peer_id,omitempty"`
-	LinkInstances     int                         `json:"link_instances,omitempty"`
-	CleanedLinks      int                         `json:"cleaned_links,omitempty"`
-	CleanedOrphans    int                         `json:"cleaned_orphans,omitempty"`
-	DesiredLinks      int                         `json:"desired_links,omitempty"`
-	LastLinkError     string                      `json:"last_link_error,omitempty"`
-	LastRoutingError  string                      `json:"last_routing_error,omitempty"`
-	Version           uint64                      `json:"version,omitempty"`
-	Message           string                      `json:"message,omitempty"`
-	Zone              zone.ZonePath               `json:"zone,omitempty"`
-	RootPublicKey     ed25519.PublicKey           `json:"root_public_key,omitempty"`
-	JoinBundle        *joinBundle                 `json:"join_bundle,omitempty"`
-	Admission         *inspect.AdmissionDiagnosis `json:"admission,omitempty"`
-	Record            *inspect.RecordDetailView   `json:"record,omitempty"`
-	PortRotate        *manualPortRotateResult     `json:"port_rotate,omitempty"`
-	RecordsApplied    int                         `json:"records_applied,omitempty"`
-	Delegations       int                         `json:"delegations,omitempty"`
-	Revocations       int                         `json:"revocations,omitempty"`
-	NetworkChanged    bool                        `json:"network_changed,omitempty"`
-	PurgePlan         *purgePlan                  `json:"purge_plan,omitempty"`
-	EndpointACLs      []endpointACL               `json:"endpoint_acls,omitempty"`
-	StateGC           *stateGCPlan                `json:"state_gc,omitempty"`
+	OK                bool                    `json:"ok"`
+	Error             string                  `json:"error,omitempty"`
+	StateRevision     uint64                  `json:"state_revision"`
+	SnapshotTimeUnix  int64                   `json:"snapshot_time_unix,omitempty"`
+	Dirty             daemonDirtyFlags        `json:"dirty,omitempty"`
+	ReconcileProgress daemonReconcileStatus   `json:"reconcile_in_progress,omitempty"`
+	PeerID            string                  `json:"peer_id,omitempty"`
+	LinkInstances     int                     `json:"link_instances,omitempty"`
+	CleanedLinks      int                     `json:"cleaned_links,omitempty"`
+	CleanedOrphans    int                     `json:"cleaned_orphans,omitempty"`
+	DesiredLinks      int                     `json:"desired_links,omitempty"`
+	LastLinkError     string                  `json:"last_link_error,omitempty"`
+	LastRoutingError  string                  `json:"last_routing_error,omitempty"`
+	Version           uint64                  `json:"version,omitempty"`
+	Message           string                  `json:"message,omitempty"`
+	Zone              zone.ZonePath           `json:"zone,omitempty"`
+	RootPublicKey     ed25519.PublicKey       `json:"root_public_key,omitempty"`
+	JoinBundle        *joinBundle             `json:"join_bundle,omitempty"`
+	PortRotate        *manualPortRotateResult `json:"port_rotate,omitempty"`
+	RecordsApplied    int                     `json:"records_applied,omitempty"`
+	Delegations       int                     `json:"delegations,omitempty"`
+	Revocations       int                     `json:"revocations,omitempty"`
+	NetworkChanged    bool                    `json:"network_changed,omitempty"`
+	PurgePlan         *purgePlan              `json:"purge_plan,omitempty"`
+	StateGC           *stateGCPlan            `json:"state_gc,omitempty"`
 }
 
 // controlViewResponse is the transport envelope for read-only queries. View
@@ -253,16 +250,8 @@ func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "admission_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
+func admissionStatusViaControl(rt *Runtime) (inspect.AdmissionDiagnosis, bool, error) {
+	return readCanonicalViewViaControl[inspect.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
 }
 
 func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) {
@@ -392,23 +381,19 @@ func sendMutationControlRequest(rt *Runtime, request controlRequest) (*controlRe
 }
 
 func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
-	socketPath := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(socketPath, controlRequest{
+	record, ok, err := readCanonicalViewViaControl[*inspect.RecordDetailView](rt, controlRequest{
 		Method:  "record_get",
 		Zone:    path.String(),
 		Key:     key,
 		History: history,
 	})
-	if err != nil {
-		if isControlSocketUnavailable(err) {
-			return nil, false, nil
-		}
-		return nil, true, err
+	if err != nil || !ok {
+		return nil, ok, err
 	}
-	if response.Record == nil {
+	if record == nil {
 		return nil, true, errors.New("daemon record_get response missing record")
 	}
-	return response.Record, true, nil
+	return record, true, nil
 }
 
 func rotateIPsecPortViaControl(rt *Runtime) (*manualPortRotateResult, bool, error) {
@@ -546,11 +531,7 @@ func endpointACLRemoveViaControl(rt *Runtime, name string) (bool, error) {
 }
 
 func endpointACLListViaControl(rt *Runtime) ([]endpointACL, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_list"})
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	return response.EndpointACLs, true, nil
+	return readCanonicalViewViaControl[[]endpointACL](rt, controlRequest{Method: "endpoint_acl_list"})
 }
 
 func isControlSocketUnavailable(err error) bool {

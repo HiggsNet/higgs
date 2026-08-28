@@ -179,7 +179,7 @@ func (s *observerServer) handler() http.Handler {
 func (p *observerProvider) Status() (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
-		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
+		return inspect.DaemonStatusView{DaemonOnline: false}, nil
 	}
 	store := d.StateStore
 	store.writeMu.Lock()
@@ -207,7 +207,7 @@ func (p *observerProvider) Status() (any, error) {
 	store.mu.RUnlock()
 	store.writeMu.Unlock()
 	if view.State == nil {
-		return inspecthttp.StatusResponse{DaemonOnline: false}, nil
+		return inspect.DaemonStatusView{DaemonOnline: false}, nil
 	}
 	knownZones := 0
 	if view.State.Network != nil {
@@ -234,7 +234,7 @@ func (p *observerProvider) Status() (any, error) {
 		listenAddr = d.Sync.Config.ListenAddr
 	}
 	managedZone = string(view.State.ManagedZone)
-	return inspecthttp.BuildStatusResponse(inspecthttp.StatusInput{
+	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,
 		ManagedZone:        managedZone,
 		ListenAddr:         listenAddr,
@@ -258,13 +258,13 @@ func (p *observerProvider) Status() (any, error) {
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
-		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
+		return inspect.ZonesView{Zones: []inspect.ZoneSummaryView{}}, nil
 	}
 	now := d.Sync.now()
 	zp := zone.ZonePath(zoneFilter)
 	view := d.StateStore.common.ReadView()
 	if view.State == nil || view.State.Network == nil {
-		return inspecthttp.ZonesResponse{Zones: []inspecthttp.ZoneSummaryJSON{}}, nil
+		return inspect.ZonesView{Zones: []inspect.ZoneSummaryView{}}, nil
 	}
 	if zp != "" {
 		zs := view.State.Network.Zones[zp]
@@ -275,17 +275,17 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 			Path: zp, State: zs, Network: view.State.Network, Now: now, IncludeHistory: true,
 		}), nil
 	}
-	return inspecthttp.ZonesFromNetwork(view.State.Network, now.Unix()), nil
+	return inspect.BuildZonesView(view.State.Network, now), nil
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
-		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
+		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
 	view := d.StateStore.common.ReadView()
 	if view.State == nil {
-		return inspecthttp.PeersResponse{Peers: []inspecthttp.PeerJSON{}}, nil
+		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
 	now := d.Sync.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
@@ -295,11 +295,11 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
 	}
 	ids := inspect.BuildPeerIDs(peerSet)
-	items := make(map[string]inspecthttp.PeerJSON, len(ids))
+	items := make(map[string]inspect.PeerView, len(ids))
 	for _, peerID := range ids {
 		peer := peers[peerID]
 		observed := observabilitySnapshots[peerID]
-		items[peerID] = inspecthttp.PeerFromInputs(
+		items[peerID] = inspect.BuildPeerView(
 			peerID,
 			bootstrapAddrForPeer(d.Sync.Config, peerID),
 			inspectPeerEndpoints(peerID, peer, observed, d.Sync.Config, view.State.Network, now),
@@ -314,11 +314,11 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 		}
 		return peer, nil
 	}
-	response := make([]inspecthttp.PeerJSON, 0, len(ids))
+	response := make([]inspect.PeerView, 0, len(ids))
 	for _, peerID := range ids {
 		response = append(response, items[peerID])
 	}
-	return inspecthttp.PeersResponse{Peers: response}, nil
+	return inspect.PeersView{Peers: response}, nil
 }
 
 func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {

@@ -691,11 +691,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		meta := d.StateStore.metadata()
-		meta.Revision = uint64(view.Revision)
-		response := controlResponse{OK: true, Record: record}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, record)
 	case "records_view":
 		view := d.StateStore.common.ReadView()
 		var network *zone.NetworkState
@@ -847,9 +843,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		d.StateStore.mu.RUnlock()
 		sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
-		response := controlResponse{OK: true, EndpointACLs: acls, Message: "endpoint ACL list"}
-		applyStateStoreMeta(&response, d.StateStore.metadata())
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, acls)
 	case "delegate_issue":
 		if err := validateControlDelegateIssue(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -1041,7 +1035,6 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		view := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
 		admission := cloneAdmissionState(d.StateStore.runtime.Admission)
-		meta := d.StateStore.metaLocked()
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
 		if view.State == nil {
@@ -1049,14 +1042,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		diagnosis := diagnoseAutoJoinAdmission(view.State, admission, d.Sync.now())
-		response := controlResponse{
-			OK:        true,
-			PeerID:    d.Sync.Config.PeerID,
-			Admission: &diagnosis,
-			Message:   "admission status",
-		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		d.StateStore.mu.RLock()
 		fwSnapshot := cloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)

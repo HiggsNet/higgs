@@ -272,7 +272,10 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    read model 随后开始收敛为 typed canonical view envelope：zone/service/route/IPAM/endpoint、records/sync/peer/zone debug、
    status/peer lifecycle/gossip peers/health 均由 daemon 或离线 owner 调用同一查询函数生成最终 inspect DTO，CLI 只负责呈现；
    links/firewall/Babel/health/ping 也已改为 daemon 直接返回 canonical inspect DTO，旧 resource response 和 links live-replan 换壳已删除；
-   routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias。zones/peers/links/status 的 HTTP 契约盘点仍待完成。
+   `record_get`、admission diagnosis 和 Endpoint ACL list 也已退出巨型 `controlResponse`，直接通过 typed view envelope 传输；
+   routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
+   聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
+   不在 HTTP 层重新推导 desired/runtime 状态。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。聚合 `Snapshot()` 目前只剩旧 schema 首次迁移引导与测试 fixture；
    下一步是改写该 migration bootstrap 并迁移测试 fixture，随后删除组合 view 与旧 loader。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。
