@@ -20,6 +20,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -42,7 +43,7 @@ type DaemonService struct {
 	ipsecDNSResolver       ipsec.DNSResolver
 	health                 *health.Manager
 	healthRuntimeManaged   bool
-	healthUpdates          <-chan struct{}
+	healthAsyncRunning     bool
 	healthSpool            *healthspool.Store
 	observerHub            *observer.Hub
 	Log                    *appLogger
@@ -76,13 +77,16 @@ const (
 	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
 	defaultPeerObservabilityTTL                      = 24 * time.Hour
 	defaultPeerObservabilityLimit                    = 2048
-	daemonTimerNamespace                             = "daemon"
+	daemonRuntimeNamespace                           = "daemon"
 	daemonTimerOwner                                 = "periodic"
 	daemonTimerSync                                  = "sync"
 	daemonTimerEndpoint                              = "endpoint_publish"
 	daemonTimerIPsec                                 = "ipsec_reconcile"
 	daemonTimerRouting                               = "routing_reconcile"
 	daemonTimerFirewall                              = "firewall_reconcile"
+	daemonTimerHealth                                = "health_probe"
+	daemonCompletionHealthOwner                      = "health"
+	daemonCompletionHealth                           = "probe_completed"
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
 	daemonEventRouteMutation         daemonEventType = "route_mutate"
@@ -294,8 +298,10 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(ctx)
 	defer stopIPsecEvents()
 	if d.health != nil {
-		d.healthUpdates = d.startHealthProbeLoop(ctx)
-		defer func() { d.healthUpdates = nil }()
+		updates := d.health.StartAsync(ctx)
+		d.healthAsyncRunning = true
+		defer func() { d.healthAsyncRunning = false }()
+		go d.forwardHealthCompletions(ctx, updates)
 	}
 	startFields := map[string]any{
 		"peer_id":  d.Sync.Config.PeerID,
@@ -350,6 +356,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(startupNow, firewallReconcileInterval)); err != nil {
 		return err
 	}
+	if d.health != nil {
+		if err := d.scheduleDaemonTimer(daemonTimerHealth, startupNow); err != nil {
+			return err
+		}
+	}
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -359,9 +370,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := d.processEvents(ctx)
 		if shutdown {
 			return nil
-		}
-		if d.drainHealthUpdates() {
-			d.handleHealthUpdate(d.Sync.now())
 		}
 		if syncNow {
 			forceSync = true
@@ -420,7 +428,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				}
 			}
 		case hostEvent := <-d.hostRuntime.Events():
-			if fired, ok := hostEvent.(corehost.TimerFired); ok && fired.ID.Namespace == daemonTimerNamespace {
+			if completion, ok := hostEvent.(corehost.Completion); ok && completion.Namespace == daemonRuntimeNamespace {
+				if completion.Owner == daemonCompletionHealthOwner && completion.Key == daemonCompletionHealth {
+					d.handleHealthUpdate(d.Sync.now())
+				}
+				continue
+			}
+			if fired, ok := hostEvent.(corehost.TimerFired); ok && fired.ID.Namespace == daemonRuntimeNamespace {
 				if !d.hostRuntime.AcceptTimer(fired) {
 					continue
 				}
@@ -478,6 +492,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 							return err
 						}
 					}
+				case daemonTimerHealth:
+					d.health.TickAsync(ctx, now)
+					if err := d.scheduleDaemonTimer(daemonTimerHealth, now.Add(time.Second)); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -497,8 +516,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			if event, ok := d.hostRuntime.GossipEventFor(hostEvent); ok {
 				d.handleSyncEvent(ctx, event)
 			}
-		case <-d.healthUpdates:
-			d.handleHealthUpdate(d.Sync.now())
 		}
 	}
 }
@@ -752,7 +769,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		targets := healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone))
+		targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(common.State.ManagedZone))
 		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
 	case "sync_view":
 		common, _ := d.StateStore.readCommonAndRuntime()
@@ -2190,7 +2207,7 @@ func (d *DaemonService) scheduleDaemonTimer(key string, deadline time.Time) erro
 	if d == nil || d.hostRuntime == nil {
 		return corehost.ErrRuntimeStopped
 	}
-	id := corehost.TimerID{Namespace: daemonTimerNamespace, Owner: daemonTimerOwner, Key: key}
+	id := corehost.TimerID{Namespace: daemonRuntimeNamespace, Owner: daemonTimerOwner, Key: key}
 	if deadline.IsZero() {
 		d.hostRuntime.CancelTimer(id)
 		return nil

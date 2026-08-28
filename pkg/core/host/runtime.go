@@ -21,8 +21,9 @@ const (
 )
 
 var (
-	ErrEventQueueFull = errors.New("host event queue full")
-	ErrRuntimeStopped = errors.New("host runtime stopped")
+	ErrEventQueueFull    = errors.New("host event queue full")
+	ErrRuntimeStopped    = errors.New("host runtime stopped")
+	ErrInvalidCompletion = errors.New("invalid host completion")
 )
 
 // Event is delivered to the single-writer HostRuntime event loop.
@@ -45,6 +46,17 @@ type GossipPacketReceived struct {
 }
 
 func (GossipPacketReceived) isHostEvent() {}
+
+// Completion wakes the single-writer loop after asynchronous runtime work.
+// Namespace/owner/key identify the producer without coupling Runtime to a
+// specific controller or protocol result type.
+type Completion struct {
+	Namespace string
+	Owner     string
+	Key       string
+}
+
+func (Completion) isHostEvent() {}
 
 // Runtime owns the common gossip engine, bounded event queue and scheduler.
 // Platform composition roots inject I/O and controllers around this object;
@@ -115,6 +127,33 @@ func (runtime *Runtime) PostGossip(event gossip.SyncEvent) error {
 		return nil
 	default:
 		return ErrEventQueueFull
+	}
+}
+
+// PostCompletion queues an asynchronous completion at the common runtime
+// boundary. It waits for bounded-queue capacity or context cancellation so a
+// completed operation is not silently lost under temporary backpressure.
+func (runtime *Runtime) PostCompletion(ctx context.Context, completion Completion) error {
+	if runtime == nil {
+		return ErrRuntimeStopped
+	}
+	if completion.Namespace == "" || completion.Owner == "" || completion.Key == "" {
+		return ErrInvalidCompletion
+	}
+	runtime.mu.RLock()
+	stopped := runtime.stopped
+	runtime.mu.RUnlock()
+	if stopped {
+		return ErrRuntimeStopped
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case runtime.events <- completion:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

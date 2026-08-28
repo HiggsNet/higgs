@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -335,7 +336,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 		healthprobe.NewRawICMProber(nil),
 	)
 	manager.UpsertTarget(health.ProbeTarget{
-		ProbeID:         healthProbeID("link-1", "staged"),
+		ProbeID:         linkstate.ProbeID("link-1", "staged"),
 		InstanceID:      "link-1",
 		GroupID:         "main",
 		Overlay:         "main",

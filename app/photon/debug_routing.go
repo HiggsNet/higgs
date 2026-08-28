@@ -11,6 +11,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/urfave/cli/v3"
 )
@@ -121,7 +122,7 @@ func birdInterfaceContexts(instances map[string]linkInstanceState, reconcile *ip
 		contexts[output.InterfaceName] = inspect.BirdInterfaceContext{
 			Name:        output.InterfaceName,
 			Zone:        string(output.PeerZone),
-			Family:      underlayFamilyFromPathKey(output.PathKey),
+			Family:      linkstate.UnderlayFamily(output.PathKey),
 			LinkID:      output.ID,
 			RuntimeRole: output.RuntimeRole,
 		}

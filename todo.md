@@ -837,9 +837,14 @@ package dependency: app -> host -> gossip -> state -> zone
       `pkg/health` 迁入 `internal/photonlinux/healthprobe`，由唯一 Linux runtime 初始化、注入并关闭；daemon
       只把平台 prober 交给公共 manager。旧公共构造入口和未实际接线、语义不可靠的 UDP write prober 已删除，
       实现级测试随 owner 迁移。target 组合、manager policy 和 completion 仍非平台执行，不能借 E2g 一并下沉。
-  - [ ] E2h：收口 health 剩余 runtime 边界：将一秒 probe tick/completion 唤醒接入公共 HostRuntime scheduler/queue，
+  - [x] E2h：收口 health 剩余 runtime 边界：将一秒 probe tick/completion 唤醒接入公共 HostRuntime scheduler/queue，
     Linux link/IPsec runtime 到 ProbeTarget 的组合随 link output DTO 下沉；spool、observer/control 展示分别归各自 owner。
     不把 `health.Manager` 状态机塞入 Linux runtime，也不为过渡新增 daemon wrapper。
+    - [x] daemon 私有 `time.Ticker` 与 `healthUpdates` select 已删除；一秒 probe tick 使用 HostRuntime namespaced timer，
+      async worker completion 通过同一个 bounded HostRuntime queue 回到 single-writer loop。`health.Manager` 仍独占
+      target/window/hysteresis 状态，Linux runtime 仍只注入实际 prober。
+    - [x] `LinkOutput -> ProbeTarget` 的 staged/old role、probe ID、underlay family 与有效 tunnel address 规则已迁入
+      `internal/photonlinux/linkstate`；daemon 只把现有 provider-neutral link outputs 交给该 owner，不再重复理解 rotate 细节。
     - [x] JSONL spool 的配置、并发写入、保留期裁剪和 series query 已整体迁入
       `internal/observability/healthspool`；Observer 直接查询该 owner，daemon 只把 health snapshot 转为 Sample。
       app 私有 `health_spool.go` 已删除，纯 spool 测试随实现迁移。
@@ -849,7 +854,7 @@ package dependency: app -> host -> gossip -> state -> zone
       peer cleanup 和测试保活入口。只读 show/list 的 `LoadState` 不在本项冒充 writer。
     - [x] fresh join accept 直接初始化 common/Linux bucket，不先写 legacy `stateFile` 再依赖下次启动迁移；首次 identity 先由公共 Store 完整验证，再在同一 Bolt 事务原子写入两个 bucket，避免崩溃留下半初始化数据库。
     - [x] `state_gc --direct` 只读/提交 Linux runtime owner，不再 `LoadState -> SaveState` 聚合状态；提交绑定当前 common verified revision，但不会推进该 revision。
-  - [ ] E2j：删除在线 daemon 对聚合 `stateFile` Snapshot 的依赖，再处理离线只读 CLI。
+  - [x] E2j：删除在线 daemon 对聚合 `stateFile` Snapshot 的依赖，再处理离线只读 CLI。
     - [x] 增加同一写入边界内直接克隆 common view 与 Linux runtime 的内部读取，返回两个真实 owner 而不构造第三套状态；
       IPsec cleanup、revoked purge、Endpoint ACL、state GC、IPsec error completion 与 Firewall completion 已改用该边界。
       同时删除仅服务聚合状态的 IPsec cleanup wrappers，join key 恢复与 recovery revocation 统计直接读取 common verified state。
@@ -871,7 +876,7 @@ package dependency: app -> host -> gossip -> state -> zone
       common/Linux owner，不创建第三套 Store。links/firewall/BIRD/status/admission/revocation 等同样只在离线分支读盘；`debug rotate --direct` 改用与 daemon
       相同的 common typed intent + Linux runtime 提交。production `Runtime.LoadState` 目前只服务旧 schema 首次迁移引导，
       以及尚待改造的测试 fixture，不再是 CLI read path。
-  - [ ] E2k：收敛 inspect/query/transport/presenter，删除 online-first 切换中新增和既有的多层 View/DTO 换壳。
+  - [x] E2k：收敛 inspect/query/transport/presenter，删除 online-first 切换中新增和既有的多层 View/DTO 换壳。
     - 目标调用链固定为 `common/Linux owners -> 唯一查询投影 -> canonical inspect DTO -> control/CLI/HTTP presenter`。
       control 只传输 canonical DTO，不拥有第二套业务 View；CLI text writer 与 HTTP encoder 只做协议包装、过滤、排序和格式化，
       不重新推导 peer lifecycle、health、route authorization 等语义。
@@ -906,8 +911,9 @@ package dependency: app -> host -> gossip -> state -> zone
         `applyStateStoreMeta` 随之删除。
       - `verify_chain` 成功结果也改用 typed bool view；至此只读 control 分支全部退出 mutation `controlResponse`，后者只剩
         admin mutation/action 的 ack 与结果，后续按命令类型拆分时不再与 query DTO 迁移混做。
-    - [ ] 每个子阶段独立提交并运行 `make check`；增加 online daemon 持有 Bolt 写锁时 CLI 查询仍成功、offline fallback 复用相同 DTO、
-      control/CLI/HTTP 对同一 owner fixture 语义一致的回归测试。
+    - [x] 每个子阶段独立提交并运行 `make check`；回归测试确认 daemon 独占 Bolt handle、第二个 handle 超时时，CLI control 查询仍成功；
+      daemon 关闭后 offline fallback 生成逐字段相同的 Zone canonical DTO；control、CLI presenter 与 Observer HTTP 对同一 owner fixture
+      保持 Zone path、record/delegation/revocation count 和 revoked 语义一致。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

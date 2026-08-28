@@ -154,7 +154,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
-| `health_reconcile.go` | probe target、manager、事件和状态 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 已进 `internal/photonlinux/healthprobe` 并由唯一 Linux runtime 持有；app 暂留 target 组合、事件和调度 |
+| `health_reconcile.go` | health manager 装配、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已统一进入 HostRuntime scheduler/queue；`LinkOutput -> ProbeTarget` 规则已进 `internal/photonlinux/linkstate` |
 | `health_spool.go` | JSONL health 历史和查询 | 已整体迁入 `internal/observability/healthspool` 并删除 app 文件；不属于 state/checkpoint |
 | `identity_bootstrap.go` | identity key/config、auto-join adoption 和 refresh | 文件处理进 config/CLI；安装和 refresh 留 state；调度进 host；旧 stateFile mutation 删除 |
 | `init.go` | root 初始化 | 公共初始化事务进 state；文件/CLI 进 photoncli |
@@ -237,12 +237,14 @@ controller/driver 实现、以及旧数据库单向迁移。后两类“仍有�
 Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧入口；语义不可靠且从未真正接线的
 “UDP write 成功即健康” prober 同时删除。
 
-当前 `health_reconcile.go` 仍留 app，不是因为平台执行未迁完，而是它还混有三类尚待继续拆分的职责：
+`health_reconcile.go` 的 runtime 边界现已收口：
 
-1. 从 Linux link/IPsec runtime DTO 组合 probe target；这要跟 `link_outputs.go` 和 Linux runtime state model 一起迁；
-2. `health.Manager` 的一秒异步 tick、completion coalesce 和 daemon event loop 接线；调度应归公共 HostRuntime；
-3. control/observer 输出；分别应归 inspect 和 observer。spool 文件、裁剪和 series query 已整体进入
-   `internal/observability/healthspool`，daemon 只转换公开的 health snapshot DTO。
+1. Linux link output 到 `ProbeTarget` 的组合已进入 `internal/photonlinux/linkstate`；
+2. `health.Manager` 的一秒异步 tick 与 completion 唤醒已使用公共 HostRuntime scheduler/queue；
+3. spool 已进入 `internal/observability/healthspool`，Observer/control 使用 canonical inspect DTO。
+
+app 中剩余的是配置装配、把 committed Linux link output 交给 manager，以及 CLI/text 入口，不再拥有平台 probe、
+独立 ticker、独立 completion queue 或 health 历史存储。
 
 ### 5.2 测试是否可以迁走
 
@@ -275,6 +277,8 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    `record_get`、admission diagnosis 和 Endpoint ACL list 也已退出巨型 `controlResponse`，直接通过 typed view envelope 传输；
    旧 `status` 混合回包也已拆除，Observer/control 共用同一 operational status 投影，root public key 改为独立 typed view；
    `verify_chain` 同样返回 typed bool view，只读 control 已不再借用 mutation response；
+   E2k 最终边界测试确认在线 daemon 独占 Bolt handle 时 CLI 只经 control 读取，关闭 daemon 后 offline owner 生成相同 canonical Zone DTO，
+   且 control、CLI presenter、Observer HTTP 对同一 owner fixture 的 Zone path/count/revoked 语义一致。
    routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
    聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
    不在 HTTP 层重新推导 desired/runtime 状态。

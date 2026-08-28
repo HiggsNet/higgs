@@ -11,10 +11,10 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
-	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -26,75 +26,6 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 		return nil
 	}
 	return health.NewManager(cfg.probeConfig(), cfg.hysteresisConfig(), prober)
-}
-
-// healthTargets derives probe targets from Linux link runtime state. Only
-// links with valid peer tunnel addresses and probeable state are returned.
-func healthTargets(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, localZone string) []health.ProbeTarget {
-	var targets []health.ProbeTarget
-	outputs := buildLinkOutputs(instances, reconcile)
-	for _, output := range outputs {
-		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
-			continue
-		}
-		role := output.RuntimeRole
-		probeRole := role
-		if role == photonstate.LinkRuntimeActive {
-			probeRole = "active"
-			if hasStagedLinkOutput(outputs, output.ID) {
-				probeRole = "old"
-			}
-		}
-		target := health.ProbeTarget{
-			InstanceID:      output.ID,
-			GroupID:         output.GroupID,
-			PeerZone:        string(output.PeerZone),
-			LocalZone:       localZone,
-			Overlay:         output.GroupID,
-			NetNS:           output.NetNS,
-			InterfaceName:   output.InterfaceName,
-			UnderlayFamily:  underlayFamilyFromPathKey(output.PathKey),
-			Generation:      output.Generation,
-			ProbeRole:       probeRole,
-			State:           output.State,
-			LocalTunnelAddr: output.LocalAddr,
-			PeerTunnelAddr:  output.PeerAddr,
-		}
-		if probeRole != "active" {
-			target.ProbeID = healthProbeID(output.ID, probeRole)
-		}
-		if role == photonstate.LinkRuntimeStaged {
-			target.InstanceID = strings.TrimSuffix(output.ID, "#"+photonstate.LinkRuntimeStaged)
-			target.ProbeID = healthProbeID(target.InstanceID, "staged")
-			target.Staged = true
-		}
-		targets = append(targets, target)
-	}
-	return targets
-}
-
-func underlayFamilyFromPathKey(pathKey string) string {
-	family, ok := strings.CutPrefix(pathKey, "family:")
-	if !ok || (family != ipsec.FamilyIPv4 && family != ipsec.FamilyIPv6) {
-		return ""
-	}
-	return family
-}
-
-func hasStagedLinkOutput(outputs []photonstate.LinkOutput, linkID string) bool {
-	for _, output := range outputs {
-		if output.ID == runtimeLinkOutputID(linkID, photonstate.LinkRuntimeStaged) {
-			return true
-		}
-	}
-	return false
-}
-
-func healthProbeID(instanceID, role string) string {
-	if role == "" || role == "active" {
-		return instanceID
-	}
-	return instanceID + "#" + role
 }
 
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel
@@ -135,7 +66,7 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	if view.State != nil {
 		localZone = view.State.ManagedZone.String()
 	}
-	targets := healthTargets(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, localZone)
+	targets := linkstate.HealthTargets(buildLinkOutputs(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile), localZone)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
 	now := d.Sync.now()
@@ -150,7 +81,7 @@ func (d *DaemonService) tickHealth(ctx context.Context, now time.Time) int {
 	if d == nil || d.health == nil {
 		return 0
 	}
-	if d.healthUpdates != nil {
+	if d.healthAsyncRunning {
 		return 0
 	}
 	dispatched := d.health.Tick(ctx, now)
@@ -160,45 +91,26 @@ func (d *DaemonService) tickHealth(ctx context.Context, now time.Time) int {
 	return dispatched
 }
 
-// startHealthProbeLoop owns periodic probe dispatch for a running daemon.
-// Target changes remain synchronized through Manager's lock, while command
-// execution stays in its bounded worker pool. A one-second cadence preserves
-// the health scheduler's intended timer resolution without waking the daemon's
-// primary event loop.
-func (d *DaemonService) startHealthProbeLoop(ctx context.Context) <-chan struct{} {
-	if d == nil || d.health == nil {
-		return nil
+// forwardHealthCompletions puts asynchronous probe wakeups on HostRuntime's
+// bounded queue. The health manager remains the result owner; the event only
+// tells the single-writer loop to persist and publish its latest snapshot.
+func (d *DaemonService) forwardHealthCompletions(ctx context.Context, updates <-chan struct{}) {
+	if d == nil || d.hostRuntime == nil || updates == nil {
+		return
 	}
-	updates := d.health.StartAsync(ctx)
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			d.health.TickAsync(ctx, d.Sync.now())
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return updates
-}
-
-// drainHealthUpdates coalesces completed async probes before the daemon
-// computes its next deadline. The channel is intentionally best-effort: a
-// single snapshot represents every completion received in this drain.
-func (d *DaemonService) drainHealthUpdates() bool {
-	if d == nil || d.healthUpdates == nil {
-		return false
+	completion := corehost.Completion{
+		Namespace: daemonRuntimeNamespace,
+		Owner:     daemonCompletionHealthOwner,
+		Key:       daemonCompletionHealth,
 	}
-	updated := false
 	for {
 		select {
-		case <-d.healthUpdates:
-			updated = true
-		default:
-			return updated
+		case <-ctx.Done():
+			return
+		case <-updates:
+			if err := d.hostRuntime.PostCompletion(ctx, completion); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -295,7 +207,7 @@ func healthViewFromOwners(common corestate.View, runtime *linuxRuntimeState, liv
 	if common.State == nil || runtime == nil {
 		return view
 	}
-	view.Targets = inspectHealthProbeTargets(healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone)))
+	view.Targets = inspectHealthProbeTargets(linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(common.State.ManagedZone)))
 	return view
 }
 

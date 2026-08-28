@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -30,7 +31,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		},
 	}
 
-	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -74,7 +75,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 
-	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -127,7 +128,7 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 		},
 	}
 
-	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(local))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -183,7 +184,7 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 		},
 	}
 
-	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(local))
 	if len(targets) != 0 {
 		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
 	}

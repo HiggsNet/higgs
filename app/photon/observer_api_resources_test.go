@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
@@ -18,6 +22,51 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
+	srv := newTestObserverServer()
+	ns := zone.NewNetworkState()
+	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
+	ns.Zones["node-a.catofes."].Records["site/name"] = &zone.Record{Key: "site/name"}
+	ns.Zones["branch.node-a.catofes."] = zone.NewZoneState("branch.node-a.catofes.", nil)
+	updateTestObserverState(srv, func(state *stateFile) {
+		state.ManagedZone = "node-a.catofes."
+		state.Network = ns
+	})
+
+	control := controlViewRequestViaPipe[[]inspect.ZoneDetail](t, srv.daemon, controlRequest{Method: "zones_view"})
+	if !control.OK || len(control.View) != 2 {
+		t.Fatalf("zones_view response = %#v", control)
+	}
+	var cli bytes.Buffer
+	if err := inspecttext.WriteZones(&cli, control.View, "", false); err != nil {
+		t.Fatalf("WriteZones: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
+	rr := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("zones status = %d, body=%s", rr.Code, rr.Body.String())
+	}
+	var response observer.APIResponse
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatalf("decode zones response: %v", err)
+	}
+	httpZones := response.Data.(map[string]any)["zones"].([]any)
+	if len(httpZones) != len(control.View) {
+		t.Fatalf("HTTP/control zone count = %d/%d", len(httpZones), len(control.View))
+	}
+	for i, detail := range control.View {
+		summary := httpZones[i].(map[string]any)
+		if summary["path"] != detail.Path || summary["records"] != float64(detail.RecordCount) || summary["delegations"] != float64(detail.DelegationCount) || summary["revocations"] != float64(detail.RevocationCount) || summary["revoked"] != detail.Revoked {
+			t.Fatalf("zone %d HTTP/control mismatch: summary=%#v detail=%#v", i, summary, detail)
+		}
+		if !strings.Contains(cli.String(), detail.Path) {
+			t.Fatalf("CLI output missing canonical zone %q: %s", detail.Path, cli.String())
+		}
+	}
+}
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	srv := newTestObserverServer()

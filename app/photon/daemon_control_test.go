@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestDaemonControlErrorResponses(t *testing.T) {
@@ -61,6 +64,67 @@ func TestDaemonControlStatus(t *testing.T) {
 	}
 	if !response.OK || response.View.PeerID != config.PeerID || !response.View.DaemonOnline {
 		t.Fatalf("status response = %#v", response)
+	}
+}
+
+func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photon.db")
+	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
+	seedLegacyRuntimeState(t, path, legacy)
+	config := defaultAppConfig()
+	config.StatePath = path
+	config.TrustedRootPublicKey = append([]byte(nil), trustedRoot...)
+	rt := &Runtime{Config: config, StatePath: path, Clock: func() time.Time { return time.Unix(1000, 0) }}
+
+	boltStore, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState: %v", err)
+	}
+	storeOpen := true
+	t.Cleanup(func() {
+		if storeOpen {
+			startup.Common.Close()
+			_ = boltStore.Close()
+		}
+	})
+	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
+	if err != nil {
+		t.Fatalf("newPersistedDaemonStateStore: %v", err)
+	}
+	syncConfig := syncConfigFromAppConfig(config, startup.Common.ReadView().State)
+	service := newDaemonServiceWithStore(rt, stateStore, syncConfig, time.Second)
+	installTestIPsecDrivers(service, &ipsec.DryRunDriver{}, &ipsec.DryRunDriver{})
+	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
+	t.Setenv("PHOTON_CONTROL_SOCKET", service.ControlSocketPath)
+	stop, err := service.startControlServer(t.Context())
+	if err != nil {
+		t.Fatalf("startControlServer: %v", err)
+	}
+
+	if competing, err := corestate.OpenBoltStore(path, 0o600, 25*time.Millisecond); !errors.Is(err, bolt.ErrTimeout) {
+		if competing != nil {
+			_ = competing.Close()
+		}
+		t.Fatalf("second Bolt open error = %v, want timeout while daemon owns handle", err)
+	}
+	online, ok, err := readCanonicalViewViaControl[[]inspect.ZoneDetail](rt, controlRequest{Method: "zones_view"})
+	if err != nil || !ok {
+		t.Fatalf("online zones_view = ok %v err %v", ok, err)
+	}
+
+	stop()
+	startup.Common.Close()
+	if err := boltStore.Close(); err != nil {
+		t.Fatalf("close daemon BoltStore: %v", err)
+	}
+	storeOpen = false
+	common, _, err := loadOfflineOwnerViews(rt)
+	if err != nil {
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
+	}
+	offline := buildZoneDetails(common.State.Network, rt.Now())
+	if !reflect.DeepEqual(online, offline) {
+		t.Fatalf("online/offline zone DTO mismatch:\nonline=%#v\noffline=%#v", online, offline)
 	}
 }
 

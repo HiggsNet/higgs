@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
@@ -36,7 +37,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 			},
 		},
 	}
-	return healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
+	return linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
 }
 
 func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {
