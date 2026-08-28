@@ -1122,7 +1122,11 @@ func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRou
 		return false, nil
 	}
 
-	plan, planErr := d.StateStore.autoAnnouncePlanProjection(d, ars)
+	view := d.StateStore.common.ReadView()
+	if view.State == nil {
+		return false, nil
+	}
+	plan, planErr := autoAnnounceAssignedIPsPlan(view.State.Network, view.State.ManagedZone, ars, d.Sync.App.Config.IPAM)
 	if planErr != nil {
 		return false, planErr
 	}
@@ -1130,16 +1134,16 @@ func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRou
 		return false, nil
 	}
 
-	state := d.currentState()
-	if state == nil || !state.ManagedZone.Valid() || state.ManagedZone.IsRoot() {
+	managedZone := view.State.ManagedZone
+	if !managedZone.Valid() || managedZone.IsRoot() {
 		return false, nil
 	}
 	intents := make([]corestate.LocalIntent, 0, len(plan.announce)+len(plan.withdraw))
 	for _, prefix := range plan.announce {
-		intents = append(intents, corestate.AnnounceRouteIntent{Zone: state.ManagedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
+		intents = append(intents, corestate.AnnounceRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
 	}
 	for _, prefix := range plan.withdraw {
-		intents = append(intents, corestate.WithdrawRouteIntent{Zone: state.ManagedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
+		intents = append(intents, corestate.WithdrawRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
 	}
 	result, err := d.StateStore.ApplyCommonLocalIntents(context.Background(), intents, d.Sync.now())
 	if err != nil {
@@ -1149,10 +1153,10 @@ func (d *DaemonService) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRou
 		return false, nil
 	}
 	for _, prefix := range plan.announce {
-		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{"zone": state.ManagedZone, "prefix": prefix.String()})
+		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{"zone": managedZone, "prefix": prefix.String()})
 	}
 	for _, prefix := range plan.withdraw {
-		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{"zone": state.ManagedZone, "prefix": prefix.String()})
+		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{"zone": managedZone, "prefix": prefix.String()})
 	}
 	d.notifyStateChanged()
 	return true, nil
@@ -1167,12 +1171,10 @@ func (p autoAnnouncePlan) changed() bool {
 	return len(p.announce) > 0 || len(p.withdraw) > 0
 }
 
-func (d *DaemonService) autoAnnounceAssignedIPsPlanForState(state *stateFile, ars *routing.AuthorizedRouteSet) (autoAnnouncePlan, error) {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || state == nil || state.Network == nil {
+func autoAnnounceAssignedIPsPlan(network *zone.NetworkState, managedZone zone.ZonePath, ars *routing.AuthorizedRouteSet, config ipamConfig) (autoAnnouncePlan, error) {
+	if network == nil {
 		return autoAnnouncePlan{}, nil
 	}
-	config := d.Sync.App.Config.IPAM
-	managedZone := state.ManagedZone
 	if managedZone.IsRoot() || !managedZone.Valid() {
 		return autoAnnouncePlan{}, nil
 	}
@@ -1183,7 +1185,7 @@ func (d *DaemonService) autoAnnounceAssignedIPsPlanForState(state *stateFile, ar
 	}
 
 	localAnnounced := make(map[netip.Prefix]*routing.RouteAnnouncementRecord)
-	zs := state.Network.Zones[managedZone]
+	zs := network.Zones[managedZone]
 	if zs != nil {
 		for key, rec := range zs.Records {
 			if !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {

@@ -17,16 +17,20 @@ func linkOutputsFromState(state *stateFile) []photonstate.LinkOutput {
 	if state == nil {
 		return nil
 	}
+	return linkOutputsFromRuntime(state.LinkInstances, state.IPsecReconcile)
+}
+
+func linkOutputsFromRuntime(instances map[string]linkInstanceState, reconcile *ipsecReconcileState) []photonstate.LinkOutput {
 	desired := make(map[string][]desiredLinkState)
-	if state.IPsecReconcile != nil {
-		for _, item := range state.IPsecReconcile.Desired {
+	if reconcile != nil {
+		for _, item := range reconcile.Desired {
 			desired[item.InstanceID] = append(desired[item.InstanceID], item)
 		}
 	}
-	ids := sortedLinkInstanceIDs(state.LinkInstances)
+	ids := sortedLinkInstanceIDs(instances)
 	out := make([]photonstate.LinkOutput, 0, len(ids)*2)
 	for _, id := range ids {
-		inst := state.LinkInstances[id]
+		inst := instances[id]
 		wants := desired[id]
 		if len(wants) == 0 {
 			wants = []desiredLinkState{{}}

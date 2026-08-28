@@ -13,8 +13,15 @@ type stateGCPlan struct {
 }
 
 func buildStateGCPlan(config *appConfig, state *stateFile) *stateGCPlan {
+	if state == nil {
+		return &stateGCPlan{}
+	}
+	return buildStateGCPlanFromBirdInstances(config, state.BirdInstances)
+}
+
+func buildStateGCPlanFromBirdInstances(config *appConfig, instances map[string]*BirdInstanceState) *stateGCPlan {
 	plan := &stateGCPlan{}
-	if state == nil || len(state.BirdInstances) == 0 {
+	if len(instances) == 0 {
 		return plan
 	}
 	configured := make(map[string]struct{})
@@ -25,7 +32,7 @@ func buildStateGCPlan(config *appConfig, state *stateFile) *stateGCPlan {
 			configured[inst.NetNS] = struct{}{}
 		}
 	}
-	for netns := range state.BirdInstances {
+	for netns := range instances {
 		if _, ok := configured[netns]; !ok {
 			plan.OrphanBirdInstances = append(plan.OrphanBirdInstances, netns)
 		}
@@ -48,18 +55,17 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil, fmt.Errorf("daemon service is not initialized")
 	}
-	var plan *stateGCPlan
+	d.StateStore.mu.RLock()
+	instances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+	revision := d.StateStore.revision
+	d.StateStore.mu.RUnlock()
+	plan := buildStateGCPlanFromBirdInstances(d.Sync.App.Config, instances)
 	if !apply {
-		return d.StateStore.stateGCPlanProjection(d.Sync.App.Config), nil
+		return plan, nil
 	}
-	state, revision := d.StateStore.Snapshot()
-	plan = buildStateGCPlan(d.Sync.App.Config, state)
 	_, _, err := d.StateStore.commitBirdGCIfRevision(revision, plan.OrphanBirdInstances)
 	if err != nil {
 		return nil, err
-	}
-	if plan == nil {
-		plan = d.StateStore.stateGCPlanProjection(d.Sync.App.Config)
 	}
 	return plan, nil
 }

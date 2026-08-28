@@ -230,7 +230,16 @@ authorization 和 transport records 作为可信事实来源。
     verified Network，control routes 再独立复制 Linux BIRD runtime，删除 `routesProjection`。启动 auto-join 提示
     直接读取 common verified state，删除 `autoJoinLogProjection`。health context 直接组合 Linux runtime 的
     link/reconcile 与 health manager 快照，删除 `healthContextProjection`。admission status 显式组合 common
-    verified identity/network 与 Linux runtime admission history，删除 `admissionProjection`。
+    verified identity/network 与 Linux runtime admission history，删除 `admissionProjection`。state GC 只根据 Linux
+    runtime BIRD instances 与 routing 配置规划，并按 runtime revision 提交，删除完整 Snapshot 与
+    `stateGCPlanProjection`。health target 显式组合 common managed zone 与 Linux runtime link/IPsec desired，离线
+    state wrapper 反向复用同一纯函数，删除 `healthTargetsProjection`。
+    links HTTP/control status 直接组合 Linux runtime 的 link/IPsec/BIRD 与 health snapshot，reconcile inspection builder
+    改为显式平台输入并删除 `linksStatusProjection`；原 projection 专用测试文件随最后一个测试删除。
+    auto-announce planner 只接收 common verified Network/managed zone、授权路由集合与 IPAM 配置，发布逻辑直接读取
+    common Store，删除 `autoAnnouncePlanProjection`。
+    peer status 显式组合 common verified Network/managed zone、gossip checkpoint 与 Linux cleanup/link/IPsec runtime，
+    control 不再构造聚合 stateFile，删除 `peerStatusProjection`。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

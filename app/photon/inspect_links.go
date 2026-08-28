@@ -26,7 +26,38 @@ func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON)
 }
 
 func buildLinkInspectionFromReconcile(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
-	return buildLinkInspectionWithOptions(rt, state, health, false, "last_reconcile")
+	if state == nil {
+		return buildLinkInspectionFromRuntime(rt, nil, nil, nil, health)
+	}
+	return buildLinkInspectionFromRuntime(rt, state.LinkInstances, state.IPsecReconcile, state.BirdInstances, health)
+}
+
+func buildLinkInspectionFromRuntime(rt *Runtime, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) linkInspectionBuild {
+	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
+	if reconcile != nil {
+		input.LastRunUnix = reconcile.LastRunUnix
+		input.DesiredLinks = reconcile.DesiredLinks
+		input.LastError = reconcile.LastError
+		input.LastDesired = inspectDesiredLinks(reconcile.Desired)
+		input.ActualSAs = inspectLinkSAs(reconcile.ActualSAs)
+		input.Actions = inspectLinkActions(reconcile.Actions)
+		input.Skipped = inspectLinkSkips(reconcile.Skipped)
+	}
+	ids := sortedLinkInstanceIDs(instances)
+	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
+	for _, id := range ids {
+		inst := instances[id]
+		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, bird, inst.GroupID)
+		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
+			BirdState: birdState, BirdNeighbors: birdNeighbors, BirdBestRoutes: birdBestRoutes,
+		}))
+	}
+	lastDesired := lastReconcileDesiredLinks(reconcile)
+	return linkInspectionBuild{
+		Inspection: inspect.BuildLinks(input), Outputs: linkOutputsFromRuntime(instances, reconcile),
+		PlannedSpecs: map[string]ipsec.TransportLinkSpec{}, ReplannedDesired: lastDesired,
+		LastDesiredLinks: lastDesired, DesiredPlanSource: "last_reconcile",
+	}
 }
 
 func linkInspectionControlFromBuild(build linkInspectionBuild) *linkInspectionControl {

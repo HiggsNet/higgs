@@ -29,8 +29,16 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 // snapshot and persisted LinkInstances. Only links with a valid peer tunnel
 // address and probeable state are returned.
 func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGroupSpec) []health.ProbeTarget {
+	if state == nil {
+		return nil
+	}
+	return healthTargetsFromRuntime(state.LinkInstances, state.IPsecReconcile, localZone)
+}
+
+func healthTargetsFromRuntime(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, localZone string) []health.ProbeTarget {
 	var targets []health.ProbeTarget
-	for _, output := range linkOutputsFromState(state) {
+	outputs := linkOutputsFromRuntime(instances, reconcile)
+	for _, output := range outputs {
 		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
 			continue
 		}
@@ -38,7 +46,7 @@ func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGr
 		probeRole := role
 		if role == photonstate.LinkRuntimeActive {
 			probeRole = "active"
-			if hasStagedLinkOutput(state, output.ID) {
+			if hasStagedLinkOutput(outputs, output.ID) {
 				probeRole = "old"
 			}
 		}
@@ -78,8 +86,8 @@ func underlayFamilyFromPathKey(pathKey string) string {
 	return family
 }
 
-func hasStagedLinkOutput(state *stateFile, linkID string) bool {
-	for _, output := range linkOutputsFromState(state) {
+func hasStagedLinkOutput(outputs []photonstate.LinkOutput, linkID string) bool {
+	for _, output := range outputs {
 		if output.ID == runtimeLinkOutputID(linkID, photonstate.LinkRuntimeStaged) {
 			return true
 		}
@@ -125,11 +133,16 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	if d.Sync == nil {
 		return 0
 	}
-	var groups []ipsec.LinkGroupSpec
-	if d.Sync.App != nil && d.Sync.App.Config != nil {
-		groups = d.Sync.App.Config.IPsec.LinkGroups
+	d.StateStore.writeMu.Lock()
+	view := d.StateStore.common.ReadView()
+	d.StateStore.mu.RLock()
+	localZone := ""
+	if view.State != nil {
+		localZone = view.State.ManagedZone.String()
 	}
-	_, targets := d.StateStore.healthTargetsProjection(groups)
+	targets := healthTargetsFromRuntime(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, localZone)
+	d.StateStore.mu.RUnlock()
+	d.StateStore.writeMu.Unlock()
 	now := d.Sync.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)

@@ -933,20 +933,24 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, d.StateStore.metadata())
 		writeControlResponse(conn, response)
 	case "links_status":
-		projection := d.StateStore.linksStatusProjection(observerRuntime(d), d.healthStatusResponse())
-		if !projection.loaded {
-			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
+		health := d.healthStatusResponse()
+		d.StateStore.mu.RLock()
+		build := buildLinkInspectionFromRuntime(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
+		actualSAs := []linkSAState(nil)
+		if d.StateStore.runtime.IPsecReconcile != nil {
+			actualSAs = append(actualSAs, d.StateStore.runtime.IPsecReconcile.ActualSAs...)
 		}
-		links := linkInspectionControlFromBuild(projection.build)
-		links.ActualSAs = projection.actualSAs
+		meta := d.StateStore.metaLocked()
+		d.StateStore.mu.RUnlock()
+		links := linkInspectionControlFromBuild(build)
+		links.ActualSAs = actualSAs
 		response := controlResponse{
 			OK:      true,
 			PeerID:  d.Sync.Config.PeerID,
 			Links:   links,
 			Message: "links status",
 		}
-		applyStateStoreMeta(&response, projection.meta)
+		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "peers_status":
 		peerStatuses, meta, loaded := d.peerStatusSnapshotForControl()

@@ -333,14 +333,14 @@ func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.Pe
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
-	projection := d.StateStore.linksStatusProjection(observerRuntime(d), d.healthStatusResponse())
-	if !projection.loaded {
-		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
-	}
-	view := projection.build.Inspection
+	health := d.healthStatusResponse()
+	d.StateStore.mu.RLock()
+	build := buildLinkInspectionFromRuntime(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
+	d.StateStore.mu.RUnlock()
+	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
 		for _, link := range view.Links {

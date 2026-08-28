@@ -81,7 +81,7 @@ func buildPeerLifecycleDebugView(rt *Runtime, state *stateFile) inspect.PeerLife
 // control API response. It is called from the control handler when the
 // `peers_status` method is invoked.
 func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo, daemonStateStoreMeta, bool) {
-	if d == nil || d.Sync == nil {
+	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return nil, daemonStateStoreMeta{}, false
 	}
 	now := d.Sync.now()
@@ -90,5 +90,18 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
 	hasOverlay := d.Sync.App != nil && d.Sync.App.Config != nil && len(d.Sync.App.Config.IPsec.LinkGroups) > 0
-	return d.StateStore.peerStatusProjection(now, cfg, hasOverlay)
+	d.StateStore.writeMu.Lock()
+	view := d.StateStore.common.ReadView()
+	peers := syncPeerReadView(view.Gossip)
+	d.StateStore.mu.RLock()
+	meta := d.StateStore.metaLocked()
+	if view.State == nil || d.StateStore.runtime == nil {
+		d.StateStore.mu.RUnlock()
+		d.StateStore.writeMu.Unlock()
+		return nil, meta, false
+	}
+	statuses := derivePeerStatusesFromOwners(view.State.ManagedZone, view.State.Network, peers, d.StateStore.runtime.PeerCleanups, d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, now, cfg, hasOverlay)
+	d.StateStore.mu.RUnlock()
+	d.StateStore.writeMu.Unlock()
+	return statuses, meta, true
 }
