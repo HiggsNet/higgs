@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -284,15 +285,7 @@ func showHealth(sortBy string, verbose bool) error {
 		return err
 	}
 	if !online {
-		common, runtime, err := loadOfflineOwnerViews(rt)
-		if err != nil {
-			return err
-		}
-		if common.State == nil || runtime == nil {
-			_, _ = os.Stdout.WriteString("no state loaded\n")
-			return nil
-		}
-		view = healthViewFromOwners(common, runtime, nil)
+		return fmt.Errorf("daemon control socket unavailable; health runtime state requires a running daemon")
 	}
 	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
 }
@@ -312,13 +305,18 @@ func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthPro
 		out = append(out, inspect.HealthProbeTargetView{
 			ProbeID:         target.ProbeID,
 			InstanceID:      target.InstanceID,
+			GroupID:         target.GroupID,
 			PeerZone:        target.PeerZone,
+			LocalZone:       target.LocalZone,
 			Overlay:         target.Overlay,
+			NetNS:           target.NetNS,
 			InterfaceName:   target.InterfaceName,
 			UnderlayFamily:  target.UnderlayFamily,
 			LocalTunnelAddr: target.LocalTunnelAddr.String(),
 			PeerTunnelAddr:  target.PeerTunnelAddr.String(),
+			Generation:      target.Generation,
 			ProbeRole:       target.ProbeRole,
+			Role:            target.Role,
 			State:           target.State,
 			Staged:          target.Staged,
 		})

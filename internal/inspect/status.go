@@ -13,11 +13,13 @@ const (
 )
 
 type StatusInput struct {
-	DaemonOnline bool
-	ManagedZone  zone.ZonePath
-	Admission    AdmissionDiagnosis
-	Peers        []PeerStatusInfo
-	Links        LinkInspection
+	DaemonOnline   bool
+	GossipSource   string
+	PlatformSource string
+	ManagedZone    zone.ZonePath
+	Admission      AdmissionDiagnosis
+	Peers          []PeerStatusInfo
+	Links          LinkInspection
 }
 
 type StatusCount struct {
@@ -41,21 +43,25 @@ type StatusLinkSummary struct {
 }
 
 type StatusView struct {
-	DaemonOnline  bool
-	ManagedZone   zone.ZonePath
-	Mode          string
-	AutoJoinStage string
-	Admission     AdmissionDiagnosis
-	Peers         StatusPeerSummary
-	Links         StatusLinkSummary
+	DaemonOnline   bool
+	GossipSource   string
+	PlatformSource string
+	ManagedZone    zone.ZonePath
+	Mode           string
+	AutoJoinStage  string
+	Admission      AdmissionDiagnosis
+	Peers          StatusPeerSummary
+	Links          StatusLinkSummary
 }
 
 func BuildStatus(input StatusInput) StatusView {
 	view := StatusView{
-		DaemonOnline: input.DaemonOnline,
-		ManagedZone:  input.ManagedZone,
-		Mode:         StatusModeRunning,
-		Admission:    input.Admission,
+		DaemonOnline:   input.DaemonOnline,
+		GossipSource:   input.GossipSource,
+		PlatformSource: input.PlatformSource,
+		ManagedZone:    input.ManagedZone,
+		Mode:           StatusModeRunning,
+		Admission:      input.Admission,
 	}
 	if view.ManagedZone == "" {
 		view.ManagedZone = input.Admission.ManagedZone

@@ -1,14 +1,11 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func debugLinks(filter string) error {
@@ -16,26 +13,18 @@ func debugLinks(filter string) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := linksStatusViaControl(rt); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
 		return err
 	} else if ok {
-		if response.Links == nil {
-			return errors.New("daemon links_status response missing links")
-		}
-		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d last_link_error=%s\n",
-			response.PeerID,
-			response.Links.Inspection.Summary.LinkInstances,
-			response.Links.Inspection.Summary.DesiredLinks,
-			dash(response.Links.Inspection.Summary.LastError),
+		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_error=%s\n",
+			view.Inspection.Summary.LinkInstances,
+			view.Inspection.Summary.DesiredLinks,
+			dash(view.Inspection.Summary.LastError),
 		)
-		return writeDebugLinksFromBuild(os.Stdout, linkInspectionBuildFromControl(response.Links), filter)
+		view.Filter = filter
+		return inspecttext.WriteLinksDebug(os.Stdout, view)
 	}
-	common, runtime, err := loadOfflineOwnerViews(rt)
-	if err != nil {
-		return err
-	}
-	build := buildLinkInspection(rt, common.State, common.Gossip, runtime, nil)
-	return writeDebugLinksFromBuild(os.Stdout, build, filter)
+	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
 func showLinks(filter string, verbose bool) error {
@@ -43,45 +32,12 @@ func showLinks(filter string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := linksStatusViaControl(rt); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
 		return err
 	} else if ok {
-		if response.Links == nil {
-			return errors.New("daemon links_status response missing links")
-		}
-		return inspecttext.WriteLinks(os.Stdout, linkInspectionBuildFromControl(response.Links).Inspection, filter, verbose)
+		return inspecttext.WriteLinks(os.Stdout, view.Inspection, filter, verbose)
 	}
-	common, runtime, err := loadOfflineOwnerViews(rt)
-	if err != nil {
-		return err
-	}
-	return inspecttext.WriteLinks(os.Stdout, buildLinkInspection(rt, common.State, common.Gossip, runtime, nil).Inspection, filter, verbose)
-}
-
-func linkInspectionBuildFromControl(in *linkInspectionControl) linkInspectionBuild {
-	if in == nil {
-		return linkInspectionBuild{}
-	}
-	return linkInspectionBuild{
-		Inspection:        in.Inspection,
-		Outputs:           append([]photonstate.LinkOutput(nil), in.Outputs...),
-		ReplannedDesired:  in.ReplannedDesired,
-		ReplanIgnored:     in.ReplanIgnored,
-		LastDesiredLinks:  in.LastDesiredLinks,
-		DesiredPlanSource: in.DesiredPlanSource,
-	}
-}
-
-func writeDebugLinksFromBuild(w io.Writer, build linkInspectionBuild, filter string) error {
-	return inspecttext.WriteLinksDebug(w, inspect.LinksDebugView{
-		Inspection:        build.Inspection,
-		PlannedSpecs:      build.PlannedSpecs,
-		ReplannedDesired:  build.ReplannedDesired,
-		ReplanIgnored:     build.ReplanIgnored,
-		LastDesiredLinks:  build.LastDesiredLinks,
-		DesiredPlanSource: build.DesiredPlanSource,
-		Filter:            filter,
-	})
+	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
 func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
@@ -21,26 +22,18 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	if err != nil {
 		return err
 	}
-	controlTargets, online, err := readCanonicalViewViaControl[[]pingTargetJSON](rt, controlRequest{Method: "ping_targets"})
+	controlTargets, online, err := readCanonicalViewViaControl[[]inspect.HealthProbeTargetView](rt, controlRequest{Method: "ping_targets"})
 	if err != nil {
 		return err
 	}
 	var targets []health.ProbeTarget
 	if online {
-		targets, err = healthTargetsFromControl(controlTargets)
+		targets, err = healthTargetsFromInspect(controlTargets)
 		if err != nil {
 			return err
 		}
 	} else {
-		common, runtime, err := loadOfflineOwnerViews(rt)
-		if err != nil {
-			return err
-		}
-		if common.State == nil || runtime == nil {
-			fmt.Println("no state loaded")
-			return nil
-		}
-		targets = healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone))
+		return fmt.Errorf("daemon control socket unavailable; ping targets require current daemon runtime state")
 	}
 	if rt.Config != nil {
 		opts.FallbackCount = rt.Config.Health.Burst
@@ -55,21 +48,7 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	return inspecttext.WritePingDebug(os.Stdout, view)
 }
 
-func pingTargetsForControl(targets []health.ProbeTarget) []pingTargetJSON {
-	out := make([]pingTargetJSON, 0, len(targets))
-	for _, target := range targets {
-		out = append(out, pingTargetJSON{
-			ProbeID: target.ProbeID, InstanceID: target.InstanceID, GroupID: target.GroupID,
-			PeerZone: target.PeerZone, LocalZone: target.LocalZone, Overlay: target.Overlay,
-			NetNS: target.NetNS, InterfaceName: target.InterfaceName, UnderlayFamily: target.UnderlayFamily,
-			LocalTunnelAddr: target.LocalTunnelAddr.String(), PeerTunnelAddr: target.PeerTunnelAddr.String(),
-			Generation: target.Generation, ProbeRole: target.ProbeRole, Role: target.Role, State: target.State, Staged: target.Staged,
-		})
-	}
-	return out
-}
-
-func healthTargetsFromControl(targets []pingTargetJSON) ([]health.ProbeTarget, error) {
+func healthTargetsFromInspect(targets []inspect.HealthProbeTargetView) ([]health.ProbeTarget, error) {
 	out := make([]health.ProbeTarget, 0, len(targets))
 	for _, target := range targets {
 		local, err := parseOptionalAddr(target.LocalTunnelAddr)

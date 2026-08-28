@@ -8,12 +8,11 @@ import (
 	"strings"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 )
 
-func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
+func WriteRoutesDebug(w io.Writer, dump *inspect.RoutesResponse) error {
 	if dump == nil {
-		dump = &inspecthttp.RoutesResponse{}
+		dump = &inspect.RoutesResponse{}
 	}
 	out := newLineWriter(w)
 	out.Linef("route_source: gossip_announcements_and_ipam_authorization")
@@ -61,9 +60,9 @@ func WriteRoutesDebug(w io.Writer, dump *inspecthttp.RoutesResponse) error {
 	return out.Err()
 }
 
-func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesResponse) error {
+func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspect.RoutesResponse) error {
 	if dump == nil {
-		dump = &inspecthttp.RoutesResponse{}
+		dump = &inspect.RoutesResponse{}
 	}
 	prefixStr := prefix.String()
 	out := newLineWriter(w)
@@ -89,7 +88,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		out.Linef("announcing_zones: %s", strings.Join(zones, ", "))
 	}
 
-	matchedAssignment := inspecthttp.RouteAssignment{}
+	matchedAssignment := inspect.RouteAssignment{}
 	matchedBits := -1
 	for assignPrefixStr, assignment := range dump.Assignments {
 		assignPrefix, err := netip.ParsePrefix(assignPrefixStr)
@@ -114,7 +113,7 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 		out.Println("assignment_assigned_to: -")
 	}
 
-	prefixErrors := make([]inspecthttp.RouteAuthorizationError, 0)
+	prefixErrors := make([]inspect.RouteAuthorizationError, 0)
 	for _, e := range dump.Errors {
 		if e.Prefix == prefixStr {
 			prefixErrors = append(prefixErrors, e)
@@ -140,10 +139,10 @@ func WriteRouteDebug(w io.Writer, prefix netip.Prefix, dump *inspecthttp.RoutesR
 type BirdRoutePrefixMatch struct {
 	NetNS      string
 	InstanceID string
-	Route      inspecthttp.BirdRouteView
+	Route      inspect.BirdRouteView
 }
 
-func BirdRoutesMatchingPrefix(dump *inspecthttp.RoutesResponse, prefix string) []BirdRoutePrefixMatch {
+func BirdRoutesMatchingPrefix(dump *inspect.RoutesResponse, prefix string) []BirdRoutePrefixMatch {
 	if dump == nil {
 		return nil
 	}

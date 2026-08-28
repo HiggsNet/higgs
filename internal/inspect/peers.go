@@ -9,6 +9,8 @@ import (
 
 	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -55,73 +57,46 @@ type PeerEndpointView struct {
 }
 
 type EndpointDebugView struct {
-	ReflectorError  string
-	LocalCandidates []EndpointCandidateView
-	DiscoveredPeers []DiscoveredPeerEndpointsView
+	ManagedPeerID string
+	Peers         []EndpointPeerView
 }
 
-type EndpointDebugInput struct {
-	ReflectorError      string
-	HasPublicReflectors bool
-	LocalCandidates     []EndpointCandidateView
-	Discovered          map[string][]PeerSignedEndpoint
-}
-
-type EndpointCandidateView struct {
-	Address  string
-	Port     uint16
-	Scope    string
-	Priority int
-	Source   string
-}
-
-type DiscoveredPeerEndpointsView struct {
+type EndpointPeerView struct {
 	PeerID    string
 	Endpoints []PeerSignedEndpoint
 }
 
-func BuildEndpointDebug(input EndpointDebugInput) EndpointDebugView {
-	view := EndpointDebugView{
-		LocalCandidates: append([]EndpointCandidateView(nil), input.LocalCandidates...),
+func BuildEndpointDebug(state *corestate.VerifiedState, now time.Time) EndpointDebugView {
+	view := EndpointDebugView{}
+	if state == nil || state.Network == nil {
+		return view
 	}
-	sort.SliceStable(view.LocalCandidates, func(i, j int) bool {
-		return endpointCandidateLess(view.LocalCandidates[i], view.LocalCandidates[j])
-	})
-	if input.ReflectorError != "" && input.HasPublicReflectors {
-		view.ReflectorError = input.ReflectorError
-	}
-	peerIDs := make([]string, 0, len(input.Discovered))
-	for peerID := range input.Discovered {
+	view.ManagedPeerID = string(state.ManagedZone)
+	discovered := gossip.ExtractPeerEndpointsAt(state.Network, now)
+	peerIDs := make([]string, 0, len(discovered))
+	for peerID := range discovered {
 		peerIDs = append(peerIDs, peerID)
 	}
 	SortZoneStrings(peerIDs)
 	for _, peerID := range peerIDs {
-		endpoints := append([]PeerSignedEndpoint(nil), input.Discovered[peerID]...)
+		signed := discovered[peerID]
+		endpoints := make([]PeerSignedEndpoint, 0, len(signed))
+		for _, endpoint := range signed {
+			endpoints = append(endpoints, PeerSignedEndpoint{
+				Address: endpoint.Address, Port: endpoint.Port, Scope: endpoint.Scope,
+				Priority: endpoint.Priority, Protocol: endpoint.Protocol, Source: endpoint.Source,
+				LastObserved: endpoint.LastObserved,
+			})
+		}
 		sort.SliceStable(endpoints, func(i, j int) bool {
 			return signedEndpointLess(endpoints[i], endpoints[j])
 		})
-		view.DiscoveredPeers = append(view.DiscoveredPeers, DiscoveredPeerEndpointsView{
+		view.Peers = append(view.Peers, EndpointPeerView{
 			PeerID:    peerID,
 			Endpoints: endpoints,
 		})
 	}
 	return view
-}
-
-func endpointCandidateLess(a, b EndpointCandidateView) bool {
-	if a.Priority != b.Priority {
-		return a.Priority > b.Priority
-	}
-	if a.Source != b.Source {
-		return a.Source < b.Source
-	}
-	if a.Scope != b.Scope {
-		return a.Scope < b.Scope
-	}
-	if a.Address != b.Address {
-		return a.Address < b.Address
-	}
-	return a.Port < b.Port
 }
 
 func signedEndpointLess(a, b PeerSignedEndpoint) bool {

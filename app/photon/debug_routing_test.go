@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -263,38 +262,10 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 	}
 }
 
-func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
+func TestDebugBabelRequiresOnlineDaemon(t *testing.T) {
 	state, _ := buildTestNetworkStateForRouting(t)
-	state.BirdInstances = map[string]*BirdInstanceState{
-		"photontesth2": {
-			NetNSName:      "photontesth2",
-			RouterID:       12345,
-			ControlSocket:  "/run/photon/bird/bird-main.ctl",
-			ConfigPath:     "/run/photon/bird/bird-main.conf",
-			PIDFile:        "/run/photon/bird/bird-main.pid",
-			LastConfigHash: "deadbeef1234567890abcdef1234567890abcdef",
-			State:          birdInstanceStateRunning,
-			LastError:      "",
-		},
-	}
-
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
-		ID:              "main",
-		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
-		"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-	}}
-	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{
-		ID:      "main",
-		NetNS:   "photontesth2",
-		Enabled: true,
-		Mode:    ipsec.RoutingModeManaged,
-	}}}
 	rt := &Runtime{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
@@ -305,33 +276,7 @@ func TestDebugBabelFallbackShowsBirdInstances(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	if err := debugBabelWithRuntime(rt, &buf); err != nil {
-		t.Fatalf("debugBabelWithRuntime: %v", err)
-	}
-	out := buf.String()
-
-	if !strings.Contains(out, "netns photontesth2") {
-		t.Errorf("expected netns photontesth2, got:\n%s", out)
-	}
-	if !strings.Contains(out, "instance_id: main") {
-		t.Errorf("expected instance_id main, got:\n%s", out)
-	}
-	if !strings.Contains(out, "mode: managed") {
-		t.Errorf("expected mode managed, got:\n%s", out)
-	}
-	if !strings.Contains(out, "shutdown_policy: persist") {
-		t.Errorf("expected shutdown_policy persist, got:\n%s", out)
-	}
-	if !strings.Contains(out, "router_id: 12345") {
-		t.Errorf("expected router_id 12345, got:\n%s", out)
-	}
-	if !strings.Contains(out, "control_socket: /run/photon/bird/bird-main.ctl") {
-		t.Errorf("expected control socket, got:\n%s", out)
-	}
-	if !strings.Contains(out, "state: running") {
-		t.Errorf("expected state running, got:\n%s", out)
-	}
-	if !strings.Contains(out, "last_config_hash: deadbeef1234") {
-		t.Errorf("expected short config hash, got:\n%s", out)
+	if err := debugBabelWithRuntime(rt, &buf); err == nil || !strings.Contains(err.Error(), "requires a running daemon") {
+		t.Fatalf("debugBabelWithRuntime error = %v", err)
 	}
 }

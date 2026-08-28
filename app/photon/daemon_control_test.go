@@ -92,7 +92,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !endpoints.OK {
 		t.Fatalf("endpoints_view response = %#v", endpoints)
 	}
-	pingTargets := controlViewRequestViaPipe[[]pingTargetJSON](t, service, controlRequest{Method: "ping_targets"})
+	pingTargets := controlViewRequestViaPipe[[]inspect.HealthProbeTargetView](t, service, controlRequest{Method: "ping_targets"})
 	if !pingTargets.OK {
 		t.Fatalf("ping_targets response = %#v", pingTargets)
 	}
@@ -232,11 +232,11 @@ func TestDaemonControlBirdDump(t *testing.T) {
 		return client
 	})
 
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "photontesth2", BirdView: "route"})
-	if !response.OK || response.BirdDump == nil {
+	response := controlViewRequestViaPipe[inspect.BirdDumpResponse](t, service, controlRequest{Method: "bird_dump", NetNS: "photontesth2", BirdView: "route"})
+	if !response.OK {
 		t.Fatalf("bird_dump response = %#v", response)
 	}
-	inst := response.BirdDump.Instances["photontesth2"]
+	inst := response.View.Instances["photontesth2"]
 	command := "show route table all where source = RTS_BABEL all"
 	if inst.ControlSocket != "/run/photon/bird-photontesth2.ctl" || inst.Raw[command] == "" {
 		t.Fatalf("bird_dump instance = %#v", inst)
@@ -289,22 +289,22 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	}
 	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
 
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
-	if !response.OK || response.Links == nil {
-		t.Fatalf("links_status response = %#v", response)
+	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
+	if !response.OK {
+		t.Fatalf("links_view response = %#v", response)
 	}
-	if response.Links.DesiredPlanSource != "last_reconcile" || response.Links.ReplannedDesired != 1 {
-		t.Fatalf("links_status source/count = %q/%d, want last_reconcile/1", response.Links.DesiredPlanSource, response.Links.ReplannedDesired)
+	if response.View.DesiredPlanSource != "last_reconcile" || response.View.ReplannedDesired != 1 {
+		t.Fatalf("links_view source/count = %q/%d, want last_reconcile/1", response.View.DesiredPlanSource, response.View.ReplannedDesired)
 	}
-	if len(response.Links.ActualSAs) != 1 {
-		t.Fatalf("links_status actual_sas = %d, want 1", len(response.Links.ActualSAs))
+	if len(response.View.StoredSAs) != 1 {
+		t.Fatalf("links_view stored_sas = %d, want 1", len(response.View.StoredSAs))
 	}
-	links := response.Links.Inspection.Links
+	links := response.View.Inspection.Links
 	if len(links) != 1 || links[0].Desired == nil {
-		t.Fatalf("links_status links = %+v, want desired snapshot", links)
+		t.Fatalf("links_view links = %+v, want desired snapshot", links)
 	}
 	if got := links[0].Desired.Endpoint; got != "203.0.113.9:33403" {
-		t.Fatalf("links_status desired endpoint = %q, want reconcile snapshot endpoint", got)
+		t.Fatalf("links_view desired endpoint = %q, want reconcile snapshot endpoint", got)
 	}
 }
 
@@ -347,20 +347,17 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 		t.Fatalf("status = %#v, want committed rev=%d link_instances=1 desired_links=1", status, committedRev)
 	}
 
-	links := controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
-	if !links.OK || links.Links == nil {
-		t.Fatalf("links_status response = %#v", links)
+	links := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
+	if !links.OK {
+		t.Fatalf("links_view response = %#v", links)
 	}
-	if links.StateRevision != committedRev || links.Links.ReplannedDesired != 1 {
-		t.Fatalf("links_status = %#v, want committed rev=%d desired=1", links, committedRev)
+	if links.View.ReplannedDesired != 1 {
+		t.Fatalf("links_view = %#v, want desired=1", links)
 	}
 
-	peers := controlRequestViaPipe(t, service, controlRequest{Method: "peers_status"})
+	peers := controlViewRequestViaPipe[inspect.PeerLifecycleDebugView](t, service, controlRequest{Method: "peer_lifecycle_view"})
 	if !peers.OK {
-		t.Fatalf("peers_status response = %#v", peers)
-	}
-	if peers.StateRevision != committedRev {
-		t.Fatalf("peers_status revision = %d, want %d", peers.StateRevision, committedRev)
+		t.Fatalf("peer_lifecycle_view response = %#v", peers)
 	}
 }
 

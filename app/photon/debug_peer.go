@@ -29,6 +29,7 @@ func debugPeer(peerID string) error {
 	if common.State == nil {
 		return fmt.Errorf("common state is not initialized")
 	}
+	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := syncConfigFromAppConfig(rt.Config, common.State)
 	now := rt.Now()
 	view, err := buildDebugPeerView(common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), config, peerID, now)

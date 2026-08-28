@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type LinkInput struct {
@@ -30,7 +29,9 @@ type LinkInspection struct {
 
 type LinksDebugView struct {
 	Inspection        LinkInspection
-	PlannedSpecs      map[string]ipsec.TransportLinkSpec
+	StoredSAs         []LinkSA
+	LiveSAs           []LinkSA
+	LiveSAError       string
 	ReplannedDesired  int
 	ReplanIgnored     bool
 	LastDesiredLinks  int

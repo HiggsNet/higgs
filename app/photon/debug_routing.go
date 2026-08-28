@@ -2,22 +2,16 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/netip"
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/pkg/routing"
-	"github.com/HiggsNet/photon/pkg/routing/bird"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -71,84 +65,14 @@ func debugBird(_ context.Context, netnsName string, view birdDebugView) error {
 }
 
 func debugBirdWithRuntime(rt *Runtime, netnsName string, view birdDebugView, w io.Writer) error {
-	response, ok, err := birdDumpViaControl(rt, netnsName, string(view))
+	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](rt, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)})
 	if err != nil {
 		return err
 	}
 	if !ok {
-		dump, err := birdDumpOffline(rt, netnsName, view)
-		if err != nil {
-			return err
-		}
-		return writeDebugBirdDump(w, dump)
+		return fmt.Errorf("daemon control socket unavailable; BIRD live query requires a running daemon")
 	}
-	return writeDebugBirdDump(w, response.BirdDump)
-}
-
-func birdDumpOffline(rt *Runtime, netnsName string, view birdDebugView) (*inspect.BirdDumpResponse, error) {
-	if rt == nil || rt.Config == nil {
-		return &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}, nil
-	}
-	_, runtime, err := loadOfflineOwnerViews(rt)
-	if err != nil {
-		return nil, err
-	}
-	commands, err := birdDebugCommands(view)
-	if err != nil {
-		return nil, err
-	}
-	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
-	for _, inst := range rt.Config.Routing.Instances {
-		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
-			continue
-		}
-		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
-			continue
-		}
-		controlSocket := inst.ControlSocket
-		configPath := inst.ConfigFile
-		if runtime != nil && runtime.BirdInstances != nil {
-			if bi := runtime.BirdInstances[inst.NetNS]; bi != nil {
-				if bi.ControlSocket != "" {
-					controlSocket = bi.ControlSocket
-				}
-				if bi.ConfigPath != "" {
-					configPath = bi.ConfigPath
-				}
-			}
-		}
-		item := inspect.BirdDumpInstance{
-			NetNS:         inst.NetNS,
-			InstanceID:    inst.ID,
-			ControlSocket: controlSocket,
-			Raw:           map[string]string{},
-		}
-		if view == birdDebugFilter {
-			addBirdFilterDefinitions(&item, configPath)
-		}
-		if controlSocket == "" {
-			item.Error = "control socket is not configured"
-			response.Instances[inst.NetNS] = item
-			continue
-		}
-		client := bird.NewClient(controlSocket, 10*time.Second)
-		for _, cmd := range commands {
-			out, err := client.Raw(context.Background(), cmd)
-			if err != nil {
-				if item.Error == "" {
-					item.Error = err.Error()
-				}
-				item.Raw[cmd] = out
-				continue
-			}
-			item.Raw[cmd] = out
-		}
-		if runtime != nil {
-			enrichBirdDumpInstance(&item, runtime.LinkInstances, runtime.IPsecReconcile)
-		}
-		response.Instances[inst.NetNS] = item
-	}
-	return response, nil
+	return writeDebugBirdDump(w, &dump)
 }
 
 func birdDebugCommands(view birdDebugView) ([]string, error) {
@@ -363,33 +287,17 @@ func writeDebugBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 }
 
 func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
-	response, ok, err := birdStatusViaControl(rt)
+	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](rt, controlRequest{Method: "babel_view"})
 	if err != nil {
 		return err
 	}
-	var runtime *linuxRuntimeState
-	if !ok {
-		response = nil
-		_, runtime, err = loadOfflineOwnerViews(rt)
-		if err != nil {
-			return err
-		}
+	if ok {
+		return inspecttext.WriteBabelDebug(w, view)
 	}
-	return writeDebugBabel(w, rt, runtime, response)
+	return fmt.Errorf("daemon control socket unavailable; BIRD runtime state requires a running daemon")
 }
 
-func writeDebugBabel(w io.Writer, rt *Runtime, runtime *linuxRuntimeState, response *controlResponse) error {
-	return inspecttext.WriteBabelDebug(w, buildBabelDebugView(rt, runtime, response))
-}
-
-func buildBabelDebugView(rt *Runtime, runtime *linuxRuntimeState, response *controlResponse) inspect.BabelDebugView {
-	instances := map[string]*BirdInstanceState{}
-	if response != nil && response.BirdInstances != nil {
-		maps.Copy(instances, response.BirdInstances)
-	}
-	if len(instances) == 0 && runtime != nil && runtime.BirdInstances != nil {
-		maps.Copy(instances, runtime.BirdInstances)
-	}
+func buildBabelDebugView(rt *Runtime, instances map[string]*BirdInstanceState, lastRoutingError string) inspect.BabelDebugView {
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
@@ -398,9 +306,7 @@ func buildBabelDebugView(rt *Runtime, runtime *linuxRuntimeState, response *cont
 	if len(routingInstances) == 0 {
 		return inspect.BuildBabelDebug(input)
 	}
-	if response != nil && response.LastRoutingError != "" {
-		input.LastReconcileError = response.LastRoutingError
-	}
+	input.LastReconcileError = lastRoutingError
 	input.RuntimeStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{
@@ -423,16 +329,13 @@ func debugRoutes(_ context.Context, _ *cli.Command) error {
 }
 
 func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
-	response, ok, err := routesDumpViaControl(rt)
+	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
 	if err != nil {
 		return err
 	}
-	var dump *inspecthttp.RoutesResponse
+	var dump *inspect.RoutesResponse
 	if ok {
-		if response.RoutesDump == nil {
-			return errors.New("daemon routes_dump response is empty")
-		}
-		dump = response.RoutesDump
+		dump = &view
 	} else {
 		common, _, err := loadOfflineOwnerViews(rt)
 		if err != nil {
@@ -446,7 +349,7 @@ func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		dump = inspecthttp.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
+		dump = inspect.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
 	}
 	return inspecttext.WriteRoutesDebug(w, dump)
 }
@@ -468,16 +371,13 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	response, ok, err := routesDumpViaControl(rt)
+	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
 	if err != nil {
 		return err
 	}
-	var dump *inspecthttp.RoutesResponse
+	var dump *inspect.RoutesResponse
 	if ok {
-		if response.RoutesDump == nil {
-			return errors.New("daemon routes_dump response is empty")
-		}
-		dump = response.RoutesDump
+		dump = &view
 	} else {
 		common, _, err := loadOfflineOwnerViews(rt)
 		if err != nil {
@@ -491,7 +391,7 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		dump = inspecthttp.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
+		dump = inspect.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
 	}
 	return inspecttext.WriteRouteDebug(w, prefix, dump)
 }
@@ -510,6 +410,3 @@ func routingNetnsForOverlay(rt *Runtime, overlayID string) string {
 	}
 	return ""
 }
-
-// _ ensures import is used
-var _ = ipsec.NetNSName

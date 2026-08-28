@@ -16,6 +16,8 @@ func WriteStatus(w io.Writer, view inspect.StatusView) error {
 	}
 	out.Linef("Photon status:")
 	out.Linef("  daemon: %s", daemon)
+	out.Linef("  gossip_source: %s", dash(view.GossipSource))
+	out.Linef("  platform_source: %s", dash(view.PlatformSource))
 	out.Linef("  zone: %s", dash(string(view.ManagedZone)))
 	out.Linef("  mode: %s", view.Mode)
 	if view.Mode == inspect.StatusModeAutoJoin {

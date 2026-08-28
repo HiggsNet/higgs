@@ -121,16 +121,11 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 		out.Linef("matched_links: %d", len(inspection.Links))
 	}
 	for _, link := range inspection.Links {
-		spec, hasSpec := view.PlannedSpecs[link.ID]
-		var specPtr *ipsec.TransportLinkSpec
-		if hasSpec {
-			specPtr = &spec
-		}
 		if link.Missing {
-			writeDebugMissingLink(out, link, specPtr)
+			writeDebugMissingLink(out, link, nil)
 			continue
 		}
-		writeDebugLinkInstance(out, link, specPtr)
+		writeDebugLinkInstance(out, link, nil)
 	}
 	out.Linef("actions: %d", len(inspection.Actions))
 	for _, action := range inspection.Actions {

@@ -14,8 +14,6 @@ import (
 
 	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -43,6 +41,7 @@ type controlRequest struct {
 	Verbose     bool                    `json:"verbose,omitempty"`
 	Orphans     bool                    `json:"orphans,omitempty"`
 	NetNS       string                  `json:"netns,omitempty"`
+	Host        bool                    `json:"host,omitempty"`
 	BirdView    string                  `json:"bird_view,omitempty"`
 	EndpointACL *endpointACL            `json:"endpoint_acl,omitempty"`
 	IPAM        *ipamMutationRequest    `json:"ipam,omitempty"`
@@ -51,42 +50,34 @@ type controlRequest struct {
 }
 
 type controlResponse struct {
-	OK                bool                          `json:"ok"`
-	Error             string                        `json:"error,omitempty"`
-	StateRevision     uint64                        `json:"state_revision"`
-	SnapshotTimeUnix  int64                         `json:"snapshot_time_unix,omitempty"`
-	Dirty             daemonDirtyFlags              `json:"dirty,omitempty"`
-	ReconcileProgress daemonReconcileStatus         `json:"reconcile_in_progress,omitempty"`
-	PeerID            string                        `json:"peer_id,omitempty"`
-	LinkInstances     int                           `json:"link_instances,omitempty"`
-	CleanedLinks      int                           `json:"cleaned_links,omitempty"`
-	CleanedOrphans    int                           `json:"cleaned_orphans,omitempty"`
-	DesiredLinks      int                           `json:"desired_links,omitempty"`
-	LastLinkError     string                        `json:"last_link_error,omitempty"`
-	LastRoutingError  string                        `json:"last_routing_error,omitempty"`
-	Version           uint64                        `json:"version,omitempty"`
-	Message           string                        `json:"message,omitempty"`
-	Zone              zone.ZonePath                 `json:"zone,omitempty"`
-	RootPublicKey     ed25519.PublicKey             `json:"root_public_key,omitempty"`
-	JoinBundle        *joinBundle                   `json:"join_bundle,omitempty"`
-	BirdInstances     map[string]*BirdInstanceState `json:"bird_instances,omitempty"`
-	BirdDump          *inspect.BirdDumpResponse     `json:"bird_dump,omitempty"`
-	RoutesDump        *inspecthttp.RoutesResponse   `json:"routes_dump,omitempty"`
-	Admission         *inspect.AdmissionDiagnosis   `json:"admission,omitempty"`
-	FirewallReconcile *firewallReconcileState       `json:"firewall_reconcile,omitempty"`
-	Links             *linkInspectionControl        `json:"links,omitempty"`
-	PeerStatuses      []inspect.PeerStatusInfo      `json:"peer_statuses,omitempty"`
-	GossipPeers       []inspect.PeerDebugView       `json:"gossip_peers,omitempty"`
-	RevocationImpact  []inspect.RevocationImpact    `json:"revocation_impact,omitempty"`
-	Record            *inspect.RecordDetailView     `json:"record,omitempty"`
-	PortRotate        *manualPortRotateResult       `json:"port_rotate,omitempty"`
-	RecordsApplied    int                           `json:"records_applied,omitempty"`
-	Delegations       int                           `json:"delegations,omitempty"`
-	Revocations       int                           `json:"revocations,omitempty"`
-	NetworkChanged    bool                          `json:"network_changed,omitempty"`
-	PurgePlan         *purgePlan                    `json:"purge_plan,omitempty"`
-	EndpointACLs      []endpointACL                 `json:"endpoint_acls,omitempty"`
-	StateGC           *stateGCPlan                  `json:"state_gc,omitempty"`
+	OK                bool                        `json:"ok"`
+	Error             string                      `json:"error,omitempty"`
+	StateRevision     uint64                      `json:"state_revision"`
+	SnapshotTimeUnix  int64                       `json:"snapshot_time_unix,omitempty"`
+	Dirty             daemonDirtyFlags            `json:"dirty,omitempty"`
+	ReconcileProgress daemonReconcileStatus       `json:"reconcile_in_progress,omitempty"`
+	PeerID            string                      `json:"peer_id,omitempty"`
+	LinkInstances     int                         `json:"link_instances,omitempty"`
+	CleanedLinks      int                         `json:"cleaned_links,omitempty"`
+	CleanedOrphans    int                         `json:"cleaned_orphans,omitempty"`
+	DesiredLinks      int                         `json:"desired_links,omitempty"`
+	LastLinkError     string                      `json:"last_link_error,omitempty"`
+	LastRoutingError  string                      `json:"last_routing_error,omitempty"`
+	Version           uint64                      `json:"version,omitempty"`
+	Message           string                      `json:"message,omitempty"`
+	Zone              zone.ZonePath               `json:"zone,omitempty"`
+	RootPublicKey     ed25519.PublicKey           `json:"root_public_key,omitempty"`
+	JoinBundle        *joinBundle                 `json:"join_bundle,omitempty"`
+	Admission         *inspect.AdmissionDiagnosis `json:"admission,omitempty"`
+	Record            *inspect.RecordDetailView   `json:"record,omitempty"`
+	PortRotate        *manualPortRotateResult     `json:"port_rotate,omitempty"`
+	RecordsApplied    int                         `json:"records_applied,omitempty"`
+	Delegations       int                         `json:"delegations,omitempty"`
+	Revocations       int                         `json:"revocations,omitempty"`
+	NetworkChanged    bool                        `json:"network_changed,omitempty"`
+	PurgePlan         *purgePlan                  `json:"purge_plan,omitempty"`
+	EndpointACLs      []endpointACL               `json:"endpoint_acls,omitempty"`
+	StateGC           *stateGCPlan                `json:"state_gc,omitempty"`
 }
 
 // controlViewResponse is the transport envelope for read-only queries. View
@@ -96,16 +87,6 @@ type controlViewResponse[T any] struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	View  T      `json:"view,omitempty"`
-}
-
-type linkInspectionControl struct {
-	Inspection        inspect.LinkInspection   `json:"inspection"`
-	Outputs           []photonstate.LinkOutput `json:"outputs,omitempty"`
-	ReplannedDesired  int                      `json:"replanned_desired"`
-	ReplanIgnored     bool                     `json:"replan_ignored,omitempty"`
-	LastDesiredLinks  int                      `json:"last_desired_links,omitempty"`
-	DesiredPlanSource string                   `json:"desired_plan_source,omitempty"`
-	ActualSAs         []linkSAState            `json:"actual_sas,omitempty"`
 }
 
 // healthLinkJSON is the JSON representation of health.LinkHealth for the
@@ -132,25 +113,6 @@ type healthLinkJSON struct {
 	LastError       string `json:"last_error,omitempty"`
 	NextProbeUnix   int64  `json:"next_probe_unix,omitempty"`
 	CutoverBlocking bool   `json:"cutover_blocking,omitempty"`
-}
-
-type pingTargetJSON struct {
-	ProbeID         string `json:"probe_id,omitempty"`
-	InstanceID      string `json:"instance_id"`
-	GroupID         string `json:"group_id,omitempty"`
-	PeerZone        string `json:"peer_zone"`
-	LocalZone       string `json:"local_zone,omitempty"`
-	Overlay         string `json:"overlay,omitempty"`
-	NetNS           string `json:"netns,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	UnderlayFamily  string `json:"underlay_family,omitempty"`
-	LocalTunnelAddr string `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
-	Generation      uint64 `json:"generation,omitempty"`
-	ProbeRole       string `json:"probe_role,omitempty"`
-	Role            string `json:"role,omitempty"`
-	State           string `json:"state,omitempty"`
-	Staged          bool   `json:"staged,omitempty"`
 }
 
 func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
@@ -282,42 +244,9 @@ func verifyChainViaControl(rt *Runtime, path zone.ZonePath) (bool, error) {
 	return true, err
 }
 
-func birdStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "bird_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
-}
-
-func routesDumpViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "routes_dump"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
-}
-
 func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routing_reload"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
-}
-
-func birdDumpViaControl(rt *Runtime, netnsName, view string) (*controlResponse, bool, error) {
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: view})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}
@@ -330,30 +259,6 @@ func admissionStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	}
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "admission_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
-}
-
-func linksStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "links_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
-}
-
-func peersStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "peers_status"})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
 	}
@@ -375,17 +280,17 @@ func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) 
 	return response, true, err
 }
 
-func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspecthttp.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspecthttp.BirdRoutesView {
+func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspect.BirdRoutesView {
 	if d == nil || dump == nil {
 		return nil
 	}
-	views := make([]inspecthttp.BirdRoutesView, 0, len(instances))
+	views := make([]inspect.BirdRoutesView, 0, len(instances))
 	for _, inst := range instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
 		state := birdStates[inst.NetNS]
-		view := inspecthttp.BirdRoutesView{
+		view := inspect.BirdRoutesView{
 			NetNS:      inst.NetNS,
 			InstanceID: inst.ID,
 		}
@@ -413,7 +318,7 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspecth
 			continue
 		}
 		if observed != nil {
-			view.Routes = inspecthttp.BuildBirdRouteViews(dump, observed.Routes)
+			view.Routes = inspect.BuildBirdRouteViews(dump, observed.Routes)
 		}
 		views = append(views, view)
 	}

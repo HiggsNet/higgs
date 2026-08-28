@@ -130,7 +130,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 |---|---|---|
 | `db.go` | 离线 dump 公共、旧和 Linux runtime bucket | 公共 dump 进 `internal/stateinspect`；Linux dump 进 `internal/photonlinux/inspect`；CLI 进 photoncli |
 | `debug_cmd.go` | debug 命令注册 | app 或 `internal/photoncli`，只注册命令 |
-| `debug_endpoints.go` | 本机 endpoint discovery 展示 | discovery 留 gossip；view/text 进 inspect；CLI 进 photoncli |
+| `debug_endpoints.go` | signed endpoint 展示 | 采集只在协议发布路径执行；inspect 直接从 verified `sync/endpoint/*` record 投影实际发布结果，查询和离线读取均不重新探测；CLI wrapper 后续进 photoncli |
 | `debug_firewall.go` | firewall 实时诊断 | observe 进 Linux firewall；view 进 inspect；CLI 进 photoncli |
 | `debug_format.go` | 时间/空值格式化 | 合并到 `internal/inspect/text` |
 | `debug_links.go` | IPsec/BIRD link 展示 | Linux live query 进 controller；view 进 inspect；CLI 进 photoncli |
@@ -267,11 +267,12 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
    在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
-   CLI 查询已改为 online-first：daemon 在线时通过面向命令的 control read model 读取其内存 common/Linux owner 和实时观测，
-   不打开 bbolt；daemon 不可用或显式 direct 时才读取 detached owner。跨域离线展示显式接收两个 owner，纯 common 查询不加载 Linux 字段。
+   CLI 查询已按来源收口：verified/common 允许离线读取；gossip checkpoint 离线时明确标为 last-known；links/firewall/BIRD/health/ping/
+   peer lifecycle 等 platform runtime 查询要求在线 daemon，不再从 bbolt reconcile snapshot 冒充 live，也不由 CLI 直接调用 platform driver。
    read model 随后开始收敛为 typed canonical view envelope：zone/service/route/IPAM/endpoint、records/sync/peer/zone debug、
    status/peer lifecycle/gossip peers/health 均由 daemon 或离线 owner 调用同一查询函数生成最终 inspect DTO，CLI 只负责呈现；
-   对应资源字段已从巨型 `controlResponse` 删除。links/firewall/BIRD 与 HTTP routes DTO 仍在后续 E2k 阶段继续收口。
+   links/firewall/Babel/health/ping 也已改为 daemon 直接返回 canonical inspect DTO，旧 resource response 和 links live-replan 换壳已删除；
+   routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias。zones/peers/links/status 的 HTTP 契约盘点仍待完成。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。聚合 `Snapshot()` 目前只剩旧 schema 首次迁移引导与测试 fixture；
    下一步是改写该 migration bootstrap 并迁移测试 fixture，随后删除组合 view 与旧 loader。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。

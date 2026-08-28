@@ -32,10 +32,16 @@ func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRunt
 	verified := common.State
 	peers := syncPeerReadView(common.Gossip)
 	input := inspect.StatusInput{
-		DaemonOnline: daemonOnline,
-		ManagedZone:  verified.ManagedZone,
-		Admission:    diagnoseAutoJoinAdmission(verified, runtime.Admission, rt.Now()),
-		Links:        buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, health).Inspection,
+		DaemonOnline:   daemonOnline,
+		GossipSource:   "checkpoint",
+		PlatformSource: "unavailable",
+		ManagedZone:    verified.ManagedZone,
+		Admission:      diagnoseAutoJoinAdmission(verified, runtime.Admission, rt.Now()),
+	}
+	if daemonOnline {
+		input.GossipSource = "runtime"
+		input.PlatformSource = "runtime"
+		input.Links = buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, health).Inspection
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false

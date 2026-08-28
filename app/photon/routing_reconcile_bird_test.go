@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/pkg/routing/bird"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type blockingBirdProcessManager struct {
@@ -281,19 +283,19 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("control status blocked behind BIRD start")
 	}
 
-	linksDone := make(chan controlResponse, 1)
+	linksDone := make(chan controlViewResponse[inspect.LinksDebugView], 1)
 	go func() {
-		linksDone <- controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+		linksDone <- controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	}()
 	select {
 	case links := <-linksDone:
-		if !links.OK || links.StateRevision != committedRev {
+		if !links.OK {
 			close(pm.unblock)
-			t.Fatalf("links_status response = %#v, want committed revision %d", links, committedRev)
+			t.Fatalf("links_view response = %#v", links)
 		}
 	case <-time.After(time.Second):
 		close(pm.unblock)
-		t.Fatal("links_status blocked behind BIRD start")
+		t.Fatal("links_view blocked behind BIRD start")
 	}
 
 	close(pm.unblock)

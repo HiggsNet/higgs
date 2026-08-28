@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -83,8 +84,10 @@ func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 }
 
 func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
-	build := buildLinkInspection(rt, verifiedStateForTest(state), nil, linuxRuntimeStateFromLegacy(state), nil)
-	return writeDebugLinksFromBuild(w, build, filter)
+	runtime := linuxRuntimeStateFromLegacy(state)
+	view := buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, nil)
+	view.Filter = filter
+	return inspecttext.WriteLinksDebug(w, view)
 }
 
 func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {

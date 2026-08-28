@@ -15,13 +15,18 @@ type HealthDebugView struct {
 type HealthProbeTargetView struct {
 	ProbeID         string
 	InstanceID      string
+	GroupID         string
 	PeerZone        string
+	LocalZone       string
 	Overlay         string
+	NetNS           string
 	InterfaceName   string
 	UnderlayFamily  string
 	LocalTunnelAddr string
 	PeerTunnelAddr  string
+	Generation      uint64
 	ProbeRole       string
+	Role            string
 	State           string
 	Staged          bool
 }

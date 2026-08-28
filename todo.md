@@ -878,12 +878,26 @@ package dependency: app -> host -> gossip -> state -> zone
     - [x] E2k1：引入按 control method 类型化的 canonical view envelope；zone/service/route/IPAM/endpoint 直接传输最终 inspect DTO，
       ping 传输 CLI 执行探测所需的 typed target plan；上述字段以及 records/sync/peer/zone debug DTO 已从巨型 `controlResponse` 删除。
       online/offline 复用同一查询函数，route/IPAM read model 已归入 `internal/inspect`，control 不再按资源重复定义响应结构。
-    - [ ] E2k2：收敛 status/peers/health/links/firewall/BIRD；daemon 一次读取 owner/observability 后生成最终 inspect DTO，
+    - [x] E2k2：收敛 status/peers/health/links/firewall/BIRD；daemon 一次读取 owner/observability 后生成最终 inspect DTO，
       CLI 不再把 `PeerStatusInfo`、health targets/live、link control wrapper 二次 Build 成另一层 View。
+      - 查询源必须按语义区分：verified/common 权威状态允许 offline bbolt fallback；gossip checkpoint 只能明确标为
+        `checkpoint/last-known`；本机 endpoint 候选、health live、BIRD live dump、Firewall/Link driver observation 等
+        platform runtime 状态必须由在线 daemon 返回，daemon 离线时报告 unavailable，禁止把落盘 reconcile snapshot
+        冒充当前运行时状态，也禁止 CLI 绕过 daemon 直接调用 platform driver/control socket。
+      - endpoint 第一切口已完成：查询不再扫描接口或访问 reflector，也不新增重复 runtime snapshot；`endpoints_view`
+        直接从 verified `sync/endpoint/*` record 投影实际对外发布的 endpoint，reflector 即时失败继续由发布日志诊断。
+      - 已删除 links control/build 换壳和只供旧 debug 测试调用的 live-replan builder；Firewall/Babel 由 daemon 直接返回
+        canonical inspect DTO；health/links/firewall/BIRD/ping/peer lifecycle 均要求在线 daemon，CLI 不再从 bbolt 冒充 live。
+        gossip peer 离线 fallback 明确标为 checkpoint；status 分别报告 gossip/platform source，离线不展示 platform runtime。
+        ping target 复用 `HealthProbeTargetView`，删除 app 私有 JSON DTO；BIRD raw query 和 rotate SA live query 均由 daemon 执行。
     - [ ] E2k3：将 routes 的 canonical DTO 从 `internal/inspect/http` 移到 `internal/inspect`，CLI 不再依赖 HTTP 包；Observer HTTP
       仅保留稳定 JSON envelope。同步盘点 zones/peers/links/status 的 HTTP 专用重复结构，只保留确有 API 契约差异的投影。
+      - [x] routes 类型/builder 已整体迁到 `internal/inspect`；CLI/control 直接使用 canonical DTO，HTTP 包只留保持既有 JSON
+        schema 的类型别名。zones/peers/links/status 的 REST 契约差异仍待逐项确认。
     - [ ] E2k4：逐项拆除巨型 `controlRequest/controlResponse` 的只读分支，删除单次 wrapper、重复排序/过滤、旧 builder 和失去调用者的 DTO；
       mutation/event 回包另行按命令类型收敛，不与只读迁移混做一次大提交。
+      - 已删除 `links_status`、`firewall_status`、`bird_status`、`peers_status`、`routes_dump`、`revoke_status` 及其
+        resource-specific response 字段/helper；BIRD dump 和 revocation impact 也已直接使用 canonical envelope。
     - [ ] 每个子阶段独立提交并运行 `make check`；增加 online daemon 持有 Bolt 写锁时 CLI 查询仍成功、offline fallback 复用相同 DTO、
       control/CLI/HTTP 对同一 owner fixture 语义一致的回归测试。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport

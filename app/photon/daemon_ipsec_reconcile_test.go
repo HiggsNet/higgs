@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -440,19 +441,19 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("control status blocked behind IPsec reconcile apply")
 	}
 
-	linksDone := make(chan controlResponse, 1)
+	linksDone := make(chan controlViewResponse[inspect.LinksDebugView], 1)
 	go func() {
-		linksDone <- controlRequestViaPipe(t, service, controlRequest{Method: "links_status"})
+		linksDone <- controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	}()
 	select {
 	case links := <-linksDone:
-		if !links.OK || links.StateRevision != committedRev {
+		if !links.OK {
 			close(unblock)
-			t.Fatalf("links_status response = %#v, want committed revision %d", links, committedRev)
+			t.Fatalf("links_view response = %#v", links)
 		}
 	case <-time.After(time.Second):
 		close(unblock)
-		t.Fatal("links_status blocked behind IPsec reconcile apply")
+		t.Fatal("links_view blocked behind IPsec reconcile apply")
 	}
 
 	close(unblock)

@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
@@ -765,7 +765,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		endpoints := buildEndpointDebugView(d.Sync.App, view.State)
+		endpoints := inspect.BuildEndpointDebug(view.State, d.Sync.now())
 		writeCanonicalView(conn, endpoints)
 	case "ping_targets":
 		common, runtime := d.StateStore.readCommonAndRuntime()
@@ -774,7 +774,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		targets := healthTargets(runtime.LinkInstances, runtime.IPsecReconcile, string(common.State.ManagedZone))
-		writeCanonicalView(conn, pingTargetsForControl(targets))
+		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
 	case "sync_view":
 		common, _ := d.StateStore.readCommonAndRuntime()
 		if common.State == nil {
@@ -997,34 +997,23 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
-	case "bird_status":
+	case "babel_view":
 		d.StateStore.mu.RLock()
-		birdInstances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
 		lastRoutingError := ""
 		if d.StateStore.runtime.RoutingReconcile != nil {
 			lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
 		}
+		view := buildBabelDebugView(d.Sync.App, d.StateStore.runtime.BirdInstances, lastRoutingError)
 		d.StateStore.mu.RUnlock()
-		response := controlResponse{
-			OK:               true,
-			BirdInstances:    birdInstances,
-			LastRoutingError: lastRoutingError,
-			Message:          "bird status",
-		}
-		applyStateStoreMeta(&response, d.StateStore.metadata())
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, view)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		writeControlResponse(conn, controlResponse{
-			OK:       true,
-			BirdDump: dump,
-			Message:  "bird dump",
-		})
-	case "routes_dump":
+		writeCanonicalView(conn, *dump)
+	case "routes_view":
 		var routingInstances []RoutingInstance
 		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
@@ -1033,7 +1022,6 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		view := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
 		birdInstances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
-		meta := d.StateStore.metaLocked()
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
 		if view.State == nil || view.State.Network == nil {
@@ -1045,15 +1033,9 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		routesDump := inspecthttp.RoutesFromAuthorizedSet(view.State.ManagedZone, ars)
+		routesDump := inspect.RoutesFromAuthorizedSet(view.State.ManagedZone, ars)
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdInstances)
-		response := controlResponse{
-			OK:         true,
-			RoutesDump: routesDump,
-			Message:    "routes dump",
-		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, *routesDump)
 	case "admission_status":
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
@@ -1075,52 +1057,32 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
-	case "firewall_status":
+	case "firewall_view":
 		d.StateStore.mu.RLock()
 		fwSnapshot := cloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)
 		d.StateStore.mu.RUnlock()
-		response := controlResponse{
-			OK:                true,
-			FirewallReconcile: fwSnapshot,
-			Message:           "firewall status",
+		instances := []FirewallInstanceConfig(nil)
+		var appCfg *appConfig
+		if d.Sync.App != nil && d.Sync.App.Config != nil {
+			appCfg = d.Sync.App.Config
+			instances = appCfg.Firewall.Instances
 		}
-		applyStateStoreMeta(&response, d.StateStore.metadata())
-		writeControlResponse(conn, response)
-	case "links_status":
+		instances = filterFirewallDebugInstances(instances, request.NetNS, request.Host)
+		writeCanonicalView(conn, buildFirewallDebugView(appCfg, instances, fwSnapshot))
+	case "links_view":
 		health := d.healthStatusResponse()
 		d.StateStore.mu.RLock()
-		build := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
-		actualSAs := []linkSAState(nil)
-		if d.StateStore.runtime.IPsecReconcile != nil {
-			actualSAs = append(actualSAs, d.StateStore.runtime.IPsecReconcile.ActualSAs...)
-		}
-		meta := d.StateStore.metaLocked()
+		view := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
 		d.StateStore.mu.RUnlock()
-		links := linkInspectionControlFromBuild(build)
-		links.ActualSAs = actualSAs
-		response := controlResponse{
-			OK:      true,
-			PeerID:  d.Sync.Config.PeerID,
-			Links:   links,
-			Message: "links status",
+		if d.linuxRuntime != nil && d.Sync.App != nil && d.Sync.App.Config != nil && d.Sync.App.Config.IPsec.Driver != ipsecDriverDryRun {
+			sas, err := d.linuxRuntime.ListIPsecSAs(ctx)
+			if err != nil {
+				view.LiveSAError = err.Error()
+			} else {
+				view.LiveSAs = inspectLinkSAs(linkSAStatesFromIPsecSAs(sas))
+			}
 		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
-	case "peers_status":
-		peerStatuses, meta, loaded := d.peerStatusSnapshotForControl()
-		if !loaded {
-			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
-			return
-		}
-		response := controlResponse{
-			OK:           true,
-			PeerID:       d.Sync.Config.PeerID,
-			PeerStatuses: peerStatuses,
-			GossipPeers:  d.gossipPeerSnapshotForControl(),
-			Message:      "peers status",
-		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, view)
 	case "peer_lifecycle_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
 		if common.State == nil || runtime == nil {
@@ -1130,29 +1092,26 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Sync.App, common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), runtime))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
-	case "revoke_status":
+	case "revocation_view":
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
 		peers := syncPeerReadView(view.Gossip)
 		d.StateStore.mu.RLock()
-		meta := d.StateStore.metaLocked()
 		if view.State == nil || d.StateStore.runtime == nil {
 			d.StateStore.mu.RUnlock()
 			d.StateStore.writeMu.Unlock()
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		impacts := AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, d.Sync.Config, d.Sync.now())
+		var impacts []inspect.RevocationImpact
+		if request.Zone != "" {
+			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, zone.ZonePath(request.Zone), d.Sync.now())}
+		} else {
+			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, d.Sync.Config, d.Sync.now())
+		}
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
-		response := controlResponse{
-			OK:               true,
-			PeerID:           d.Sync.Config.PeerID,
-			RevocationImpact: impacts,
-			Message:          "revoke status",
-		}
-		applyStateStoreMeta(&response, meta)
-		writeControlResponse(conn, response)
+		writeCanonicalView(conn, impacts)
 	case "health_status":
 		common, runtime := d.StateStore.readCommonAndRuntime()
 		writeCanonicalView(conn, healthViewFromOwners(common, runtime, d.healthStatusResponse()))

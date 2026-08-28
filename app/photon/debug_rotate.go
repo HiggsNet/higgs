@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,70 +55,28 @@ func debugRotate(ctx context.Context, filter string) error {
 	if err != nil {
 		return err
 	}
-	if response, ok, err := linksStatusViaControl(rt); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
 		return err
 	} else if ok {
-		if response.Links == nil {
-			return errors.New("daemon links_status response missing links")
-		}
-		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d last_link_error=%s\n",
-			response.PeerID,
-			response.Links.Inspection.Summary.LinkInstances,
-			response.Links.Inspection.Summary.DesiredLinks,
-			dash(response.Links.Inspection.Summary.LastError),
+		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_error=%s\n",
+			view.Inspection.Summary.LinkInstances,
+			view.Inspection.Summary.DesiredLinks,
+			dash(view.Inspection.Summary.LastError),
 		)
-		build := linkInspectionBuildFromControl(response.Links)
-		storedSAs := append([]linkSAState(nil), response.Links.ActualSAs...)
-		return writeDebugRotateFromBuild(os.Stdout, build, filter, storedSAs, nil, nil, "daemon_sas", "direct_live_sas")
+		return writeDebugRotateFromView(os.Stdout, view, filter)
 	}
-	common, runtime, err := loadOfflineOwnerViews(rt)
-	if err != nil {
-		return err
-	}
-	var liveSAs []linkSAState
-	var liveErr error
-	if rt.Config != nil && rt.Config.IPsec.Driver != ipsecDriverDryRun {
-		platformRuntime, err := newLinuxRuntimeForIPsecCleanup(rt.Config)
-		if err != nil {
-			liveErr = err
-		} else {
-			defer platformRuntime.Close()
-			sas, err := platformRuntime.ListIPsecSAs(ctx)
-			if err != nil {
-				liveErr = err
-			} else {
-				liveSAs = linkSAStatesFromIPsecSAs(sas)
-			}
-		}
-	}
-	build := buildLinkInspection(rt, common.State, common.Gossip, runtime, nil)
-	storedSAs := []linkSAState(nil)
-	if runtime != nil && runtime.IPsecReconcile != nil {
-		storedSAs = runtime.IPsecReconcile.ActualSAs
-	}
-	return writeDebugRotateFromBuild(os.Stdout, build, filter, storedSAs, liveSAs, liveErr, "stored_sas", "live_sas")
+	return fmt.Errorf("daemon control socket unavailable; IPsec rotation runtime state requires a running daemon")
 }
 
-func writeDebugRotateFromBuild(w io.Writer, build linkInspectionBuild, filter string, storedSAs, liveSAs []linkSAState, liveErr error, storedLabel, liveLabel string) error {
-	liveErrText := ""
-	if liveErr != nil {
-		liveErrText = liveErr.Error()
-	}
-	view := inspect.BuildRotateDebug(inspect.RotateDebugInput{
-		Inspection:        build.Inspection,
-		PlannedSpecs:      build.PlannedSpecs,
-		ReplannedDesired:  build.ReplannedDesired,
-		ReplanIgnored:     build.ReplanIgnored,
-		LastDesiredLinks:  build.LastDesiredLinks,
-		DesiredPlanSource: build.DesiredPlanSource,
-		Filter:            filter,
-		StoredLabel:       storedLabel,
-		LiveLabel:         liveLabel,
-		StoredSAs:         inspectLinkSAs(storedSAs),
-		LiveSAs:           inspectLinkSAs(liveSAs),
-		LiveSAError:       liveErrText,
+func writeDebugRotateFromView(w io.Writer, view inspect.LinksDebugView, filter string) error {
+	rotate := inspect.BuildRotateDebug(inspect.RotateDebugInput{
+		Inspection:       view.Inspection,
+		ReplannedDesired: view.ReplannedDesired, ReplanIgnored: view.ReplanIgnored,
+		LastDesiredLinks: view.LastDesiredLinks, DesiredPlanSource: view.DesiredPlanSource,
+		Filter: filter, StoredLabel: "daemon_sas", LiveLabel: "live_sas",
+		StoredSAs: view.StoredSAs, LiveSAs: view.LiveSAs, LiveSAError: view.LiveSAError,
 	})
-	return inspecttext.WriteRotateDebug(w, view)
+	return inspecttext.WriteRotateDebug(w, rotate)
 }
 
 func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {

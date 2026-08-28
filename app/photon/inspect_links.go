@@ -1,35 +1,14 @@
 package main
 
 import (
-	"context"
-	"net"
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	photonstate "github.com/HiggsNet/photon/internal/state"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-type linkInspectionBuild struct {
-	Inspection        inspect.LinkInspection
-	Outputs           []photonstate.LinkOutput
-	PlannedSpecs      map[string]ipsec.TransportLinkSpec
-	ReplannedDesired  int
-	ReplanIgnored     bool
-	LastDesiredLinks  int
-	DesiredPlanSource string
-	PlanError         error
-}
-
-func buildLinkInspection(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState, health []healthLinkJSON) linkInspectionBuild {
-	return buildLinkInspectionWithOptions(rt, verified, checkpoint, runtime, health, true, "live")
-}
-
-// buildStoredLinkInspection reports the last persisted Linux runtime result.
-// Unlike buildLinkInspection, it does not recompute a desired plan from a
-// legacy aggregate state view.
-func buildStoredLinkInspection(rt *Runtime, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) linkInspectionBuild {
+// buildStoredLinkInspection projects the daemon-owned Linux runtime result.
+// Read paths do not run the IPsec planner or platform drivers again.
+func buildStoredLinkInspection(rt *Runtime, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) inspect.LinksDebugView {
 	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
@@ -50,85 +29,14 @@ func buildStoredLinkInspection(rt *Runtime, instances map[string]linkInstanceSta
 		}))
 	}
 	lastDesired := lastReconcileDesiredLinks(reconcile)
-	return linkInspectionBuild{
-		Inspection: inspect.BuildLinks(input), Outputs: buildLinkOutputs(instances, reconcile),
-		PlannedSpecs: map[string]ipsec.TransportLinkSpec{}, ReplannedDesired: lastDesired,
+	view := inspect.LinksDebugView{
+		Inspection: inspect.BuildLinks(input), ReplannedDesired: lastDesired,
 		LastDesiredLinks: lastDesired, DesiredPlanSource: "last_reconcile",
 	}
-}
-
-func linkInspectionControlFromBuild(build linkInspectionBuild) *linkInspectionControl {
-	return &linkInspectionControl{
-		Inspection:        build.Inspection,
-		Outputs:           append([]photonstate.LinkOutput(nil), build.Outputs...),
-		ReplannedDesired:  build.ReplannedDesired,
-		ReplanIgnored:     build.ReplanIgnored,
-		LastDesiredLinks:  build.LastDesiredLinks,
-		DesiredPlanSource: build.DesiredPlanSource,
-	}
-}
-
-func buildLinkInspectionWithOptions(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState, health []healthLinkJSON, allowReplan bool, planSource string) linkInspectionBuild {
-	input := inspect.LinkInput{}
-	plannedSpecs := map[string]ipsec.TransportLinkSpec{}
-	if verified == nil || runtime == nil {
-		return linkInspectionBuild{Inspection: inspect.BuildLinks(input), PlannedSpecs: plannedSpecs}
-	}
-	reconcile := runtime.IPsecReconcile
 	if reconcile != nil {
-		input.LastRunUnix = reconcile.LastRunUnix
-		input.DesiredLinks = reconcile.DesiredLinks
-		input.LastError = reconcile.LastError
-		input.LastDesired = inspectDesiredLinks(reconcile.Desired)
-		input.ActualSAs = inspectLinkSAs(reconcile.ActualSAs)
-		input.Actions = inspectLinkActions(reconcile.Actions)
-		input.Skipped = inspectLinkSkips(reconcile.Skipped)
+		view.StoredSAs = inspectLinkSAs(reconcile.ActualSAs)
 	}
-	input.Health = inspectLinkHealth(health)
-	ids := sortedLinkInstanceIDs(runtime.LinkInstances)
-	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
-	for _, id := range ids {
-		inst := runtime.LinkInstances[id]
-		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, runtime.BirdInstances, inst.GroupID)
-		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
-			BirdState:      birdState,
-			BirdNeighbors:  birdNeighbors,
-			BirdBestRoutes: birdBestRoutes,
-		}))
-	}
-	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
-	replannedDesired := lastDesiredLinks
-	desiredPlanSource := planSource
-	var replanIgnored bool
-	var planErr error
-	if allowReplan {
-		var planned []inspect.DesiredLink
-		var specs map[string]ipsec.TransportLinkSpec
-		planned, specs, planErr = plannedInspectDesiredLinks(rt, verified, checkpoint, runtime)
-		replannedDesired = len(planned)
-		desiredPlanSource = "live"
-		replanIgnored = shouldIgnorePartialReplan(reconcile, replannedDesired, planErr)
-		if replanIgnored {
-			desiredPlanSource = "last_reconcile"
-		} else {
-			input.PlannedDesired = planned
-			plannedSpecs = specs
-		}
-	}
-	inspection := inspect.BuildLinks(input)
-	if planErr != nil {
-		inspection.Summary.DesiredPlanError = planErr.Error()
-	}
-	return linkInspectionBuild{
-		Inspection:        inspection,
-		Outputs:           buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile),
-		PlannedSpecs:      plannedSpecs,
-		ReplannedDesired:  replannedDesired,
-		ReplanIgnored:     replanIgnored,
-		LastDesiredLinks:  lastDesiredLinks,
-		DesiredPlanSource: desiredPlanSource,
-		PlanError:         planErr,
-	}
+	return view
 }
 
 func lastReconcileDesiredLinks(reconcile *ipsecReconcileState) int {
@@ -141,14 +49,6 @@ func lastReconcileDesiredLinks(reconcile *ipsecReconcileState) int {
 	return reconcile.DesiredLinks
 }
 
-func shouldIgnorePartialReplan(reconcile *ipsecReconcileState, replannedDesired int, planErr error) bool {
-	if planErr != nil {
-		return true
-	}
-	lastDesiredLinks := lastReconcileDesiredLinks(reconcile)
-	return lastDesiredLinks > 0 && replannedDesired < lastDesiredLinks
-}
-
 func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
 	ids := make([]string, 0, len(instances))
 	for id := range instances {
@@ -156,42 +56,6 @@ func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func plannedInspectDesiredLinks(rt *Runtime, verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState) ([]inspect.DesiredLink, map[string]ipsec.TransportLinkSpec, error) {
-	specs := map[string]ipsec.TransportLinkSpec{}
-	if rt == nil || rt.Config == nil || verified == nil || verified.Network == nil || runtime == nil || verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() || len(rt.Config.IPsec.LinkGroups) == 0 {
-		return nil, specs, nil
-	}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, rt.Config.IPsec.LinkGroups, ipsec.LinkPlannerOptions{
-		Now:           rt.Now(),
-		DNSResolver:   net.DefaultResolver,
-		ExcludedPeers: peerLifecycleExcludedPeers(runtime.PeerCleanups, syncPeerReadView(checkpoint), rt.Now(), rt.Config.PeerLifecycle),
-	})
-	if err != nil {
-		return nil, specs, err
-	}
-	desired := injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)
-	out := make([]inspect.DesiredLink, 0, len(desired))
-	for _, spec := range desired {
-		item := desiredLinkState{
-			InstanceID:      ipsec.LinkInstanceID(spec),
-			GroupID:         spec.OverlayID,
-			PeerZone:        spec.PeerZone,
-			LinkID:          spec.LinkID,
-			PathKey:         spec.PathKey,
-			TransportID:     spec.TransportID,
-			DesiredSpecHash: ipsec.TransportLinkSpecHash(spec),
-			InterfaceName:   spec.InterfaceName,
-			XFRMIfID:        spec.XFRMIfID,
-			Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
-			LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
-			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
-		}
-		out = append(out, inspect.BuildDesiredLinkFromRuntime(item))
-		specs[item.InstanceID] = spec
-	}
-	return out, specs, nil
 }
 
 func inspectDesiredLinks(items []desiredLinkState) []inspect.DesiredLink {

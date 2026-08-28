@@ -51,28 +51,14 @@ func showFirewall(filter string, verbose bool) error {
 }
 
 func firewallViewWithRuntime(rt *Runtime, netns string, hostOnly bool) (inspect.FirewallDebugView, error) {
-	response, ok, err := firewallStatusViaControl(rt)
+	view, ok, err := readCanonicalViewViaControl[inspect.FirewallDebugView](rt, controlRequest{Method: "firewall_view", NetNS: netns, Host: hostOnly})
 	if err != nil {
 		return inspect.FirewallDebugView{}, err
 	}
-	var snapshot *firewallReconcileState
-	if ok && response.FirewallReconcile != nil {
-		snapshot = response.FirewallReconcile
-	} else if !ok {
-		_, runtime, err := loadOfflineOwnerViews(rt)
-		if err != nil {
-			return inspect.FirewallDebugView{}, err
-		}
-		if runtime != nil {
-			snapshot = runtime.FirewallReconcile
-		}
+	if ok {
+		return view, nil
 	}
-	instances := []FirewallInstanceConfig{}
-	if rt != nil && rt.Config != nil {
-		instances = rt.Config.Firewall.Instances
-	}
-	instances = filterFirewallDebugInstances(instances, netns, hostOnly)
-	return buildFirewallDebugView(rt.Config, instances, snapshot), nil
+	return inspect.FirewallDebugView{}, fmt.Errorf("daemon control socket unavailable; firewall runtime state requires a running daemon")
 }
 
 func filterFirewallDebugInstances(instances []FirewallInstanceConfig, netns string, hostOnly bool) []FirewallInstanceConfig {
@@ -171,16 +157,4 @@ func firewallInlineHookViews(hooks firewall.NativeHooks) []inspect.FirewallInlin
 	appendRules(firewall.BackendIptables, "ipv4", hooks.IPTables.IPv4)
 	appendRules(firewall.BackendIptables, "ipv6", hooks.IPTables.IPv6)
 	return out
-}
-
-func firewallStatusViaControl(rt *Runtime) (*controlResponse, bool, error) {
-	if rt == nil || rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "firewall_status"})
-	if err != nil && isControlSocketUnavailable(err) {
-		return nil, false, nil
-	}
-	return response, true, err
 }
