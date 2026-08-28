@@ -8,16 +8,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func peerLifecycleInputFromState(state *stateFile, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
-	if state == nil {
-		return inspect.PeerLifecycleInput{
-			PeerID: peerID, PeerZone: peerZone, HasOverlayConfig: hasOverlayConfig, Now: now, Config: cfg,
-		}
-	}
-	return peerLifecycleInputFromOwners(state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, peerID, peerZone, now, cfg, hasOverlayConfig)
-}
-
-func peerLifecycleInputFromOwners(network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+func peerLifecycleInput(network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,
 		PeerZone:         peerZone,
@@ -73,31 +64,10 @@ func peerLifecycleInputFromOwners(network *zone.NetworkState, peers map[string]s
 	return input
 }
 
-// hasIPsecConfig returns true if the local node has IPsec link groups
-// configured, meaning it participates in overlay mesh.
-func hasIPsecConfig(state *stateFile) bool {
-	// state alone doesn't carry config; this is a best-effort heuristic used
-	// only when config is not injected. When config is available,
-	// derivePeerStatuses injects this via the config-aware path.
-	return state != nil && state.IPsecReconcile != nil && state.IPsecReconcile.DesiredLinks > 0
-}
-
 // derivePeerStatuses computes status for all known peers (from SyncPeers,
 // LinkInstances and desired links). The result is sorted by peer id for stable
 // output.
-func derivePeerStatuses(
-	state *stateFile,
-	now time.Time,
-	cfg inspect.PeerLifecycleConfig,
-	hasOverlayConfig bool,
-) []inspect.PeerStatusInfo {
-	if state == nil {
-		return nil
-	}
-	return derivePeerStatusesFromOwners(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, cfg, hasOverlayConfig)
-}
-
-func derivePeerStatusesFromOwners(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
+func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
 	seen := make(map[string]bool)
 	var out []inspect.PeerStatusInfo
 
@@ -108,7 +78,7 @@ func derivePeerStatusesFromOwners(managedZone zone.ZonePath, network *zone.Netwo
 			return
 		}
 		seen[peerID] = true
-		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInputFromOwners(network, peers, cleanups, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
+		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInput(network, peers, cleanups, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
 		out = append(out, info)
 	}
 

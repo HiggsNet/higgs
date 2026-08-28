@@ -197,7 +197,7 @@ func ensureIPsecTransportKey(state *stateFile, now time.Time) (*ipsecTransportKe
 		return nil, nil, fmt.Errorf("state is nil")
 	}
 	if key := state.IPsecTransportKey; key != nil && len(key.PublicKey) > 0 && len(key.PrivateKey) > 0 {
-		record := transportKeyRecordFromState(key)
+		record := buildTransportKeyRecord(key)
 		return key, record, nil
 	}
 	generated, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, zonePublicKey(state)...)
@@ -216,7 +216,7 @@ func ensureIPsecTransportKey(state *stateFile, now time.Time) (*ipsecTransportKe
 	}, record, nil
 }
 
-func transportKeyRecordFromState(key *ipsecTransportKeyState) *ipsec.TransportKeyRecord {
+func buildTransportKeyRecord(key *ipsecTransportKeyState) *ipsec.TransportKeyRecord {
 	record := &ipsec.TransportKeyRecord{
 		Version:     1,
 		Kind:        key.Kind,

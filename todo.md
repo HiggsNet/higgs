@@ -240,6 +240,26 @@ authorization 和 transport records 作为可信事实来源。
     common Store，删除 `autoAnnouncePlanProjection`。
     peer status 显式组合 common verified Network/managed zone、gossip checkpoint 与 Linux cleanup/link/IPsec runtime，
     control 不再构造聚合 stateFile，删除 `peerStatusProjection`。
+    peer lifecycle cleanup 直接从 common Network/gossip checkpoint 与 cloned Linux cleanup markers 生成 plan；先按
+    source revision 提交 runtime marker，再删除 common checkpoint，删除预判 projection 与完整 Snapshot。
+    revoked gossip cleanup 直接读取 common verified Network/checkpoint 并提交 checkpoint patch，删除
+    `revocationCleanupProjection`。
+    revocation impact 显式组合 common Network/gossip peers、Linux link instances 与 bootstrap 配置，删除永远返回
+    false 的 state bootstrap 占位推断和最后一个 `revocationImpactProjection`；`metaLocked` 归回 StateStore 后删除整个
+    `daemon_state_projection.go`。
+    随后回收迁移残留：revocation impact 的显式 owner 输入成为唯一 API，删除 stateFile wrapper 与 `FromOwners`
+    双层命名；删除已经零调用的 `buildLinkInspectionFromReconcile`。health target 与 state GC 也删除
+    `FromState/FromRuntime/FromBirdInstances` 双入口，调用方直接提取 owner 字段后调用唯一业务 API。
+    peer lifecycle input/status/cleanup 同样删除 stateFile wrapper 与 `FromOwners` 命名，在线、direct CLI 和测试均显式
+    传入 Network、checkpoint peer、cleanup/link/IPsec runtime。
+    admission diagnosis 以 common VerifiedState + Linux admission history 作为唯一生产 API，删除 stateFile wrapper
+    与 `FromOwners` 命名；重复 fixture 转换仅保留在测试 helper。
+    第二遍调用图审计继续删除只为旧名字或测试默认参数存在的转发：CLI `syncRun`、transport peer seed、packet/timer
+    handler 双入口、object chunk/fetch-zone/chunk-send 的 nil-address 便捷层及 link netns 别名均已移除；测试直接调用
+    实际入口。跨 common/Linux owner 的 discovery input、revocation purge plan、stored link inspection、link output 和
+    transport key 转换保留其真实组合逻辑，但统一改成 `build/merge/stored` 业务命名，不再用 `FromOwners/FromRuntime`
+    暗示迁移层。接口实现、平台 Runtime 对 driver 的封装、以及真正被多个调用方使用的默认参数/序列化边界不按
+    “一行函数”机械删除。
 
 ### 10.0 冻结 v1 契约与威胁模型
 

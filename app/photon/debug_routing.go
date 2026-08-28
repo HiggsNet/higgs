@@ -187,7 +187,7 @@ func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, state *stateFile) {
 
 func birdInterfaceContexts(state *stateFile, netnsName string) map[string]inspect.BirdInterfaceContext {
 	contexts := map[string]inspect.BirdInterfaceContext{}
-	for _, output := range linkOutputsFromState(state) {
+	for _, output := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
 		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
 			continue
 		}
@@ -493,12 +493,6 @@ func routingNetnsForOverlay(rt *Runtime, overlayID string) string {
 		}
 	}
 	return ""
-}
-
-// routingNetnsNameForLinkInstance returns the netns name for a link instance.
-// LinkInstance.GroupID = overlay ID; we map overlay → netns via config.
-func routingNetnsNameForLinkInstance(rt *Runtime, groupID string) string {
-	return routingNetnsForOverlay(rt, groupID)
 }
 
 // _ ensures import is used

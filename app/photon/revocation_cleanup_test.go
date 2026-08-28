@@ -87,7 +87,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, "node-b.catofes.", now)
 	if impact.RevokedZone != "node-b.catofes." {
 		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
 	}
@@ -152,7 +152,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, "node-b.catofes.", now)
 	// The leaf should be in the subtree.
 	found := slices.Contains(impact.RevokedSubtree, leafZone)
 	if !found {
@@ -171,7 +171,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 // TestComputeRevocationImpactNilState verifies that nil state produces an
 // empty impact.
 func TestComputeRevocationImpactNilState(t *testing.T) {
-	impact := ComputeRevocationImpact(nil, "node-b.catofes.", time.Now())
+	impact := ComputeRevocationImpact(nil, nil, nil, "node-b.catofes.", time.Now())
 	if impact.RevokedZone != "node-b.catofes." {
 		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
 	}
@@ -461,7 +461,7 @@ func TestAllRevocationImpact(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impacts := AllRevocationImpact(state, nil, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, nil, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}
@@ -475,7 +475,7 @@ func TestAllRevocationImpactEmpty(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
 
-	impacts := AllRevocationImpact(state, nil, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, nil, now)
 	if impacts != nil {
 		t.Fatalf("expected nil impacts, got %d", len(impacts))
 	}
@@ -752,7 +752,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		},
 	}
 
-	impacts := AllRevocationImpact(state, config, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, config, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}

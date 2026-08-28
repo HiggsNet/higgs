@@ -379,10 +379,6 @@ func syncOnce(peerID string) error {
 	}
 }
 
-func syncRun(ctx context.Context, interval time.Duration) error {
-	return daemonRun(ctx, interval)
-}
-
 func zonePathStrings(paths []zone.ZonePath) []string {
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
@@ -681,7 +677,7 @@ func (sr *SyncRuntime) seedTransportPeers(state *stateFile, deps *SyncTransportD
 	if state == nil || sr.Transport == nil {
 		return
 	}
-	addVerifiedZonePeers(state, sr.Transport, sr.Config)
+	sr.addVerifiedZonePeers(state)
 	sr.seedObservedPeerPaths(state)
 	for peerID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
 		if peerID == sr.Config.PeerID || peerID == string(state.ManagedZone) {
@@ -882,10 +878,6 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(state *stateFile) (*co
 	}, nil
 }
 
-func addVerifiedZonePeers(state *stateFile, transport *gossip.Transport, config *syncConfigFile) {
-	newSyncRuntime(config, transport, nil).addVerifiedZonePeers(state)
-}
-
 // addVerifiedZonePeers mutates transport known-peer state based on a read-only
 // state view.
 func (sr *SyncRuntime) addVerifiedZonePeers(state *stateFile) {
@@ -1036,10 +1028,6 @@ func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyA
 type datagramSendDiagnostics struct {
 	Oversized      []gossip.OversizedDatagramObject
 	ChunkFallbacks int
-}
-
-func sendDetachedSnapshotWithDiagnostics(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
-	return sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, peerID, nil, now, logger)
 }
 
 func sendDetachedSnapshotWithDiagnosticsTo(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {

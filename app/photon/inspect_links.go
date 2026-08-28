@@ -25,14 +25,10 @@ func buildLinkInspection(rt *Runtime, state *stateFile, health []healthLinkJSON)
 	return buildLinkInspectionWithOptions(rt, state, health, true, "live")
 }
 
-func buildLinkInspectionFromReconcile(rt *Runtime, state *stateFile, health []healthLinkJSON) linkInspectionBuild {
-	if state == nil {
-		return buildLinkInspectionFromRuntime(rt, nil, nil, nil, health)
-	}
-	return buildLinkInspectionFromRuntime(rt, state.LinkInstances, state.IPsecReconcile, state.BirdInstances, health)
-}
-
-func buildLinkInspectionFromRuntime(rt *Runtime, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) linkInspectionBuild {
+// buildStoredLinkInspection reports the last persisted Linux runtime result.
+// Unlike buildLinkInspection, it does not recompute a desired plan from a
+// legacy aggregate state view.
+func buildStoredLinkInspection(rt *Runtime, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) linkInspectionBuild {
 	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
@@ -54,7 +50,7 @@ func buildLinkInspectionFromRuntime(rt *Runtime, instances map[string]linkInstan
 	}
 	lastDesired := lastReconcileDesiredLinks(reconcile)
 	return linkInspectionBuild{
-		Inspection: inspect.BuildLinks(input), Outputs: linkOutputsFromRuntime(instances, reconcile),
+		Inspection: inspect.BuildLinks(input), Outputs: buildLinkOutputs(instances, reconcile),
 		PlannedSpecs: map[string]ipsec.TransportLinkSpec{}, ReplannedDesired: lastDesired,
 		LastDesiredLinks: lastDesired, DesiredPlanSource: "last_reconcile",
 	}
@@ -124,7 +120,7 @@ func buildLinkInspectionWithOptions(rt *Runtime, state *stateFile, health []heal
 	}
 	return linkInspectionBuild{
 		Inspection:        inspection,
-		Outputs:           linkOutputsFromState(state),
+		Outputs:           buildLinkOutputs(state.LinkInstances, state.IPsecReconcile),
 		PlannedSpecs:      plannedSpecs,
 		ReplannedDesired:  replannedDesired,
 		ReplanIgnored:     replanIgnored,

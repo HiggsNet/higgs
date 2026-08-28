@@ -280,7 +280,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		default:
 		}
 		view = startup.Common.ReadView()
-		input := gossipDiscoveryInputFromOwners(view, startup.Runtime.PeerCleanups, config)
+		input := buildGossipDiscoveryInput(view, startup.Runtime.PeerCleanups, config)
 		snapshot, err := tryObjectPullTCPUntil(input, peerID, path, deadline)
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
@@ -350,7 +350,7 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	if err != nil {
 		return err
 	}
-	plan := purgePlanFromOwners(commonPlan, startup.Runtime)
+	plan := mergePurgePlan(commonPlan, startup.Runtime)
 	if apply {
 		view := startup.Common.ReadView()
 		runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)

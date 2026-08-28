@@ -148,14 +148,6 @@ func applyRevokeIPAMAssignmentIntent(state *VerifiedState, intent RevokeIPAMAssi
 	return applyPutRecordIntent(state, PutRecordIntent{Zone: intent.Zone, Key: key, Type: routing.RecordTypeIPAMAssignment, Value: value}, now)
 }
 
-func applyAnnounceRouteIntent(state *VerifiedState, intent AnnounceRouteIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
-	return applyRouteIntent(state, intent.Zone, intent.Prefix, intent.Controller, true, now)
-}
-
-func applyWithdrawRouteIntent(state *VerifiedState, intent WithdrawRouteIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
-	return applyRouteIntent(state, intent.Zone, intent.Prefix, intent.Controller, false, now)
-}
-
 func applyRouteIntent(state *VerifiedState, path zone.ZonePath, prefix, controller string, active bool, now time.Time) (*zone.Record, zone.ZonePath, error) {
 	if !path.Valid() {
 		return nil, "", zone.ErrInvalidZonePath

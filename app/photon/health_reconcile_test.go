@@ -30,7 +30,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
+	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -74,7 +74,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(state.ManagedZone), nil)
+	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -127,7 +127,7 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(local))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -183,7 +183,7 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 		},
 	}
 
-	targets := healthTargetsFromState(state, string(local), []ipsec.LinkGroupSpec{group})
+	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, string(local))
 	if len(targets) != 0 {
 		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
 	}

@@ -912,7 +912,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		diagnosis := diagnoseAutoJoinAdmissionFromOwners(view.State, admission, d.Sync.now())
+		diagnosis := diagnoseAutoJoinAdmission(view.State, admission, d.Sync.now())
 		response := controlResponse{
 			OK:        true,
 			PeerID:    d.Sync.Config.PeerID,
@@ -935,7 +935,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "links_status":
 		health := d.healthStatusResponse()
 		d.StateStore.mu.RLock()
-		build := buildLinkInspectionFromRuntime(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
+		build := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
 		actualSAs := []linkSAState(nil)
 		if d.StateStore.runtime.IPsecReconcile != nil {
 			actualSAs = append(actualSAs, d.StateStore.runtime.IPsecReconcile.ActualSAs...)
@@ -967,11 +967,20 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		applyStateStoreMeta(&response, meta)
 		writeControlResponse(conn, response)
 	case "revoke_status":
-		impacts, meta, loaded := d.StateStore.revocationImpactProjection(d.Sync.Config, d.Sync.now())
-		if !loaded {
+		d.StateStore.writeMu.Lock()
+		view := d.StateStore.common.ReadView()
+		peers := syncPeerReadView(view.Gossip)
+		d.StateStore.mu.RLock()
+		meta := d.StateStore.metaLocked()
+		if view.State == nil || d.StateStore.runtime == nil {
+			d.StateStore.mu.RUnlock()
+			d.StateStore.writeMu.Unlock()
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
+		impacts := AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, d.Sync.Config, d.Sync.now())
+		d.StateStore.mu.RUnlock()
+		d.StateStore.writeMu.Unlock()
 		response := controlResponse{
 			OK:               true,
 			PeerID:           d.Sync.Config.PeerID,
@@ -1063,7 +1072,7 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 
 func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
 	if event.Type == daemonEventPacket {
-		return daemonEventResult{Error: d.handlePacketEvent(event.Packet, controlContext(event.Context))}, false, false
+		return daemonEventResult{Error: d.processPacketEvent(event.Packet, controlContext(event.Context))}, false, false
 	}
 	switch event.Type {
 	case daemonEventRecordPut:
@@ -1376,7 +1385,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		return nil, err
 	}
 	state, revision := d.StateStore.Snapshot()
-	plan := purgePlanFromOwners(commonPlan, linuxRuntimeStateFromLegacy(state))
+	plan := mergePurgePlan(commonPlan, linuxRuntimeStateFromLegacy(state))
 	if !apply {
 		return plan, nil
 	}
@@ -1450,22 +1459,11 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-// processPacketEvent dispatches packet handling without a mutable stateFile
-// lock. Packet fast-path updates are serialized by the daemon event loop and
-// commit through StateStore.
 func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
-	return d.handlePacketEvent(packet, ctx)
-}
-
-func (d *DaemonService) handlePacketEvent(packet *gossip.Packet, ctx context.Context) error {
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
 	return d.handlePacketEventSyncSession(packet, ctx)
-}
-
-func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
-	return d.handleSyncTimerEventLoop(ctx, force)
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
@@ -1703,14 +1701,26 @@ func (d *DaemonService) flushRevocationCleanup() {
 	// This function is called after every sync-state update. Most calls have no
 	// revocations, so check the immutable committed state first and avoid the
 	// copy-on-write transaction (which deep-copies the whole state through JSON).
-	projection := d.StateStore.revocationCleanupProjection(d.Sync.now())
-	if len(projection.revokedZones) == 0 {
+	now := d.Sync.now()
+	view := d.StateStore.common.ReadView()
+	if view.State == nil {
 		return
 	}
+	revokedZones := collectAllRevokedZones(view.State.Network, now)
+	if len(revokedZones) == 0 {
+		return
+	}
+	needsStateCleanup := false
+	for peerID, peer := range syncPeerReadView(view.Gossip) {
+		if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
+			needsStateCleanup = true
+			break
+		}
+	}
 	d.noteReconcileFlush("revocation_cleanup")
-	if projection.needsStateCleanup {
+	if needsStateCleanup {
 		patches := make(map[string]corestate.PeerCheckpointPatch)
-		for path := range projection.revokedZones {
+		for path := range revokedZones {
 			peerID := path.String()
 			patches[peerID] = corestate.PeerCheckpointPatch{
 				DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
@@ -1730,7 +1740,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 		}
 	}
 	for peerID := range d.peerObservabilitySnapshots() {
-		if projection.revokedZones[zone.ZonePath(peerID)] {
+		if revokedZones[zone.ZonePath(peerID)] {
 			d.PeerObservability.Delete(peerID)
 		}
 	}

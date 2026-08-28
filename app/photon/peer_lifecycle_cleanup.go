@@ -52,64 +52,32 @@ func peerLifecycleExcludedPeers(state *stateFile, now time.Time, cfg inspect.Pee
 	return out
 }
 
-func peerLifecycleCleanupRequired(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) bool {
-	if state == nil {
-		return false
+// applyPeerLifecycleCleanup mutates an owner-provided workspace. peers and
+// cleanups must be initialized maps so changes remain visible to the caller.
+// Revoked peers retain diagnostics for one cleanup_after window; offline peers
+// are removed immediately and receive a local data-plane suppression marker.
+func applyPeerLifecycleCleanup(network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, now time.Time, cfg inspect.PeerLifecycleConfig) (removed []string, changed bool) {
+	if peers == nil {
+		peers = make(map[string]syncPeerState)
 	}
-	cfg = inspect.NormalizePeerLifecycleConfig(cfg)
-	revoked := CollectAllRevokedZones(state, now)
-	for peerID, cleanup := range state.PeerCleanups {
-		_, exists := state.SyncPeers[peerID]
-		switch cleanup.Reason {
-		case peerCleanupReasonRevoked:
-			if !revoked[zone.ZonePath(peerID)] || cleanup.CleanupUnix <= 0 ||
-				!now.Before(time.Unix(cleanup.CleanupUnix, 0).Add(cfg.CleanupAfter)) {
-				return true
-			}
-		case peerCleanupReasonOffline:
-			if exists {
-				return true
-			}
-		default:
-			return true
-		}
-	}
-	for peerID, peer := range state.SyncPeers {
-		if _, marked := state.PeerCleanups[peerID]; marked {
-			continue
-		}
-		if revoked[zone.ZonePath(peerID)] || peerLifecycleCleanupDue(peer, now, cfg) {
-			return true
-		}
-	}
-	return false
-}
-
-// applyPeerLifecycleCleanup mutates only local daemon metadata. Revoked peers
-// keep their diagnostic SyncPeers entry for one cleanup_after window. Peers
-// that merely went offline have already had the whole window since their last
-// activity, so their cache entry is removed immediately and a local marker
-// prevents stale signed records from recreating data-plane links.
-func applyPeerLifecycleCleanup(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) (removed []string, changed bool) {
-	if state == nil {
+	if cleanups == nil {
 		return nil, false
 	}
-	normalizeSyncPeers(state)
 	cfg = inspect.NormalizePeerLifecycleConfig(cfg)
-	revoked := CollectAllRevokedZones(state, now)
+	revoked := collectAllRevokedZones(network, now)
 
-	for peerID, cleanup := range state.PeerCleanups {
-		peer, exists := state.SyncPeers[peerID]
+	for peerID, cleanup := range cleanups {
+		peer, exists := peers[peerID]
 		switch cleanup.Reason {
 		case peerCleanupReasonRevoked:
 			if !revoked[zone.ZonePath(peerID)] {
-				delete(state.PeerCleanups, peerID)
+				delete(cleanups, peerID)
 				changed = true
 				continue
 			}
 			if cleanup.CleanupUnix <= 0 {
 				cleanup.CleanupUnix = now.Unix()
-				state.PeerCleanups[peerID] = cleanup
+				cleanups[peerID] = cleanup
 				changed = true
 				continue
 			}
@@ -117,35 +85,35 @@ func applyPeerLifecycleCleanup(state *stateFile, now time.Time, cfg inspect.Peer
 				continue
 			}
 			if exists {
-				delete(state.SyncPeers, peerID)
+				delete(peers, peerID)
 				removed = append(removed, peerID)
 			}
-			delete(state.PeerCleanups, peerID)
+			delete(cleanups, peerID)
 			changed = true
 		case peerCleanupReasonOffline:
 			if exists && peer.LastSyncUnix > cleanup.LastActiveUnix {
-				delete(state.PeerCleanups, peerID)
+				delete(cleanups, peerID)
 				changed = true
 				continue
 			}
 			if exists {
-				delete(state.SyncPeers, peerID)
+				delete(peers, peerID)
 				removed = append(removed, peerID)
 				changed = true
 			}
 		default:
-			delete(state.PeerCleanups, peerID)
+			delete(cleanups, peerID)
 			changed = true
 		}
 	}
 
-	for peerID, peer := range state.SyncPeers {
-		if _, marked := state.PeerCleanups[peerID]; marked {
+	for peerID, peer := range peers {
+		if _, marked := cleanups[peerID]; marked {
 			continue
 		}
 		lastActive := peerLifecycleLastActiveUnix(peer)
 		if revoked[zone.ZonePath(peerID)] {
-			state.PeerCleanups[peerID] = peerLifecycleCleanupState{
+			cleanups[peerID] = peerLifecycleCleanupState{
 				LastActiveUnix: lastActive,
 				CleanupUnix:    now.Unix(),
 				Reason:         peerCleanupReasonRevoked,
@@ -156,12 +124,12 @@ func applyPeerLifecycleCleanup(state *stateFile, now time.Time, cfg inspect.Peer
 		if !peerLifecycleCleanupDue(peer, now, cfg) {
 			continue
 		}
-		state.PeerCleanups[peerID] = peerLifecycleCleanupState{
+		cleanups[peerID] = peerLifecycleCleanupState{
 			LastActiveUnix: lastActive,
 			CleanupUnix:    now.Unix(),
 			Reason:         peerCleanupReasonOffline,
 		}
-		delete(state.SyncPeers, peerID)
+		delete(peers, peerID)
 		removed = append(removed, peerID)
 		changed = true
 	}
@@ -178,15 +146,25 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 		cfg = d.Sync.App.Config.PeerLifecycle
 	}
 	now := d.Sync.now()
-	if !d.StateStore.peerLifecycleCleanupProjection(now, cfg) {
+	d.StateStore.writeMu.Lock()
+	view := d.StateStore.common.ReadView()
+	peers := syncPeerReadView(view.Gossip)
+	d.StateStore.mu.RLock()
+	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
+	revision := d.StateStore.revision
+	d.StateStore.mu.RUnlock()
+	d.StateStore.writeMu.Unlock()
+	if view.State == nil {
 		return false
 	}
-	state, revision := d.StateStore.Snapshot()
-	removed, changed := applyPeerLifecycleCleanup(state, now, cfg)
+	if cleanups == nil {
+		cleanups = make(map[string]peerLifecycleCleanupState)
+	}
+	removed, changed := applyPeerLifecycleCleanup(view.State.Network, peers, cleanups, now, cfg)
 	if !changed {
 		return false
 	}
-	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(revision, state.PeerCleanups); err != nil {
+	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(revision, cleanups); err != nil {
 		d.logWarn("peer_lifecycle", "cleanup_commit_failed", map[string]any{"error": err})
 		return false
 	}

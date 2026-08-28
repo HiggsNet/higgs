@@ -56,7 +56,7 @@ func TestSendDetachedSnapshotsChunksOversizedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "peer", now, nil)
+	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, "peer", nil, now, nil)
 	if err != nil {
 		t.Fatalf("sendDetachedSnapshotWithDiagnostics returned error for oversized record: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSendDetachedSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "node-b.catofes.", now, nil)
+	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, "node-b.catofes.", nil, now, nil)
 	if err != nil {
 		t.Fatalf("sendDetachedSnapshotWithDiagnostics: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestSendDetachedSnapshotsChunksOversizedSkeleton(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	diag, err := sendDetachedSnapshotWithDiagnostics(snapshot, plan, transport, "peer", now, nil)
+	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, transport, "peer", nil, now, nil)
 	if err != nil {
 		t.Fatalf("sendDetachedSnapshotWithDiagnostics returned error for oversized skeleton: %v", err)
 	}

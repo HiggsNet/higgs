@@ -305,9 +305,9 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 	case RevokeIPAMAssignmentIntent:
 		out.Record, changed, err = applyRevokeIPAMAssignmentIntent(candidate, typed, now)
 	case AnnounceRouteIntent:
-		out.Record, changed, err = applyAnnounceRouteIntent(candidate, typed, now)
+		out.Record, changed, err = applyRouteIntent(candidate, typed.Zone, typed.Prefix, typed.Controller, true, now)
 	case WithdrawRouteIntent:
-		out.Record, changed, err = applyWithdrawRouteIntent(candidate, typed, now)
+		out.Record, changed, err = applyRouteIntent(candidate, typed.Zone, typed.Prefix, typed.Controller, false, now)
 	case PublishSOCKS5Intent:
 		out.Record, changed, err = applyPublishSOCKS5Intent(candidate, typed, now)
 	case WithdrawSOCKS5Intent:

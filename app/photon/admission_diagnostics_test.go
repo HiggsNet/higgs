@@ -8,7 +8,17 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
+
+func diagnoseTestAutoJoinAdmission(state *stateFile, now time.Time) inspect.AdmissionDiagnosis {
+	if state == nil {
+		return diagnoseAutoJoinAdmission(nil, nil, now)
+	}
+	return diagnoseAutoJoinAdmission(&corestate.VerifiedState{
+		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
+	}, state.Admission, now)
+}
 
 func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 	dir := t.TempDir()
@@ -18,7 +28,7 @@ func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 		t.Fatalf("pre-adopt: adopted=%v err=%v", adopted, err)
 	}
 	now := time.Unix(2000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if d.Pending {
 		t.Fatalf("diagnosis should not be pending after adoption")
 	}
@@ -32,7 +42,7 @@ func TestDiagnoseAutoJoinMissingParentZone(t *testing.T) {
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
 	delete(state.Network.Zones, state.ManagedZone.Parent())
 	now := time.Unix(1000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -51,7 +61,7 @@ func TestDiagnoseAutoJoinMissingDelegation(t *testing.T) {
 	}
 	delete(parentState.Delegations, state.ManagedZone)
 	now := time.Unix(1000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -64,7 +74,7 @@ func TestDiagnoseAutoJoinDelegationKeyMismatch(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
 	now := time.Unix(1000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -77,7 +87,7 @@ func TestDiagnoseAutoJoinNoBootstrapSync(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
 	now := time.Unix(1000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -95,7 +105,7 @@ func TestDiagnoseAutoJoinWaitingForAdoption(t *testing.T) {
 		PendingSinceUnix:      now.Add(-1 * time.Hour).Unix(),
 		LastBootstrapSyncUnix: now.Add(-5 * time.Minute).Unix(),
 	}
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -108,7 +118,7 @@ func TestDiagnoseAutoJoinJoinRequestPresent(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
 	now := time.Unix(1000, 0)
-	d := diagnoseAutoJoinAdmission(state, now)
+	d := diagnoseTestAutoJoinAdmission(state, now)
 	if d.JoinRequestB64 == "" {
 		t.Fatalf("join_request should be present for pending state with key")
 	}

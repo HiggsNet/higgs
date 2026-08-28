@@ -495,7 +495,7 @@ func (d *DaemonService) recordBirdHealthObservationForState(state *stateFile, ne
 	if d == nil || d.health == nil || state == nil || observed == nil {
 		return
 	}
-	for _, link := range linkOutputsFromState(state) {
+	for _, link := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
 		if link.RuntimeRole != "staged" || link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
 			continue
 		}
@@ -742,7 +742,7 @@ func birdRotateInterfacePolicies(state *stateFile, netnsName string, overlays []
 		return nil
 	}
 	metrics := make(map[string]uint)
-	for _, link := range linkOutputsFromState(state) {
+	for _, link := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
 		if link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
 			continue
 		}

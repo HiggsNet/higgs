@@ -154,14 +154,15 @@ func derivePeerStatus(state *stateFile, peerID string, peerZone zone.ZonePath, n
 	if state == nil {
 		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{PeerID: peerID, PeerZone: peerZone, StateAvailable: false, Now: now, Config: cfg})
 	}
-	return inspect.BuildPeerLifecycleStatus(peerLifecycleInputFromState(state, peerID, peerZone, now, cfg, false))
+	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, peerID, peerZone, now, cfg, false))
 }
 
 func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) []zone.ZonePath {
 	if state == nil {
 		return nil
 	}
-	peers := derivePeerStatuses(state, now, inspect.NormalizePeerLifecycleConfig(cfg), hasIPsecConfig(state))
+	hasOverlay := state.IPsecReconcile != nil && state.IPsecReconcile.DesiredLinks > 0
+	peers := derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, inspect.NormalizePeerLifecycleConfig(cfg), hasOverlay)
 	seen := make(map[zone.ZonePath]bool)
 	var out []zone.ZonePath
 	for _, peer := range peers {

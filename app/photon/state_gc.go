@@ -12,14 +12,7 @@ type stateGCPlan struct {
 	OrphanBirdInstances []string `json:"orphan_bird_instances,omitempty"`
 }
 
-func buildStateGCPlan(config *appConfig, state *stateFile) *stateGCPlan {
-	if state == nil {
-		return &stateGCPlan{}
-	}
-	return buildStateGCPlanFromBirdInstances(config, state.BirdInstances)
-}
-
-func buildStateGCPlanFromBirdInstances(config *appConfig, instances map[string]*BirdInstanceState) *stateGCPlan {
+func buildStateGCPlan(config *appConfig, instances map[string]*BirdInstanceState) *stateGCPlan {
 	plan := &stateGCPlan{}
 	if len(instances) == 0 {
 		return plan
@@ -59,7 +52,7 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	instances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
 	revision := d.StateStore.revision
 	d.StateStore.mu.RUnlock()
-	plan := buildStateGCPlanFromBirdInstances(d.Sync.App.Config, instances)
+	plan := buildStateGCPlan(d.Sync.App.Config, instances)
 	if !apply {
 		return plan, nil
 	}
@@ -88,7 +81,7 @@ func garbageCollectState(apply, direct bool) error {
 	}
 	state.Lock()
 	defer state.Unlock()
-	plan := buildStateGCPlan(rt.Config, state)
+	plan := buildStateGCPlan(rt.Config, state.BirdInstances)
 	if apply && applyStateGCPlan(state, plan) {
 		if err := rt.SaveState(state); err != nil {
 			return err

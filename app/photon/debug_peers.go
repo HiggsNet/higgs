@@ -70,7 +70,7 @@ func buildPeerLifecycleDebugView(rt *Runtime, state *stateFile) inspect.PeerLife
 	}
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
-	peers := derivePeerStatuses(state, now, cfg, hasOverlay)
+	peers := derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, cfg, hasOverlay)
 	return inspect.BuildPeerLifecycleDebug(inspect.PeerLifecycleDebugInput{
 		Config: cfg,
 		Peers:  peers,
@@ -100,7 +100,7 @@ func (d *DaemonService) peerStatusSnapshotForControl() ([]inspect.PeerStatusInfo
 		d.StateStore.writeMu.Unlock()
 		return nil, meta, false
 	}
-	statuses := derivePeerStatusesFromOwners(view.State.ManagedZone, view.State.Network, peers, d.StateStore.runtime.PeerCleanups, d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, now, cfg, hasOverlay)
+	statuses := derivePeerStatuses(view.State.ManagedZone, view.State.Network, peers, d.StateStore.runtime.PeerCleanups, d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, now, cfg, hasOverlay)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
 	return statuses, meta, true

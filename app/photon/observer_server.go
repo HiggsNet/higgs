@@ -338,7 +338,7 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	}
 	health := d.healthStatusResponse()
 	d.StateStore.mu.RLock()
-	build := buildLinkInspectionFromRuntime(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
+	build := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
 	d.StateStore.mu.RUnlock()
 	view := build.Inspection
 	// Single link detail

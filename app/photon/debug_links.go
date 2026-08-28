@@ -97,7 +97,7 @@ func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceSt
 	}
 	// In the per-netns model, routing is configured at the netns level.
 	// Map the overlay groupID to netns name and look up the BIRD instance by netns.
-	netnsName := routingNetnsNameForLinkInstance(rt, groupID)
+	netnsName := routingNetnsForOverlay(rt, groupID)
 	if netnsName == "" {
 		return
 	}

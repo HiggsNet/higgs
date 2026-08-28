@@ -6,6 +6,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func showStatus() error {
@@ -51,8 +52,10 @@ func statusInputFromState(rt *Runtime, state *stateFile) inspect.StatusInput {
 	}
 	input := inspect.StatusInput{
 		ManagedZone: state.ManagedZone,
-		Admission:   diagnoseAutoJoinAdmission(state, rt.Now()),
-		Links:       buildLinkInspection(rt, state, nil).Inspection,
+		Admission: diagnoseAutoJoinAdmission(&corestate.VerifiedState{
+			ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
+		}, state.Admission, rt.Now()),
+		Links: buildLinkInspection(rt, state, nil).Inspection,
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false
@@ -60,6 +63,6 @@ func statusInputFromState(rt *Runtime, state *stateFile) inspect.StatusInput {
 		cfg = rt.Config.PeerLifecycle
 		hasOverlay = len(rt.Config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(state, rt.Now(), cfg, hasOverlay)
+	input.Peers = derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, rt.Now(), cfg, hasOverlay)
 	return input
 }

@@ -9,7 +9,6 @@ import (
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // debugPing resolves the IPsec link targets for a peer zone and pings each one
@@ -29,11 +28,7 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 		return nil
 	}
 	localZone := string(state.ManagedZone)
-	var groups []ipsec.LinkGroupSpec
-	if rt.Config != nil {
-		groups = rt.Config.IPsec.LinkGroups
-	}
-	targets := healthTargetsFromState(state, localZone, groups)
+	targets := healthTargets(state.LinkInstances, state.IPsecReconcile, localZone)
 	if rt.Config != nil {
 		opts.FallbackCount = rt.Config.Health.Burst
 		opts.FallbackTimeout = rt.Config.Health.Timeout

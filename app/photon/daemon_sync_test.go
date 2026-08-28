@@ -160,8 +160,8 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 		}
 	}
 
-	if err := service.handleSyncTimerEventLoop(context.Background(), false); err != nil {
-		t.Fatalf("handleSyncTimerEventLoop: %v", err)
+	if err := service.handleSyncTimerEvent(context.Background(), false); err != nil {
+		t.Fatalf("handleSyncTimerEvent: %v", err)
 	}
 	session := service.hostRuntime.Gossip.Session(peerID)
 	if session == nil || session.State != gossip.SyncSessionSummarySent {

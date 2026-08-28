@@ -853,7 +853,7 @@ func cmdSync() *cli.Command {
 					&cli.IntFlag{Name: "interval", Value: 5, Usage: "Outbound sync interval in seconds"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
+					return daemonRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
 				},
 			},
 			{

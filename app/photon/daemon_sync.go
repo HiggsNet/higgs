@@ -40,7 +40,7 @@ func (d *DaemonService) EnableEventLoopSync(clock corehost.Clock) {
 	d.hostRuntime.ResetScheduler(clock)
 }
 
-func (d *DaemonService) handleSyncTimerEventLoop(ctx context.Context, force bool) error {
+func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
 	if d == nil || d.Sync == nil {
 		return nil
 	}
@@ -167,10 +167,6 @@ func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
 	return d.hostRuntime.PostGossip(event)
 }
 
-func (d *DaemonService) respondFetchZone(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneTo(peerID, path, nil)
-}
-
 func (d *DaemonService) respondFetchZoneTo(peerID string, path zone.ZonePath, replyAddr *net.UDPAddr) error {
 	if d == nil || d.Sync == nil {
 		return nil
@@ -188,10 +184,6 @@ func (d *DaemonService) respondFetchZoneTo(peerID string, path zone.ZonePath, re
 	}
 	plan := gossip.PlanSnapshotDatagrams(view.State.Network, []zone.ZonePath{path}, budget, d.Sync.now())
 	return d.respondAnnouncePlanTo(peerID, plan, budget, replyAddr)
-}
-
-func (d *DaemonService) respondFetchZoneChunks(peerID string, path zone.ZonePath) error {
-	return d.respondFetchZoneChunksTo(peerID, path, nil)
 }
 
 func (d *DaemonService) respondFetchZoneChunksTo(peerID string, path zone.ZonePath, replyAddr *net.UDPAddr) error {

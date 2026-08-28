@@ -13,13 +13,10 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-// handleObjectChunk keeps UDP assembly and transport repair outside the FSM,
-// then returns the decoded snapshot to the active session. The session emits
-// ApplySnapshotAction and waits for SnapshotAppliedEvent before completing.
-func (d *DaemonService) handleObjectChunk(message *gossip.Message, limits corestate.SyncLimits) error {
-	return d.handleObjectChunkFrom(message, nil, limits)
-}
-
+// handleObjectChunkFrom keeps UDP assembly and transport repair outside the
+// FSM, then returns the decoded snapshot to the active session. The session
+// emits ApplySnapshotAction and waits for SnapshotAppliedEvent before
+// completing. replyAddr is nil when the caller has no packet source address.
 func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr *net.UDPAddr, _ corestate.SyncLimits) error {
 	if d == nil || d.Sync == nil {
 		return errors.New("daemon service is not initialized")

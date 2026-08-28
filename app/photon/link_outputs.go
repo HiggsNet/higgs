@@ -10,17 +10,10 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// linkOutputsFromState projects provider-owned runtime state into the common
+// buildLinkOutputs projects provider-owned runtime state into the common
 // Babel-facing consumer contract. It deliberately carries no owner, SA name,
 // action, rotate phase, or other lifecycle input.
-func linkOutputsFromState(state *stateFile) []photonstate.LinkOutput {
-	if state == nil {
-		return nil
-	}
-	return linkOutputsFromRuntime(state.LinkInstances, state.IPsecReconcile)
-}
-
-func linkOutputsFromRuntime(instances map[string]linkInstanceState, reconcile *ipsecReconcileState) []photonstate.LinkOutput {
+func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecReconcileState) []photonstate.LinkOutput {
 	desired := make(map[string][]desiredLinkState)
 	if reconcile != nil {
 		for _, item := range reconcile.Desired {

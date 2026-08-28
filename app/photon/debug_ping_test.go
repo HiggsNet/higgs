@@ -36,7 +36,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 			},
 		},
 	}
-	return healthTargetsFromState(state, string(state.ManagedZone), nil)
+	return healthTargets(state.LinkInstances, state.IPsecReconcile, string(state.ManagedZone))
 }
 
 func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {

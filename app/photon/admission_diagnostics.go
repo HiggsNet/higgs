@@ -12,20 +12,9 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-// diagnoseAutoJoinAdmission examines the local state and produces a
-// structured admission diagnosis explaining why a node is (or is not)
-// in auto-join pending state. The function is pure: it does not mutate
-// state or perform I/O.
-func diagnoseAutoJoinAdmission(state *stateFile, now time.Time) inspect.AdmissionDiagnosis {
-	if state == nil {
-		return inspect.AdmissionDiagnosis{}
-	}
-	return diagnoseAutoJoinAdmissionFromOwners(&corestate.VerifiedState{
-		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-	}, state.Admission, now)
-}
-
-func diagnoseAutoJoinAdmissionFromOwners(verified *corestate.VerifiedState, admission *admissionState, now time.Time) inspect.AdmissionDiagnosis {
+// diagnoseAutoJoinAdmission combines the common verified identity/network
+// with loss-tolerant Linux admission history. It is pure and performs no I/O.
+func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, admission *admissionState, now time.Time) inspect.AdmissionDiagnosis {
 	if verified == nil {
 		return inspect.AdmissionDiagnosis{}
 	}
@@ -142,7 +131,9 @@ func debugAdmission() error {
 	if err != nil {
 		return err
 	}
-	diagnosis := diagnoseAutoJoinAdmission(state, rt.Now())
+	diagnosis := diagnoseAutoJoinAdmission(&corestate.VerifiedState{
+		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
+	}, state.Admission, rt.Now())
 	return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 }
 
@@ -164,7 +155,9 @@ func updateAdmissionOnPending(state *stateFile, now time.Time) {
 		}
 		state.Admission.Pending = true
 		state.Admission.AdoptedAtUnix = 0
-		d := diagnoseAutoJoinAdmission(state, now)
+		d := diagnoseAutoJoinAdmission(&corestate.VerifiedState{
+			ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
+		}, state.Admission, now)
 		state.Admission.PendingReason = d.Reason
 		state.Admission.PendingReasonDetail = d.ReasonDetail
 		state.Admission.JoinRequestB64 = d.JoinRequestB64

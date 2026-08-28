@@ -357,7 +357,7 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	input.AssignmentPrefixes = assignmentPrefixes(ars)
 
 	// Provider-neutral live Babel-facing interfaces.
-	for _, link := range linkOutputsFromState(state) {
+	for _, link := range buildLinkOutputs(state.LinkInstances, state.IPsecReconcile) {
 		if link.InterfaceName != "" &&
 			link.Readiness.Interface == "ready" &&
 			(link.Provider == "" || link.Provider == ipsec.ProviderStrongSwan) &&

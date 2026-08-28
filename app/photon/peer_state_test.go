@@ -460,7 +460,7 @@ func TestDerivePeerStatusesAllPeers(t *testing.T) {
 		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
 	}
 
-	peers := derivePeerStatuses(state, now, cfg, false)
+	peers := derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, cfg, false)
 	if len(peers) == 0 {
 		t.Fatalf("expected at least 1 peer, got 0")
 	}

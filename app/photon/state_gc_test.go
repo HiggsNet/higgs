@@ -21,7 +21,7 @@ func TestStateGCOnlyPlansUnconfiguredBirdInstances(t *testing.T) {
 		"photon":  {NetNSName: "photon"},
 	}}
 
-	plan := buildStateGCPlan(config, state)
+	plan := buildStateGCPlan(config, state.BirdInstances)
 	if len(plan.OrphanBirdInstances) != 1 || plan.OrphanBirdInstances[0] != "default" {
 		t.Fatalf("orphan BIRD instances = %#v, want [default]", plan.OrphanBirdInstances)
 	}
@@ -41,7 +41,7 @@ func TestStateGCEmptyPlanDoesNotMutateState(t *testing.T) {
 	config.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
 	state := &stateFile{BirdInstances: map[string]*BirdInstanceState{"photon": {NetNSName: "photon"}}}
 
-	plan := buildStateGCPlan(config, state)
+	plan := buildStateGCPlan(config, state.BirdInstances)
 	if len(plan.OrphanBirdInstances) != 0 {
 		t.Fatalf("orphan BIRD instances = %#v, want none", plan.OrphanBirdInstances)
 	}

@@ -397,6 +397,15 @@ func (s *DaemonStateStore) metadata() daemonStateStoreMeta {
 	return s.metaLocked()
 }
 
+func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
+	return daemonStateStoreMeta{
+		Revision:          s.revision,
+		SnapshotTime:      s.snapshotTime,
+		Dirty:             s.dirty,
+		ReconcileProgress: s.reconcileProgress,
+	}
+}
+
 // routingSnapshot returns a routing-owned workspace without serializing the
 // complete daemon state. Network and unrelated children remain shared and must
 // be treated as immutable. The fields routing reconcile mutates are detached.

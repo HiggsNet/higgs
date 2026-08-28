@@ -54,10 +54,10 @@ func debugRevokeImpact(_ context.Context, zoneArg string) error {
 	syncConfig, _ := rt.SyncConfig(state)
 	var impacts []inspect.RevocationImpact
 	if zoneArg != "" {
-		impact := ComputeRevocationImpact(state, zone.ZonePath(zoneArg), now)
+		impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, zone.ZonePath(zoneArg), now)
 		impacts = []inspect.RevocationImpact{impact}
 	} else {
-		impacts = AllRevocationImpact(state, syncConfig, now)
+		impacts = AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, syncConfig, now)
 	}
 	return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)
 }

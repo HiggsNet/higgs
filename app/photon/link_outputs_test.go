@@ -30,7 +30,7 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 		},
 	}
 
-	got := linkOutputsFromState(state)
+	got := buildLinkOutputs(state.LinkInstances, state.IPsecReconcile)
 	if len(got) != 1 {
 		t.Fatalf("outputs = %d, want 1", len(got))
 	}
@@ -71,7 +71,7 @@ func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
 		},
 	}
 
-	got := linkOutputsFromState(state)
+	got := buildLinkOutputs(state.LinkInstances, state.IPsecReconcile)
 	if len(got) != 2 {
 		t.Fatalf("outputs = %+v, want active and staged", got)
 	}

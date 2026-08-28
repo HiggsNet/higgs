@@ -1167,7 +1167,7 @@ func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transport
 		for i, tr := range transports {
 			packet, err := receiveWithContext(ctx, tr, time.Now().Add(10*time.Millisecond))
 			if err == nil {
-				services[i].handlePacketEvent(packet, ctx)
+				services[i].processPacketEvent(packet, ctx)
 				processed = true
 			}
 		}

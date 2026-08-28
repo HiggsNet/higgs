@@ -25,19 +25,11 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 	return health.NewManager(cfg.probeConfig(), cfg.hysteresisConfig(), prober)
 }
 
-// healthTargetsFromState derives ProbeTargets from the current desired link
-// snapshot and persisted LinkInstances. Only links with a valid peer tunnel
-// address and probeable state are returned.
-func healthTargetsFromState(state *stateFile, localZone string, _ []ipsec.LinkGroupSpec) []health.ProbeTarget {
-	if state == nil {
-		return nil
-	}
-	return healthTargetsFromRuntime(state.LinkInstances, state.IPsecReconcile, localZone)
-}
-
-func healthTargetsFromRuntime(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, localZone string) []health.ProbeTarget {
+// healthTargets derives probe targets from Linux link runtime state. Only
+// links with valid peer tunnel addresses and probeable state are returned.
+func healthTargets(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, localZone string) []health.ProbeTarget {
 	var targets []health.ProbeTarget
-	outputs := linkOutputsFromRuntime(instances, reconcile)
+	outputs := buildLinkOutputs(instances, reconcile)
 	for _, output := range outputs {
 		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
 			continue
@@ -140,7 +132,7 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	if view.State != nil {
 		localZone = view.State.ManagedZone.String()
 	}
-	targets := healthTargetsFromRuntime(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, localZone)
+	targets := healthTargets(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, localZone)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
 	now := d.Sync.now()
@@ -274,12 +266,7 @@ func showHealth(sortBy string, verbose bool) error {
 	}
 	// Reconstruct targets and print from state.
 	localZone := string(state.ManagedZone)
-	rtConfig := rt.Config
-	var groups []ipsec.LinkGroupSpec
-	if rtConfig != nil {
-		groups = rtConfig.IPsec.LinkGroups
-	}
-	targets := inspectHealthProbeTargets(healthTargetsFromState(state, localZone, groups))
+	targets := inspectHealthProbeTargets(healthTargets(state.LinkInstances, state.IPsecReconcile, localZone))
 	view := inspect.HealthDebugView{Targets: targets}
 	// Health manager output (when daemon live).
 	if links := liveDaemonHealthSnapshot(rt); links != nil {

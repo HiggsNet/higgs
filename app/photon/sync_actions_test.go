@@ -174,7 +174,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	state.Lock()
 	unlock = state.Unlock
 	go func() {
-		done <- service.respondFetchZone(peerID, "node-b.catofes.")
+		done <- service.respondFetchZoneTo(peerID, "node-b.catofes.", nil)
 	}()
 	select {
 	case err := <-done:
@@ -223,7 +223,7 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
-		done <- service.respondFetchZoneChunks(peerID, "node-b.catofes.")
+		done <- service.respondFetchZoneChunksTo(peerID, "node-b.catofes.", nil)
 	}()
 
 	select {
@@ -557,11 +557,11 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 		},
 	}
 	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
-		if err := service.handleObjectChunk(&gossip.Message{
+		if err := service.handleObjectChunkFrom(&gossip.Message{
 			Type:        gossip.MessageObjectChunk,
 			PeerID:      peerID,
 			ObjectChunk: chunk,
-		}, corestate.DefaultSyncLimits()); err != nil {
+		}, nil, corestate.DefaultSyncLimits()); err != nil {
 			t.Fatalf("handleObjectChunk: %v", err)
 		}
 	}
@@ -637,7 +637,7 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 			Data:       []byte("invalid object"),
 		},
 	}
-	err := service.handleObjectChunk(message, corestate.DefaultSyncLimits())
+	err := service.handleObjectChunkFrom(message, nil, corestate.DefaultSyncLimits())
 	if err == nil {
 		t.Fatal("handleObjectChunk accepted invalid object hash")
 	}

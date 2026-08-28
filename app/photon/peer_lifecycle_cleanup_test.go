@@ -12,13 +12,14 @@ import (
 
 func TestApplyPeerLifecycleCleanupDeletesOfflineCacheAndKeepsSuppression(t *testing.T) {
 	state, _, _, _ := buildPeerStateTestNetwork(t)
+	normalizeSyncPeers(state)
 	now := time.Unix(200_000, 0)
 	cfg := inspect.DefaultPeerLifecycleConfig()
 	state.SyncPeers["node-b.catofes."] = syncPeerState{
 		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
 	}
 
-	removed, changed := applyPeerLifecycleCleanup(state, now, cfg)
+	removed, changed := applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("cleanup = changed:%t removed:%v", changed, removed)
 	}
@@ -36,12 +37,13 @@ func TestApplyPeerLifecycleCleanupDeletesOfflineCacheAndKeepsSuppression(t *test
 
 func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
 	state, parentKey, _, _ := buildPeerStateTestNetwork(t)
+	normalizeSyncPeers(state)
 	now := time.Unix(300_000, 0)
 	cfg := inspect.DefaultPeerLifecycleConfig()
 	state.SyncPeers["node-b.catofes."] = syncPeerState{LastSyncUnix: now.Unix()}
 	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", parentKey, now)
 
-	removed, changed := applyPeerLifecycleCleanup(state, now, cfg)
+	removed, changed := applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 0 {
 		t.Fatalf("initial cleanup = changed:%t removed:%v", changed, removed)
 	}
@@ -53,11 +55,11 @@ func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
 		t.Fatalf("revoked cleanup marker = %+v", marker)
 	}
 
-	removed, changed = applyPeerLifecycleCleanup(state, now.Add(cfg.CleanupAfter-time.Second), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now.Add(cfg.CleanupAfter-time.Second), cfg)
 	if changed || len(removed) != 0 {
 		t.Fatalf("early cleanup = changed:%t removed:%v", changed, removed)
 	}
-	removed, changed = applyPeerLifecycleCleanup(state, now.Add(cfg.CleanupAfter), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now.Add(cfg.CleanupAfter), cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("expired cleanup = changed:%t removed:%v", changed, removed)
 	}

@@ -39,10 +39,10 @@ func (d *DaemonService) currentGossipDiscoveryInput() corehost.GossipDiscoveryIn
 	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
-	return gossipDiscoveryInputFromOwners(common, cleanups, d.Sync.Config)
+	return buildGossipDiscoveryInput(common, cleanups, d.Sync.Config)
 }
 
-func gossipDiscoveryInputFromOwners(common corestate.View, cleanups map[string]peerLifecycleCleanupState, config *syncConfigFile) corehost.GossipDiscoveryInput {
+func buildGossipDiscoveryInput(common corestate.View, cleanups map[string]peerLifecycleCleanupState, config *syncConfigFile) corehost.GossipDiscoveryInput {
 	input := corehost.GossipDiscoveryInput{}
 	if common.State == nil || config == nil {
 		return input
