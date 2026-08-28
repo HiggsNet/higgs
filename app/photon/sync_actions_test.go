@@ -204,9 +204,8 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
-	transport, err := gossip.Listen(gossip.Config{
+	transport, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:          config.PeerID,
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 	})
 	if err != nil {

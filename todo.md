@@ -785,9 +785,14 @@ package dependency: app -> host -> gossip -> state -> zone
     `DatagramReceiver` 并等待 goroutine 收口。Linux daemon、长期
     `advanced sync serve` 与一次性 `sync once` 已改用该入口，后者不再用 100ms deadline 轮询；gossip
     中原 `StartPacketReceiver`、资源接口和重复测试已删除，旧轮询 helper 也已移出生产代码。
-    当前 `gossip.Transport` 仍负责 Linux UDP bind、wire decode、allowlist/replay/quota；后续 E2 继续切换
-    send/receive socket adapter，并把 Linux daemon 中 controller/control/health 的剩余调度收口，不能把本切口
-    误记为 raw `DatagramIO` 或整个 daemon event loop 已全部完成。
+    本切口完成时 `gossip.Transport` 仍暂时负责 Linux UDP bind；E2b 已继续拆除该所有权。
+  - [x] E2b：为 `gossip.Transport` 注入窄 `DatagramIO` capability，并删除其 `UDPConn`、`ListenAddr`、
+    `gossip.Listen` 与 Linux socket option 实现。Transport 只保留 wire codec、allowlist、replay/quota、地址选择
+    和发送规划；Linux bind、`SO_REUSEPORT`、read/write/deadline/close 由 `internal/photonlinux` adapter 实现，
+    composition 创建后交给唯一 HostRuntime 生命周期。端口默认值仍由 app/config 决定，不下沉到协议或 adapter。
+    协议测试使用测试注入 adapter，Linux adapter 单独验证 UDP round-trip 与端口复用。当前 TCP object-pull
+    listener 仍由 `app/photon` 创建，daemon 中 controller/control/health 的剩余调度也尚未收口，不能把 E2b
+    误记为全部 runtime I/O 已完成。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

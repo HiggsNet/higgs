@@ -255,10 +255,9 @@ func signedRecord(t *testing.T, priv ed25519.PrivateKey, path zone.ZonePath, key
 
 func TestTransportSendReceiveKnownPeer(t *testing.T) {
 	now := time.Unix(1000, 0)
-	a, err := Listen(Config{
-		PeerID:     "node-a",
-		ListenAddr: "127.0.0.1:0",
-		Clock:      func() time.Time { return now },
+	a, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-a",
+		Clock:  func() time.Time { return now },
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)
@@ -266,9 +265,8 @@ func TestTransportSendReceiveKnownPeer(t *testing.T) {
 	}
 	defer a.Close()
 
-	b, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
+	b, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a": a.LocalAddr(),
 		},
@@ -298,10 +296,9 @@ func TestTransportSendReceiveKnownPeer(t *testing.T) {
 
 func TestTransportRejectsUnknownPeer(t *testing.T) {
 	now := time.Unix(1000, 0)
-	a, err := Listen(Config{
-		PeerID:     "node-a",
-		ListenAddr: "127.0.0.1:0",
-		Clock:      func() time.Time { return now },
+	a, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-a",
+		Clock:  func() time.Time { return now },
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)
@@ -309,10 +306,9 @@ func TestTransportRejectsUnknownPeer(t *testing.T) {
 	}
 	defer a.Close()
 
-	b, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
-		Clock:      func() time.Time { return now },
+	b, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
+		Clock:  func() time.Time { return now },
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)

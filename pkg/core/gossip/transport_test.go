@@ -3,7 +3,6 @@ package gossip
 import (
 	"errors"
 	"net"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -11,10 +10,60 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+type testUDPDatagram struct {
+	conn *net.UDPConn
+}
+
+func listenTestTransport(listenAddr string, config Config) (*Transport, error) {
+	addr, err := net.ResolveUDPAddr("udp", listenAddr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := NewTransport(config, &testUDPDatagram{conn: conn})
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return transport, nil
+}
+
+func (io *testUDPDatagram) ReadDatagram(buffer []byte) (int, *net.UDPAddr, error) {
+	return io.conn.ReadFromUDP(buffer)
+}
+
+func (io *testUDPDatagram) WriteDatagram(payload []byte, addr *net.UDPAddr) (int, error) {
+	return io.conn.WriteToUDP(payload, addr)
+}
+
+func (io *testUDPDatagram) LocalAddr() *net.UDPAddr {
+	addr, _ := io.conn.LocalAddr().(*net.UDPAddr)
+	return addr
+}
+
+func (io *testUDPDatagram) SetReadDeadline(deadline time.Time) error {
+	return io.conn.SetReadDeadline(deadline)
+}
+
+func (io *testUDPDatagram) Close() error {
+	return io.conn.Close()
+}
+
+func TestNewTransportRequiresIdentityAndDatagramIO(t *testing.T) {
+	if _, err := NewTransport(Config{}, nil); err == nil || err.Error() != "local gossip peer id is empty" {
+		t.Fatalf("empty peer error = %v", err)
+	}
+	if _, err := NewTransport(Config{PeerID: "node-a"}, nil); !errors.Is(err, ErrDatagramIORequired) {
+		t.Fatalf("nil datagram error = %v, want %v", err, ErrDatagramIORequired)
+	}
+}
+
 func TestAddKnownPeerID(t *testing.T) {
-	transport, err := Listen(Config{
-		PeerID:     "test-local",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "test-local",
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)
@@ -35,9 +84,8 @@ func TestAddKnownPeerID(t *testing.T) {
 }
 
 func TestAddKnownPeerIDDoesNotAffectAddPeer(t *testing.T) {
-	transport, err := Listen(Config{
-		PeerID:     "test-local",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "test-local",
 	})
 	if err != nil {
 		skipRestrictedSocket(t, err)
@@ -62,9 +110,8 @@ func TestAddKnownPeerIDDoesNotAffectAddPeer(t *testing.T) {
 }
 
 func TestSendToUsesExplicitReplyAddressOverConfiguredOutbound(t *testing.T) {
-	receiver, err := Listen(Config{
+	receiver, err := listenTestTransport("127.0.0.1:0", Config{
 		PeerID:     "peer-a",
-		ListenAddr: "127.0.0.1:0",
 		KnownPeers: map[string]*net.UDPAddr{"peer-b": nil},
 	})
 	if err != nil {
@@ -73,9 +120,8 @@ func TestSendToUsesExplicitReplyAddressOverConfiguredOutbound(t *testing.T) {
 	}
 	defer receiver.Close()
 
-	sender, err := Listen(Config{
-		PeerID:     "peer-b",
-		ListenAddr: "127.0.0.1:0",
+	sender, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "peer-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"peer-a": {IP: net.ParseIP("192.0.2.10"), Port: 33434},
 		},
@@ -150,36 +196,9 @@ func TestObservedPeerAddrExpiresAndIsRemovedWithPeer(t *testing.T) {
 	}
 }
 
-func TestListenAllowsUDPPortReuse(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("SO_REUSEPORT behavior is only enabled on linux")
-	}
-
-	first, err := Listen(Config{
-		PeerID:     "node-a",
-		ListenAddr: "127.0.0.1:0",
-	})
-	if err != nil {
-		skipRestrictedSocket(t, err)
-		t.Fatalf("Listen(first): %v", err)
-	}
-	defer first.Close()
-
-	second, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: first.LocalAddr().String(),
-	})
-	if err != nil {
-		skipRestrictedSocket(t, err)
-		t.Fatalf("Listen(second on %s): %v", first.LocalAddr(), err)
-	}
-	defer second.Close()
-}
-
 func TestReceiveRejectsMessageTooLarge(t *testing.T) {
-	transport, err := Listen(Config{
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
 		PeerID:          "node-b",
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: 8,
 	})
 	if err != nil {
@@ -206,9 +225,8 @@ func TestReceiveRejectsMessageTooLarge(t *testing.T) {
 func TestReceiveRejectsQuotaExceeded(t *testing.T) {
 	now := time.Unix(1000, 0)
 	var event Event
-	transport, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a": nil,
 		},
@@ -249,9 +267,8 @@ func TestReceiveRejectsQuotaExceeded(t *testing.T) {
 
 func TestReceiveRejectsReplay(t *testing.T) {
 	now := time.Unix(1000, 0)
-	transport, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a": nil,
 		},
@@ -288,9 +305,8 @@ func TestReceiveRejectsReplay(t *testing.T) {
 
 func TestReceiveRejectsUnsupportedWireVersion(t *testing.T) {
 	now := time.Unix(1000, 0)
-	transport, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a": nil,
 		},
@@ -357,9 +373,8 @@ func rawWireMessage(message *Message) ([]byte, error) {
 
 func TestReceiveTimeoutIsNotLogged(t *testing.T) {
 	var logged bool
-	transport, err := Listen(Config{
-		PeerID:     "test-local",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "test-local",
 		Log: func(event Event) {
 			logged = true
 		},
@@ -449,9 +464,8 @@ func TestSendOrdersByReachabilityRank(t *testing.T) {
 
 func TestReceiveRecordsAddrSuccess(t *testing.T) {
 	now := time.Unix(1000, 0)
-	transport, err := Listen(Config{
-		PeerID:     "node-b",
-		ListenAddr: "127.0.0.1:0",
+	transport, err := listenTestTransport("127.0.0.1:0", Config{
+		PeerID: "node-b",
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a": nil,
 		},
@@ -484,13 +498,13 @@ func TestReceiveRecordsAddrSuccess(t *testing.T) {
 }
 
 func TestLastSendAddr(t *testing.T) {
-	transportA, err := Listen(Config{PeerID: "node-a", ListenAddr: "127.0.0.1:0"})
+	transportA, err := listenTestTransport("127.0.0.1:0", Config{PeerID: "node-a"})
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("Listen: %v", err)
 	}
 	defer transportA.Close()
-	transportB, err := Listen(Config{PeerID: "node-b", ListenAddr: "127.0.0.1:0"})
+	transportB, err := listenTestTransport("127.0.0.1:0", Config{PeerID: "node-b"})
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("Listen: %v", err)

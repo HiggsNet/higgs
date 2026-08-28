@@ -168,9 +168,10 @@ root/diff/projection 和 `ApplySnapshot`；`pkg/core/gossip` 直接引用这些 
 `DatagramReceiver` 的 `Receive/Close` capability。Linux `Transport` 与未来 Windows adapter
 共用该 loop；packet 直接进入 Runtime 已有的默认 64 项 event queue，与 timer/completion 共用同一
 backpressure 和顺序边界，不创建第二条 packet channel 或 per-packet goroutine。`Runtime.Stop` 取消接收、
-关闭 receiver 以解除不感知 context 的阻塞读取，并等待 receive goroutine 退出。当前 Linux
-`gossip.Transport` 仍负责 UDP bind、wire decode、allowlist/replay/quota；后续 raw
-`DatagramIO` adapter 切换将继续移动 socket/read/write 实现，不在迁移期伪装成已经完成。
+关闭 receiver 以解除不感知 context 的阻塞读取，并等待 receive goroutine 退出。`gossip.Transport`
+不再持有 `UDPConn` 或执行 bind/read/write，只通过 `DatagramIO` capability 使用注入的 packet socket；它继续
+统一负责 wire codec、allowlist、replay/quota 和地址选择。Linux 的 bind、`SO_REUSEPORT`、read/write/deadline
+实现位于 `internal/photonlinux`，未来 Windows 注入自己的 adapter，不复制 Transport 策略。
 active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
 executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。

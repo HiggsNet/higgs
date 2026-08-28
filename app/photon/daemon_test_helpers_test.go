@@ -24,6 +24,19 @@ import (
 	"time"
 )
 
+func listenTestGossipTransport(listenAddr string, config gossip.Config) (*gossip.Transport, error) {
+	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := gossip.NewTransport(config, datagram)
+	if err != nil {
+		_ = datagram.Close()
+		return nil, err
+	}
+	return transport, nil
+}
+
 func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
 	store := newTestDaemonStateStore(state)
 	if rt != nil && rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {

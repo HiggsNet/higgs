@@ -91,9 +91,8 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	transportA, err := gossip.Listen(gossip.Config{
-		PeerID:     config.PeerID,
-		ListenAddr: "127.0.0.1:0",
+	transportA, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
+		PeerID: config.PeerID,
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-b.catofes.": {IP: net.ParseIP("192.0.2.10"), Port: 33434},
 		},
@@ -105,9 +104,8 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 	}
 	defer transportA.Close()
 
-	transportB, err := gossip.Listen(gossip.Config{
+	transportB, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:     "node-b.catofes.",
-		ListenAddr: "127.0.0.1:0",
 		KnownPeers: map[string]*net.UDPAddr{config.PeerID: transportA.LocalAddr()},
 		Clock:      func() time.Time { return now },
 	})
@@ -185,9 +183,8 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 		Clock:     func() time.Time { return now },
 	}
 
-	transportA, err := gossip.Listen(gossip.Config{
+	transportA, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:          "node-a.catofes.",
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 	})
 	if err != nil {
@@ -196,9 +193,8 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 	}
 	defer transportA.Close()
 
-	transportB, err := gossip.Listen(gossip.Config{
+	transportB, err := listenTestGossipTransport(config.ListenAddr, gossip.Config{
 		PeerID:          config.PeerID,
-		ListenAddr:      config.ListenAddr,
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 		KnownPeers: map[string]*net.UDPAddr{
 			"node-a.catofes.": transportA.LocalAddr(),

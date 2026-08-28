@@ -1,6 +1,4 @@
-//go:build linux
-
-package gossip
+package photonlinux
 
 import (
 	"fmt"
@@ -9,7 +7,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func setUDPReuseOptions(network, address string, conn syscall.RawConn) error {
+func setGossipUDPReuseOptions(network, address string, conn syscall.RawConn) error {
 	var sockErr error
 	if err := conn.Control(func(fd uintptr) {
 		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {

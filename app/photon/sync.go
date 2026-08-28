@@ -19,6 +19,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -673,8 +674,17 @@ func (sr *SyncRuntime) seedObservedPeerPathAt(state *stateFile, peerID string, n
 
 func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error) {
 	deps := sr.syncTransportDeps()
-	transport, err := gossip.Listen(sr.transportConfig(deps))
+	listenAddr := sr.Config.ListenAddr
+	if listenAddr == "" {
+		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
+	}
+	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
 	if err != nil {
+		return nil, err
+	}
+	transport, err := gossip.NewTransport(sr.transportConfig(deps), datagram)
+	if err != nil {
+		_ = datagram.Close()
 		return nil, err
 	}
 	sr.Transport = transport
@@ -685,7 +695,6 @@ func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error
 func (sr *SyncRuntime) transportConfig(deps *SyncTransportDeps) gossip.Config {
 	return gossip.Config{
 		PeerID:          sr.Config.PeerID,
-		ListenAddr:      sr.Config.ListenAddr,
 		KnownPeers:      deps.KnownPeers,
 		MaxMessageBytes: sr.Config.MaxMessageBytes,
 		Replay:          deps.Replay,

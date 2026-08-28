@@ -39,9 +39,8 @@ func TestSendDetachedSnapshotsChunksOversizedRecords(t *testing.T) {
 		t.Fatalf("PutAt: %v", err)
 	}
 
-	transport, err := gossip.Listen(gossip.Config{
+	transport, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:          "node-a",
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 	})
 	if err != nil {
@@ -87,9 +86,8 @@ func TestSendDetachedSnapshotsIgnoresRecordPayloadForAnnounceStats(t *testing.T)
 		t.Fatalf("PutAt: %v", err)
 	}
 
-	transport, err := gossip.Listen(gossip.Config{
+	transport, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:          "node-a",
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 	})
 	if err != nil {
@@ -148,9 +146,8 @@ func TestSendDetachedSnapshotsChunksOversizedSkeleton(t *testing.T) {
 		_ = priv
 	}
 
-	transport, err := gossip.Listen(gossip.Config{
+	transport, err := listenTestGossipTransport("127.0.0.1:0", gossip.Config{
 		PeerID:          "node-a",
-		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: gossip.DefaultDatagramBudget,
 	})
 	if err != nil {

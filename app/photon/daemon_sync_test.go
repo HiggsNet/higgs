@@ -31,12 +31,12 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		t.Fatalf("put record on B: %v", err)
 	}
 
-	transportA, err := gossip.Listen(gossip.Config{PeerID: configA.PeerID, ListenAddr: configA.ListenAddr})
+	transportA, err := listenTestGossipTransport(configA.ListenAddr, gossip.Config{PeerID: configA.PeerID})
 	if err != nil {
 		t.Fatalf("Listen(A): %v", err)
 	}
 	defer transportA.Close()
-	transportB, err := gossip.Listen(gossip.Config{PeerID: configB.PeerID, ListenAddr: configB.ListenAddr})
+	transportB, err := listenTestGossipTransport(configB.ListenAddr, gossip.Config{PeerID: configB.PeerID})
 	if err != nil {
 		t.Fatalf("Listen(B): %v", err)
 	}

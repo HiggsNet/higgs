@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -13,16 +12,16 @@ import (
 )
 
 var (
-	ErrUnknownPeer     = errors.New("unknown gossip peer")
-	ErrAddrMismatch    = errors.New("gossip peer address mismatch")
-	ErrMessageTooLarge = errors.New("gossip message too large")
+	ErrUnknownPeer        = errors.New("unknown gossip peer")
+	ErrAddrMismatch       = errors.New("gossip peer address mismatch")
+	ErrMessageTooLarge    = errors.New("gossip message too large")
+	ErrDatagramIORequired = errors.New("gossip datagram I/O is required")
 )
 
 type Clock func() time.Time
 
 type Config struct {
 	PeerID          string
-	ListenAddr      string
 	KnownPeers      map[string]*net.UDPAddr
 	MaxMessageBytes int
 	Replay          *ReplayWindow
@@ -31,8 +30,19 @@ type Config struct {
 	Log             func(Event)
 }
 
+// DatagramIO is the injected packet-socket capability used by Transport.
+// Its implementation owns bind/read/write/deadline/close; Transport owns
+// gossip wire encoding, validation and peer/address policy.
+type DatagramIO interface {
+	ReadDatagram(buffer []byte) (int, *net.UDPAddr, error)
+	WriteDatagram(payload []byte, addr *net.UDPAddr) (int, error)
+	LocalAddr() *net.UDPAddr
+	SetReadDeadline(time.Time) error
+	Close() error
+}
+
 type Transport struct {
-	conn            *net.UDPConn
+	datagram        DatagramIO
 	peerID          string
 	knownPeers      map[string]struct{} // inbound allowlist
 	knownMu         sync.RWMutex
@@ -109,21 +119,12 @@ type ObservedPath struct {
 	Until time.Time
 }
 
-func Listen(config Config) (*Transport, error) {
+func NewTransport(config Config, datagram DatagramIO) (*Transport, error) {
 	if config.PeerID == "" {
 		return nil, errors.New("local gossip peer id is empty")
 	}
-	listenAddr := config.ListenAddr
-	if listenAddr == "" {
-		listenAddr = fmt.Sprintf(":%d", DefaultPort)
-	}
-	addr, err := net.ResolveUDPAddr("udp", listenAddr)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := listenUDP(addr)
-	if err != nil {
-		return nil, err
+	if datagram == nil {
+		return nil, ErrDatagramIORequired
 	}
 	maxMessageBytes := config.MaxMessageBytes
 	if maxMessageBytes <= 0 {
@@ -138,7 +139,7 @@ func Listen(config Config) (*Transport, error) {
 		replay = NewReplayWindow(0)
 	}
 	t := &Transport{
-		conn:            conn,
+		datagram:        datagram,
 		peerID:          config.PeerID,
 		maxMessageBytes: maxMessageBytes,
 		replay:          replay,
@@ -169,25 +170,24 @@ func (t *Transport) PeerID() string {
 }
 
 func (t *Transport) Close() error {
-	if t == nil || t.conn == nil {
+	if t == nil || t.datagram == nil {
 		return nil
 	}
-	return t.conn.Close()
+	return t.datagram.Close()
 }
 
 func (t *Transport) LocalAddr() *net.UDPAddr {
-	if t == nil || t.conn == nil {
+	if t == nil || t.datagram == nil {
 		return nil
 	}
-	addr, _ := t.conn.LocalAddr().(*net.UDPAddr)
-	return addr
+	return t.datagram.LocalAddr()
 }
 
 func (t *Transport) SetReadDeadline(deadline time.Time) error {
-	if t == nil || t.conn == nil {
+	if t == nil || t.datagram == nil {
 		return nil
 	}
-	return t.conn.SetReadDeadline(deadline)
+	return t.datagram.SetReadDeadline(deadline)
 }
 
 func (t *Transport) Send(peerID string, message *Message) error {
@@ -274,7 +274,7 @@ func (t *Transport) sendToAddrs(peerID string, message *Message, addrs []*net.UD
 	for _, addr := range addrs {
 		event.Addr = addr.String()
 		t.recordAddrAttempt(peerID, addr.String())
-		_, lastErr = t.conn.WriteToUDP(data, addr)
+		_, lastErr = t.datagram.WriteDatagram(data, addr)
 		if lastErr == nil {
 			sentAddr = addr
 			break
@@ -367,7 +367,7 @@ func addrSendRank(addr *net.UDPAddr, peerID string, t *Transport, now time.Time)
 func (t *Transport) Receive() (*Packet, error) {
 	start := t.now()
 	buf := make([]byte, t.maxMessageBytes+1)
-	n, addr, err := t.conn.ReadFromUDP(buf)
+	n, addr, err := t.datagram.ReadDatagram(buf)
 	if err != nil {
 		// Read deadlines are used by callers to poll for context cancellation
 		// and timers; timeouts are routine and should not pollute debug logs.

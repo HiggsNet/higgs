@@ -4,19 +4,28 @@ import (
 	"testing"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/host"
 )
 
 func TestRuntimeDatagramReceiverAcceptsGossipTransport(t *testing.T) {
-	transportA, err := gossip.Listen(gossip.Config{PeerID: "test-a", ListenAddr: "127.0.0.1:0"})
+	datagramA, err := photonlinux.ListenGossipDatagram("127.0.0.1:0")
 	if err != nil {
 		t.Skipf("UDP sockets are unavailable: %v", err)
 	}
+	transportA, err := gossip.NewTransport(gossip.Config{PeerID: "test-a"}, datagramA)
+	if err != nil {
+		t.Fatalf("NewTransport(A): %v", err)
+	}
 	defer transportA.Close()
-	transportB, err := gossip.Listen(gossip.Config{PeerID: "test-b", ListenAddr: "127.0.0.1:0"})
+	datagramB, err := photonlinux.ListenGossipDatagram("127.0.0.1:0")
 	if err != nil {
 		t.Skipf("UDP sockets are unavailable: %v", err)
+	}
+	transportB, err := gossip.NewTransport(gossip.Config{PeerID: "test-b"}, datagramB)
+	if err != nil {
+		t.Fatalf("NewTransport(B): %v", err)
 	}
 
 	transportA.AddPeer("test-b", transportB.LocalAddr())
