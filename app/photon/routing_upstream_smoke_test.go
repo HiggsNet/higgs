@@ -77,9 +77,10 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	client := &fakeBirdClient{}
 
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
-	installTestRoutingDrivers(service, fakeVM, fakeRM)
+	installTestLinuxDrivers(service, testLinuxDrivers{
+		veth: fakeVM, upstreamRoutes: fakeRM, birdProcess: pm,
+		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return client },
+	})
 
 	ctx := context.Background()
 	if err := service.reconcileRouting(ctx); err != nil {
@@ -342,9 +343,10 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 	}
 	fakeRM := &fakeUpstreamRouteManager{}
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
-	service.birdProcessManager = &fakeBirdProcessManager{running: false}
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} }
-	installTestRoutingDrivers(service, &fakeVethManager{}, fakeRM)
+	installTestLinuxDrivers(service, testLinuxDrivers{
+		veth: &fakeVethManager{}, upstreamRoutes: fakeRM, birdProcess: &fakeBirdProcessManager{running: false},
+		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)

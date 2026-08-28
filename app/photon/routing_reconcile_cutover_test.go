@@ -70,10 +70,9 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	}}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	service.health = manager
-	service.birdProcessManager = &fakeBirdProcessManager{running: false}
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, &fakeBirdProcessManager{running: false}, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting without staged route: %v", err)

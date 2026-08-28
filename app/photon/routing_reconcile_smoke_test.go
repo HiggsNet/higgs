@@ -47,10 +47,9 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -149,10 +148,9 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 	// Reconcile routing and verify BIRD config import/export filters.
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -216,10 +214,9 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -331,10 +328,9 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)

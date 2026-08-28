@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -24,6 +25,10 @@ type Runtime struct {
 	networkNamespaces map[string]transportipsec.NetNSSpec
 	vethManager       bird.VethManager
 	upstreamRoutes    UpstreamRouteManager
+	birdProcess       bird.ProcessManager
+	birdProcesses     map[string]bird.ProcessManager
+	birdClientFactory func(string, time.Duration) BirdClient
+	birdMu            sync.Mutex
 	close             func() error
 	logger            Logger
 	closeOnce         sync.Once
@@ -42,6 +47,9 @@ type RuntimeOptions struct {
 	NetworkNamespaces map[string]transportipsec.NetNSSpec
 	VethManager       bird.VethManager
 	UpstreamRoutes    UpstreamRouteManager
+	BirdProcess       bird.ProcessManager
+	BirdProcesses     map[string]bird.ProcessManager
+	BirdClientFactory func(string, time.Duration) BirdClient
 	Close             func() error
 	Logger            Logger
 }
@@ -68,9 +76,23 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 		networkNamespaces: cloneNetworkNamespaces(options.NetworkNamespaces),
 		vethManager:       vethManager,
 		upstreamRoutes:    upstreamRoutes,
+		birdProcess:       options.BirdProcess,
+		birdProcesses:     cloneBirdProcesses(options.BirdProcesses),
+		birdClientFactory: options.BirdClientFactory,
 		close:             options.Close,
 		logger:            options.Logger,
 	}, nil
+}
+
+func cloneBirdProcesses(source map[string]bird.ProcessManager) map[string]bird.ProcessManager {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]bird.ProcessManager, len(source))
+	for netns, manager := range source {
+		cloned[netns] = manager
+	}
+	return cloned
 }
 
 func cloneNetworkNamespaces(source map[string]transportipsec.NetNSSpec) map[string]transportipsec.NetNSSpec {

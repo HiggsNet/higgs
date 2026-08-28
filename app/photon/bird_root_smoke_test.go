@@ -77,10 +77,10 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	// Use real process manager and birdc client.
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
-	service.birdProcessManager = bird.NewExecProcessManager("")
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	processManager := bird.NewExecProcessManager("")
+	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
-	}
+	})
 	t.Cleanup(func() {
 		_ = service.stopManagedBirdInstances(context.Background(), true)
 	})
@@ -91,7 +91,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	// Verify BIRD is running.
-	if !service.birdProcessManager.IsRunning(ctx) {
+	if !processManager.IsRunning(ctx) {
 		latest := service.currentState()
 		inst := latest.BirdInstances[nsName]
 		if inst == nil {
@@ -102,7 +102,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 			t.Fatalf("BIRD process is not running after reconcileRouting; state=%+v; read config: %v", inst, err)
 		}
 		parseOut, parseErr := exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "bird", "-p", "-c", inst.ConfigPath).CombinedOutput()
-		t.Fatalf("BIRD process is not running after reconcileRouting; state=%+v; last_exit=%+v; parse_error=%v; parse_output=%s; config:\n%s", inst, service.birdProcessManager.LastExit(), parseErr, parseOut, config)
+		t.Fatalf("BIRD process is not running after reconcileRouting; state=%+v; last_exit=%+v; parse_error=%v; parse_output=%s; config:\n%s", inst, processManager.LastExit(), parseErr, parseOut, config)
 	}
 
 	// Verify the control socket file exists.
@@ -186,10 +186,10 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	}
 
 	service1 := newTestDaemonService(rt, state, syncConfig, time.Second)
-	service1.birdProcessManager = bird.NewExecProcessManager("")
-	service1.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	processManager1 := bird.NewExecProcessManager("")
+	installTestBirdDrivers(service1, processManager1, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
-	}
+	})
 	t.Cleanup(func() {
 		_ = service1.stopManagedBirdInstances(context.Background(), true)
 	})
@@ -197,7 +197,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	if err := service1.reconcileRouting(ctx); err != nil {
 		t.Fatalf("initial reconcileRouting: %v", err)
 	}
-	if !service1.birdProcessManager.IsRunning(ctx) {
+	if !processManager1.IsRunning(ctx) {
 		t.Fatal("BIRD process is not running after initial reconcile")
 	}
 
@@ -211,16 +211,16 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	if err := service1.stopManagedBirdInstances(ctx, false); err != nil {
 		t.Fatalf("non-force stopManagedBirdInstances: %v", err)
 	}
-	if !service1.birdProcessManager.IsRunning(ctx) {
+	if !processManager1.IsRunning(ctx) {
 		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
 	}
 
 	restartedState := service1.currentState()
 	service2 := newTestDaemonService(rt, restartedState, syncConfig, time.Second)
-	service2.birdProcessManager = bird.NewExecProcessManager("")
-	service2.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	processManager2 := bird.NewExecProcessManager("")
+	installTestBirdDrivers(service2, processManager2, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
-	}
+	})
 	t.Cleanup(func() {
 		_ = service2.stopManagedBirdInstances(context.Background(), true)
 	})
@@ -228,7 +228,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	if err := service2.reconcileRouting(ctx); err != nil {
 		t.Fatalf("restart reconcileRouting: %v", err)
 	}
-	if !service2.birdProcessManager.IsRunning(ctx) {
+	if !processManager2.IsRunning(ctx) {
 		t.Fatal("fresh process manager did not adopt the existing BIRD process")
 	}
 	adoptedPID := readSmokePID(t, birdState.PIDFile)
@@ -580,10 +580,10 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 
 	// Use real process manager.
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
-	service.birdProcessManager = bird.NewExecProcessManager("")
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	processManager := bird.NewExecProcessManager("")
+	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
-	}
+	})
 	t.Cleanup(func() {
 		_ = service.stopManagedBirdInstances(context.Background(), true)
 	})

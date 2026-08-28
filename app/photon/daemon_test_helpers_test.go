@@ -26,6 +26,19 @@ import (
 	"time"
 )
 
+type birdClient = photonlinux.BirdClient
+
+type testLinuxDrivers struct {
+	ipsec             ipsec.IPsecDriver
+	xfrm              ipsec.XFRMDriver
+	firewall          firewall.FirewallDriver
+	veth              bird.VethManager
+	upstreamRoutes    photonlinux.UpstreamRouteManager
+	birdProcess       bird.ProcessManager
+	birdProcesses     map[string]bird.ProcessManager
+	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
+}
+
 func listenTestGossipTransport(listenAddr string, config gossip.Config) (*gossip.Transport, error) {
 	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
 	if err != nil {
@@ -54,40 +67,50 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 }
 
 func installTestIPsecDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
-	installTestPlatformDrivers(service, ipsecDriver, xfrmDriver, nil)
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: ipsecDriver, xfrm: xfrmDriver})
 }
 
 func installTestFirewallDriver(service *DaemonService, firewallDriver firewall.FirewallDriver) {
 	dryRun := &ipsec.DryRunDriver{}
-	installTestPlatformDrivers(service, dryRun, dryRun, firewallDriver)
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, firewall: firewallDriver})
 }
 
 func installTestPlatformDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver, firewallDriver firewall.FirewallDriver) {
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: ipsecDriver, xfrm: xfrmDriver, firewall: firewallDriver})
+}
+
+func installTestBirdDrivers(service *DaemonService, process bird.ProcessManager, clientFactory func(string, time.Duration) photonlinux.BirdClient) {
+	dryRun := &ipsec.DryRunDriver{}
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, birdProcess: process, birdClientFactory: clientFactory})
+}
+
+func installTestLinuxDrivers(service *DaemonService, drivers testLinuxDrivers) {
 	if service == nil {
 		return
 	}
+	if drivers.ipsec == nil {
+		drivers.ipsec = &ipsec.DryRunDriver{}
+	}
+	if drivers.xfrm == nil {
+		drivers.xfrm = &ipsec.DryRunDriver{}
+	}
 	if err := service.installLinuxRuntime(newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
-		IPsecDriver:    ipsecDriver,
-		XFRMDriver:     xfrmDriver,
-		FirewallDriver: firewallDriver,
+		IPsecDriver:       drivers.ipsec,
+		XFRMDriver:        drivers.xfrm,
+		FirewallDriver:    drivers.firewall,
+		VethManager:       drivers.veth,
+		UpstreamRoutes:    drivers.upstreamRoutes,
+		BirdProcess:       drivers.birdProcess,
+		BirdProcesses:     drivers.birdProcesses,
+		BirdClientFactory: drivers.birdClientFactory,
 	})); err != nil {
 		panic(err)
 	}
 }
 
 func installTestRoutingDrivers(service *DaemonService, vethManager bird.VethManager, upstreamRoutes photonlinux.UpstreamRouteManager) {
-	if service == nil {
-		return
-	}
 	dryRun := &ipsec.DryRunDriver{}
-	if err := service.installLinuxRuntime(newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
-		IPsecDriver:    dryRun,
-		XFRMDriver:     dryRun,
-		VethManager:    vethManager,
-		UpstreamRoutes: upstreamRoutes,
-	})); err != nil {
-		panic(err)
-	}
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, veth: vethManager, upstreamRoutes: upstreamRoutes})
 }
 
 func newTestLinuxRuntime(ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) *photonlinux.Runtime {

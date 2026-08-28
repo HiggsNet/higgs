@@ -59,11 +59,6 @@ type DaemonService struct {
 	hostRuntime        *corehost.Runtime
 	objectPullExecutor *corehost.GossipObjectPullExecutor
 	syncIngressRoutes  map[string]syncIngressRoute
-
-	// Test overrides for BIRD routing reconcile.
-	birdProcessManager  birdProcessManager
-	birdProcessManagers map[string]birdProcessManager
-	birdClientFactory   func(socketPath string, timeout time.Duration) birdClient
 }
 
 type DaemonHooks struct {

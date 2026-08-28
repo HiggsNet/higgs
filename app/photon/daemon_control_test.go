@@ -184,12 +184,12 @@ func TestDaemonControlBirdDump(t *testing.T) {
 		"show route table all where source = RTS_BABEL all": "Table photon_photontesth24:\n10.0.0.0/24 unicast\n",
 	}}
 	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		if socketPath != "/run/photon/bird-photontesth2.ctl" {
 			t.Fatalf("socketPath = %q, want /run/photon/bird-photontesth2.ctl", socketPath)
 		}
 		return client
-	}
+	})
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "bird_dump", NetNS: "photontesth2", BirdView: "route"})
 	if !response.OK || response.BirdDump == nil {

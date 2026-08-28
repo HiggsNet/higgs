@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -33,22 +32,6 @@ const (
 	birdInstanceStateError          = "error"
 	maxRoutingCrashBackoff          = time.Minute
 )
-
-// birdProcessManager is the subset of bird.ProcessManager used by the daemon.
-type birdProcessManager interface {
-	Start(ctx context.Context, spec bird.BirdInstanceSpec) error
-	Stop(ctx context.Context, spec bird.BirdInstanceSpec) error
-	IsRunning(ctx context.Context) bool
-	LastExit() *bird.ProcessExit
-}
-
-// birdClient is the subset of bird.Client used by the daemon.
-type birdClient interface {
-	Status(ctx context.Context) (*bird.BirdObservedState, error)
-	Configure(ctx context.Context, path string) error
-	ConfigureSoft(ctx context.Context, path string) error
-	Raw(ctx context.Context, cmd string) (string, error)
-}
 
 func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
@@ -356,24 +339,15 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 	switch mode {
 	case bird.BirdModeManaged:
 		if configChanged {
-			if err := os.MkdirAll(filepath.Dir(spec.ConfigPath), 0o700); err != nil {
-				instState.State = birdInstanceStateError
-				instState.LastError = err.Error()
-				return fmt.Errorf("create bird config dir for netns %q: %w", netnsName, err)
-			}
-			if err := os.WriteFile(spec.ConfigPath, configBytes, 0o600); err != nil {
+			if err := d.linuxRuntime.WriteBirdConfig(spec.ConfigPath, configBytes); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
 				return fmt.Errorf("write bird config for netns %q: %w", netnsName, err)
 			}
 		}
 
-		pm := d.birdProcessManager
-		if pm == nil {
-			pm = d.routingProcessManagerForNetNS(netnsName)
-		}
-		running := pm.IsRunning(ctx)
-		if exit := pm.LastExit(); exit != nil {
+		running, exit := d.linuxRuntime.BirdProcessStatus(ctx, netnsName)
+		if exit != nil {
 			instState.LastExit = formatBirdProcessExit(exit)
 			instState.FailureCount++
 			instState.BackoffUntilUnix = now.Add(routingCrashBackoff(instState.FailureCount)).Unix()
@@ -387,7 +361,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 			return nil
 		}
 		if !running {
-			if err := pm.Start(ctx, spec); err != nil {
+			if err := d.linuxRuntime.StartBird(ctx, spec); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastError = err.Error()
 				if !isDryRunMissingBirdError(err) {
@@ -400,8 +374,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 				instState.LastExit = ""
 			}
 		} else if configChanged {
-			client := d.newBirdClient(spec.ControlSocketPath)
-			if err := client.Configure(ctx, spec.ConfigPath); err != nil {
+			if err := d.linuxRuntime.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath); err != nil {
 				instState.State = birdInstanceStateDegraded
 				instState.LastError = err.Error()
 				if !isDryRunConnectError(err) {
@@ -422,8 +395,7 @@ func (d *DaemonService) reconcileRoutingForInstance(ctx context.Context, state *
 		d.observeBirdForHealth(ctx, state, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
-		client := d.newBirdClient(spec.ControlSocketPath, bird.InternalRouteTableNames(netnsName)...)
-		observed, err := client.Status(ctx)
+		observed, err := d.linuxRuntime.ObserveBird(ctx, spec.ControlSocketPath, bird.InternalRouteTableNames(netnsName)...)
 		if err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = err.Error()
@@ -453,7 +425,7 @@ func (d *DaemonService) observeBirdForHealth(ctx context.Context, state *stateFi
 	}
 	observeCtx, cancel := context.WithTimeout(ctx, birdHealthObservationTimeout)
 	defer cancel()
-	observed, err := d.newBirdClient(socketPath, bird.InternalRouteTableNames(netnsName)...).Status(observeCtx)
+	observed, err := d.linuxRuntime.ObserveBird(observeCtx, socketPath, bird.InternalRouteTableNames(netnsName)...)
 	if err != nil {
 		d.recordBirdHealthObservationUnavailableForState(state, netnsName, overlays)
 		return
@@ -522,18 +494,6 @@ func birdRouteIsBabel(route bird.BirdRoute) bool {
 		strings.Contains(strings.ToLower(route.Source), "babel")
 }
 
-func (d *DaemonService) routingProcessManagerForNetNS(netnsName string) birdProcessManager {
-	if d.birdProcessManagers == nil {
-		d.birdProcessManagers = make(map[string]birdProcessManager)
-	}
-	pm := d.birdProcessManagers[netnsName]
-	if pm == nil {
-		pm = bird.NewExecProcessManager("")
-		d.birdProcessManagers[netnsName] = pm
-	}
-	return pm
-}
-
 func (d *DaemonService) stopManagedBirdInstances(ctx context.Context, force bool) error {
 	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
 		return nil
@@ -550,13 +510,6 @@ func (d *DaemonService) stopManagedBirdInstances(ctx context.Context, force bool
 		if !force && normalizedRoutingShutdownPolicy(inst.ShutdownPolicy) != routingShutdownPolicyStop {
 			continue
 		}
-		pm := d.birdProcessManager
-		if pm == nil {
-			pm = d.birdProcessManagers[inst.NetNS]
-		}
-		if pm == nil {
-			continue
-		}
 		mode := bird.BirdMode(inst.Mode)
 		if mode == "" {
 			mode = bird.BirdModeManaged
@@ -569,18 +522,11 @@ func (d *DaemonService) stopManagedBirdInstances(ctx context.Context, force bool
 			Mode:              mode,
 			Owner:             birdOwnerForInstance(inst, inst.NetNS),
 		}
-		if err := pm.Stop(ctx, spec); err != nil && firstErr == nil {
+		if err := d.linuxRuntime.StopBird(ctx, spec); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.NetNS, err)
 		}
 	}
 	return firstErr
-}
-
-func (d *DaemonService) newBirdClient(socketPath string, routeTables ...string) birdClient {
-	if d.birdClientFactory != nil {
-		return d.birdClientFactory(socketPath, 10*time.Second)
-	}
-	return bird.NewClientWithRouteTables(socketPath, 10*time.Second, routeTables)
 }
 
 func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName string, view birdDebugView) (*inspect.BirdDumpResponse, error) {
@@ -617,9 +563,8 @@ func (d *DaemonService) birdDumpForControl(ctx context.Context, netnsName string
 			response.Instances[inst.NetNS] = item
 			continue
 		}
-		client := d.newBirdClient(inst.ControlSocket)
 		for _, cmd := range commands {
-			out, err := client.Raw(ctx, cmd)
+			out, err := d.linuxRuntime.RawBird(ctx, inst.ControlSocket, cmd)
 			if err != nil {
 				if item.Error == "" {
 					item.Error = err.Error()

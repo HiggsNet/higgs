@@ -37,10 +37,9 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -145,10 +144,9 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: true}
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -194,10 +192,9 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("initial reconcileRouting: %v", err)
 	}
@@ -250,10 +247,9 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		unblock:   make(chan struct{}),
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 	var logs strings.Builder
 	service.Log = &appLogger{level: logLevelDebug, out: &logs, now: func() time.Time { return now }}
 
@@ -334,9 +330,9 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		return client
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)

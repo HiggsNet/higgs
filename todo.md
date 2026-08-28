@@ -830,7 +830,10 @@ package dependency: app -> host -> gossip -> state -> zone
       Linux runtime summary；app 私有 driver 接口、重复 backend probe、netns helper 和 test override 均已删除。
     - [x] routing upstream 的 veth/netns 与 `ip addr/route replace` 执行已迁入 Linux runtime；daemon 只根据
       authorized route set 构造 veth 与 upstream route spec，不再持有 veth/route manager 或 Linux 命令实现。
-    - [ ] 按真实调用链继续处理 BIRD process/client 与 health probe 的 Linux 执行部分；每一刀
+    - [x] BIRD 配置文件写入、per-netns process manager、start/stop/status/exit observation 和 birdc
+      configure/status/raw 已迁入 Linux runtime。daemon 保留 managed/external 决策、restart backoff 和 runtime
+      summary 更新；原 BIRD manager map、client factory 与 app 私有接口均已删除，测试通过同一 runtime 注入。
+    - [ ] 按真实调用链继续处理 health probe 的 Linux 执行部分；每一刀
       都先删除旧 app 入口再进入下一项，避免以迁移名义保留双路径或一次调用 wrapper。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；

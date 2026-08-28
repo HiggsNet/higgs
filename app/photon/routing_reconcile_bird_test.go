@@ -68,10 +68,9 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Error: "signal: killed"}}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -137,10 +136,9 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
@@ -188,8 +186,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient { return client }
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient { return client })
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("initial reconcileRouting: %v", err)
 	}
@@ -253,10 +250,9 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		unblock:   make(chan struct{}),
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
+	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
-	}
+	})
 
 	done := make(chan error, 1)
 	go func() {
@@ -328,11 +324,11 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 	externalPM := &fakeBirdProcessManager{running: true}
 	stopPM := &fakeBirdProcessManager{running: true}
 	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
-	service.birdProcessManagers = map[string]birdProcessManager{
+	installTestLinuxDrivers(service, testLinuxDrivers{birdProcesses: map[string]bird.ProcessManager{
 		"photontesth2": persistPM,
 		"photontesth3": externalPM,
 		"photontesth4": stopPM,
-	}
+	}})
 
 	if err := service.stopManagedBirdInstances(context.Background(), false); err != nil {
 		t.Fatalf("stopManagedBirdInstances: %v", err)
@@ -389,7 +385,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.birdProcessManager = pm
+	installTestBirdDrivers(service, pm, nil)
 
 	if service.flushRoutingReconcile(context.Background()) {
 		t.Fatalf("flushRoutingReconcile should return false when not dirty")

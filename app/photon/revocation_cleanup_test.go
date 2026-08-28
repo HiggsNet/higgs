@@ -617,11 +617,11 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	installTestPlatformDrivers(service, ipsecDriver, ipsecDriver, firewallDriver)
-	service.birdProcessManager = &fakeBirdProcessManager{running: false}
-	service.birdClientFactory = func(socketPath string, timeout time.Duration) birdClient {
-		return &fakeBirdClient{}
-	}
+	installTestLinuxDrivers(service, testLinuxDrivers{
+		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
+		birdProcess:       &fakeBirdProcessManager{running: false},
+		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },
+	})
 
 	service.notifyStateChanged()
 	current := service.currentState()
