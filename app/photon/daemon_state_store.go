@@ -272,7 +272,7 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 		return 0, false, errors.New("daemon composed state is not initialized")
 	}
 	if mutate == nil {
-		return sourceRevision, false, errors.New("Linux runtime mutation is nil")
+		return sourceRevision, false, errors.New("linux runtime mutation is nil")
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

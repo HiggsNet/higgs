@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"errors"
 	"os"
 	"sync"
 	"time"
@@ -396,33 +395,6 @@ func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error)
 	}
 
 	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network); err != nil {
-		return nil, err
-	}
-	return closeStateStoreWithFileInfo(path, store, &closed)
-}
-
-// saveStateMetaAtWithFileInfo persists daemon-local runtime/configuration
-// metadata without rewriting the immutable zone Network.
-func saveStateMetaAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error) {
-	// A routing-only write may be the first persistence operation in tests,
-	// recovery, or a freshly bootstrapped deployment. Seed the complete DB
-	// before using the metadata-only fast path.
-	if info, err := os.Stat(path); errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == 0) {
-		return saveStateAtWithFileInfo(path, state)
-	} else if err != nil {
-		return nil, err
-	}
-	store, err := zone.OpenBoltStore(path, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = store.Close()
-		}
-	}()
-	if err := store.SaveMetaJSON(cliMetaKey, stateMetaFromState(state)); err != nil {
 		return nil, err
 	}
 	return closeStateStoreWithFileInfo(path, store, &closed)

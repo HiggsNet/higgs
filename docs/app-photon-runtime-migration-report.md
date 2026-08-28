@@ -121,7 +121,6 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | chunk/NACK transport 与 checkpoint/观测 adapter | assembly 已由每个 host Runtime 独占；repair deadline/缺失索引在 gossip，timer/action 已进 host Scheduler |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
-| `daemon_state_projection.go` | 聚合 stateFile 的 controller/inspect 迁移期投影 | catalog、fetch-zone、object-pull、周期同步、relay 等 protocol projection 已全部删除；剩余展示进 inspect、controller 使用 typed input 后继续逐项删除，最终不保留该文件或通用 projection 层 |
 | `daemon_state_store.go` | E1 唯一 writer 协调器和聚合读视图 | owner/排序进入 host；Linux persistence 进入 capability；聚合 view 消失后删除 |
 | `daemon_sync.go` | Linux gossip event 预处理、snapshot capability、checkpoint、发送、relay、session 收尾 | 已退出完整 `stateFile` 读取，catalog/action/managed-zone/observed checkpoint 直接走 common Store/HostRuntime；继续迁走剩余 capability，FSM 保持在 `pkg/core/gossip` |
 
@@ -153,7 +152,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `firewall_config.go` | nftables/iptables/netns/hook 配置 | `internal/photonlinux/firewall/config` |
 | `firewall_reconcile.go` | firewall plan/apply/completion | `internal/photonlinux/firewall` PlatformController |
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
-| `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；兼容窗口结束后删除 |
+| `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
 | `health_reconcile.go` | probe target、manager、事件和状态 | 算法留 `pkg/health`；Linux target/observation 进 Linux health；事件回 host |
 | `health_spool.go` | JSONL health 历史和查询 | `internal/observability/healthspool`；不属于 state/checkpoint |
@@ -176,7 +175,6 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `linux_state_view.go` | 公共 view + Linux runtime 合成 stateFile | 迁移期读桥；consumer 改用 typed view 后删除 |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
-| `objectpull.go` | 已删除 | request/response/framing 留在 gossip；地址策略、outbound executor、peer 并发、quota、响应校验、worker/server 生命周期在 host；Linux TCP dial/exchange 在 photonlinux；daemon 仅在 `daemon_sync.go` 装配 listener/client 和 verified lookup，在 `diagnostics.go` 接收可丢失统计 |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |
 | `observer_server.go` | HTTP/OpenMetrics/SSE provider wiring | server/read model 进 observer；Linux app 只注入 provider |
 | `peer_lifecycle_cleanup.go` | peer 过期、checkpoint/observability/platform cleanup | policy/调度进 host；checkpoint 由 state 删除；平台资源通过 action 清理 |
@@ -194,7 +192,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `routing_config.go` | netns/BIRD/Babel/upstream config | `internal/photonlinux/routing/config` |
 | `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | Linux reconcile 进 routing controller；授权留 pkg/routing；公共 announce 用 state intent |
 | `routing_upstream_routes.go` | Linux `ip` 安装 upstream 地址/路由 | `internal/photonlinux/routing` driver |
-| `runtime_state_migration.go` | Linux runtime schema/codec 和旧 state 拆分 | codec/type 进 Linux state；旧转换进 migration，兼容结束后删除 |
+| `runtime_state_migration.go` | Linux runtime schema/codec 和旧 state 拆分 | codec/type 进 Linux state；旧转换进 migration；启动事务完成单向升级，只有明确停止支持旧 schema 时才删除 |
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
 | `state.go` | stateFile、Linux aliases、CLI Runtime、旧 Load/Save、统计 helper | verified/checkpoint 已归 state；Linux runtime 归 Linux state；CLI context 归 photoncli；stateFile/旧 Load/Save 最终删除 |
@@ -215,3 +213,14 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 5. **收口 CLI/展示**：`debug_*.go`、`status.go`、`zone.go`、`db.go` 最终只做参数解析、control/read model 调用和 presenter 输出。
 
 迁移过程中不再为单个调用点增加新的 stateFile wrapper。需要过渡时只允许 detached typed DTO，并在同一任务中写明删除条件。
+
+## 5. E2f 收口复核
+
+当前 `app/photon` 有 74 个非测试 Go 文件，均已在本报告逐项归类；历史上已删除的
+`daemon_state_projection.go` 与 `objectpull.go` 不再作为当前文件列出。production staticcheck 已清零。
+
+这次复核确认可以继续保留的只有三类代码：可执行程序装配和 Linux control transport、尚待下沉的 Linux
+controller/driver 实现、以及旧数据库单向迁移。后两类“仍有生产调用”不代表最终永久留在 app：例如
+`firewall_reconcile.go` 的策略输入和调度归公共 HostRuntime，nftables/iptables/netns 观测与 apply 最终进入
+`photonlinux`；`gossip_checkpoint_migration.go` 和 `runtime_state_migration.go` 则只在启动事务读取旧 schema。
+未再发现仅为测试或旧在线双路径保留的 production wrapper。
