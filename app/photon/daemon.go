@@ -91,6 +91,7 @@ const (
 	daemonTimerEndpoint                              = "endpoint_publish"
 	daemonTimerIPsec                                 = "ipsec_reconcile"
 	daemonTimerRouting                               = "routing_reconcile"
+	daemonTimerFirewall                              = "firewall_reconcile"
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
 	daemonEventRouteMutation         daemonEventType = "route_mutate"
@@ -276,8 +277,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.Config == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	initialState, _ := d.StateStore.Snapshot()
-	if initialState == nil {
+	if initialState, _ := d.StateStore.Snapshot(); initialState == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
 	if d.linuxRuntime == nil {
@@ -296,10 +296,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			d.logWarn("routing", "bird_shutdown_failed", map[string]any{"error": err})
 		}
 	}()
-	transport, err := d.Sync.openTransport(initialState)
+	transport, err := d.Sync.openTransport()
 	if err != nil {
 		return err
 	}
+	d.updateDiscoveredPeers()
 	err = d.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
 		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 	})
@@ -350,6 +351,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	startupNow := d.Sync.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
 	routingReconcileInterval := d.routingReconcileInterval()
+	firewallReconcileInterval := d.firewallReconcileInterval()
 	d.updateDiscoveredPeers()
 	// Apply persisted lifecycle policy before startup recovery so stale signed
 	// records cannot recreate links that already exceeded cleanup_after.
@@ -378,6 +380,9 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(startupNow, routingReconcileInterval)); err != nil {
 		return err
 	}
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(startupNow, firewallReconcileInterval)); err != nil {
+		return err
+	}
 	var forceSync bool
 	for {
 		if ctx.Err() != nil {
@@ -391,7 +396,6 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if d.drainHealthUpdates() {
 			d.handleHealthUpdate(d.Sync.now())
 		}
-		_ = firewallFlushed
 		if syncNow {
 			forceSync = true
 			if err := d.scheduleDaemonTimer(daemonTimerSync, now); err != nil {
@@ -417,6 +421,17 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval {
 			routingReconcileInterval = interval
 			if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(now, interval)); err != nil {
+				return err
+			}
+		}
+		if firewallFlushed {
+			if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(now, firewallReconcileInterval)); err != nil {
+				return err
+			}
+		}
+		if interval := d.firewallReconcileInterval(); interval != firewallReconcileInterval {
+			firewallReconcileInterval = interval
+			if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(now, interval)); err != nil {
 				return err
 			}
 		}
@@ -486,6 +501,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 					d.routingDirty = true
 					if d.flushRoutingReconcile(ctx) {
 						if err := d.scheduleDaemonTimer(daemonTimerRouting, nextRoutingReconcileTime(now, routingReconcileInterval)); err != nil {
+							return err
+						}
+					}
+				case daemonTimerFirewall:
+					d.firewallDirty = true
+					if d.flushFirewallReconcile(ctx) {
+						if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(now, firewallReconcileInterval)); err != nil {
 							return err
 						}
 					}

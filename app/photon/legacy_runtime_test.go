@@ -107,20 +107,6 @@ func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.Transpo
 	return matches
 }
 
-func (d *DaemonService) firewallReconcileInterval() time.Duration {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || len(firewallInstancesEnabled(d.Sync.App.Config)) == 0 {
-		return 0
-	}
-	return defaultFirewallReconcileInterval
-}
-
-func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time {
-	if interval <= 0 {
-		return time.Time{}
-	}
-	return now.Add(interval)
-}
-
 func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
 	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, "")
 }
@@ -194,15 +180,4 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.
 		daemon: d, now: d.Sync.now(), limits: syncLimits(d.Sync.Config),
 	})
 	return result.NetworkChanged
-}
-
-func recordPeerSync(state *stateFile, peerID string, err error) {
-	recordPeerSyncAt(state, peerID, err, timeNow())
-}
-
-func formatLastSuccess(peerState syncPeerState) string {
-	if peerState.LastSyncUnix == 0 {
-		return "never"
-	}
-	return formatUnixTime(peerState.LastSyncUnix)
 }

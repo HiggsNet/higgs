@@ -43,37 +43,32 @@ func TestRecordRelaySuccessDiagnostics(t *testing.T) {
 }
 
 func TestRecordPeerSyncBackoffAndRecovery(t *testing.T) {
-	state := &stateFile{}
+	peer := corestate.PeerCheckpoint{}
+	now := time.Unix(100, 0)
 
-	recordPeerSync(state, "node-b", errors.New("dial failed"))
-	failed := state.SyncPeers["node-b"]
-	if failed.FailureCount != 1 {
-		t.Fatalf("FailureCount after failure = %d, want 1", failed.FailureCount)
+	recordPeerSyncCheckpoint(&peer, errors.New("dial failed"), now)
+	if peer.FailureCount != 1 {
+		t.Fatalf("FailureCount after failure = %d, want 1", peer.FailureCount)
 	}
-	if failed.LastError != "dial failed" {
-		t.Fatalf("LastError = %q, want dial failed", failed.LastError)
+	if peer.LastFailure == nil || peer.LastFailure.Message != "dial failed" {
+		t.Fatalf("LastFailure = %#v, want dial failed", peer.LastFailure)
 	}
-	if failed.BackoffUntilUnix == 0 {
+	if peer.BackoffUntilUnix == 0 {
 		t.Fatalf("BackoffUntilUnix was not set")
 	}
 
-	recordPeerSync(state, "node-b", nil)
-	recovered := state.SyncPeers["node-b"]
-	if recovered.FailureCount != 0 || recovered.LastError != "" || recovered.BackoffUntilUnix != 0 {
-		t.Fatalf("peer did not recover cleanly: %#v", recovered)
+	recordPeerSyncCheckpoint(&peer, nil, now.Add(time.Minute))
+	if peer.FailureCount != 0 || peer.LastFailure != nil || peer.BackoffUntilUnix != 0 {
+		t.Fatalf("peer did not recover cleanly: %#v", peer)
 	}
-	if recovered.LastSyncUnix == 0 {
+	if peer.LastSyncUnix == 0 {
 		t.Fatalf("LastSyncUnix was not set on recovery")
 	}
 
-	lastSuccess := recovered.LastSyncUnix
-	recordPeerSync(state, "node-b", errors.New("sync receive timed out"))
-	failedAgain := state.SyncPeers["node-b"]
-	if failedAgain.LastSyncUnix != lastSuccess {
-		t.Fatalf("LastSyncUnix after later failure = %d, want previous %d", failedAgain.LastSyncUnix, lastSuccess)
-	}
-	if got := formatLastSuccess(failedAgain); got == "never" {
-		t.Fatalf("formatLastSuccess after later failure = %q, want previous success timestamp", got)
+	lastSuccess := peer.LastSyncUnix
+	recordPeerSyncCheckpoint(&peer, errors.New("sync receive timed out"), now.Add(2*time.Minute))
+	if peer.LastSyncUnix != lastSuccess {
+		t.Fatalf("LastSyncUnix after later failure = %d, want previous %d", peer.LastSyncUnix, lastSuccess)
 	}
 }
 

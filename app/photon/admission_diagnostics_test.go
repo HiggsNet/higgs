@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ed25519"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,10 +22,13 @@ func diagnoseTestAutoJoinAdmission(state *stateFile, now time.Time) inspect.Admi
 func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	adopted, err := tryAdoptAutoJoinDelegation(state, time.Unix(1000, 0))
-	if err != nil || !adopted {
-		t.Fatalf("pre-adopt: adopted=%v err=%v", adopted, err)
+	network, result, err := corestate.ReconcileManagedAuthority(
+		state.Network, state.ManagedZone, state.ZonePrivateKey.Public().(ed25519.PublicKey), time.Unix(1000, 0),
+	)
+	if err != nil || !result.Adopted {
+		t.Fatalf("pre-adopt: result=%+v err=%v", result, err)
 	}
+	state.Network = network
 	now := time.Unix(2000, 0)
 	d := diagnoseTestAutoJoinAdmission(state, now)
 	if d.Pending {
@@ -157,66 +159,6 @@ func TestUpdateAdmissionOnPendingPreservesTimestamp(t *testing.T) {
 	updateAdmissionOnPending(state, time.Unix(5000, 0))
 	if state.Admission.PendingSinceUnix != originalTime.Unix() {
 		t.Fatalf("pending_since = %d, want %d (should be preserved)", state.Admission.PendingSinceUnix, originalTime.Unix())
-	}
-}
-
-func TestRecordAdoptionResultSuccess(t *testing.T) {
-	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	now := time.Unix(8000, 0)
-	state.Admission = &admissionState{Pending: true, PendingSinceUnix: now.Add(-1 * time.Hour).Unix()}
-	recordAdoptionResult(state, true, nil, now)
-	if state.Admission.Pending {
-		t.Fatalf("should not be pending after adoption")
-	}
-	if state.Admission.AdoptedAtUnix != now.Unix() {
-		t.Fatalf("adopted_at = %d, want %d", state.Admission.AdoptedAtUnix, now.Unix())
-	}
-	if state.Admission.LastAdoptionError != "" {
-		t.Fatalf("last_adoption_error should be cleared, got %s", state.Admission.LastAdoptionError)
-	}
-}
-
-func TestRecordAdoptionResultFailure(t *testing.T) {
-	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	now := time.Unix(8000, 0)
-	state.Admission = &admissionState{Pending: true, PendingSinceUnix: now.Add(-1 * time.Hour).Unix()}
-	adoptionErr := errors.New("test adoption failure")
-	recordAdoptionResult(state, false, adoptionErr, now)
-	if !state.Admission.Pending {
-		t.Fatalf("should still be pending after failed adoption")
-	}
-	if state.Admission.LastAdoptionError != adoptionErr.Error() {
-		t.Fatalf("last_adoption_error = %q, want %q", state.Admission.LastAdoptionError, adoptionErr.Error())
-	}
-}
-
-func TestRecordBootstrapSyncSuccess(t *testing.T) {
-	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	now := time.Unix(6000, 0)
-	state.Admission = &admissionState{Pending: true}
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}},
-	}
-	recordBootstrapSyncSuccess(state, "catofes.", config, now)
-	if state.Admission.LastBootstrapSyncUnix != now.Unix() {
-		t.Fatalf("last_bootstrap_sync = %d, want %d", state.Admission.LastBootstrapSyncUnix, now.Unix())
-	}
-}
-
-func TestRecordBootstrapSyncIgnoresNonBootstrapPeer(t *testing.T) {
-	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	now := time.Unix(6000, 0)
-	state.Admission = &admissionState{Pending: true}
-	config := &syncConfigFile{
-		Bootstrap: []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}},
-	}
-	recordBootstrapSyncSuccess(state, "other.peer.", config, now)
-	if state.Admission.LastBootstrapSyncUnix != 0 {
-		t.Fatalf("last_bootstrap_sync should remain 0 for non-bootstrap peer")
 	}
 }
 

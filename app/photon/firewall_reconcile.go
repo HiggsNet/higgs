@@ -14,6 +14,20 @@ import (
 
 const defaultFirewallReconcileInterval = 30 * time.Second
 
+func (d *DaemonService) firewallReconcileInterval() time.Duration {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || len(firewallInstancesEnabled(d.Sync.App.Config)) == 0 {
+		return 0
+	}
+	return defaultFirewallReconcileInterval
+}
+
+func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time {
+	if interval <= 0 {
+		return time.Time{}
+	}
+	return now.Add(interval)
+}
+
 // firewallDriver is the subset of firewall.FirewallDriver used by the daemon.
 type firewallDriver interface {
 	Preflight(ctx context.Context, spec firewall.FirewallInstanceSpec) (firewall.FirewallPreflight, error)

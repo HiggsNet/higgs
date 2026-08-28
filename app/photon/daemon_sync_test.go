@@ -280,9 +280,6 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	service.EnableEventLoopSync(newFakeClock(now))
 
 	peerID := "node-b.catofes."
-	if !peerChainVerified(state, peerID, now) {
-		t.Fatal("test peer chain is not verified")
-	}
 	localSummary := corestate.CatalogSummaryFor(state.Network)
 
 	err := service.processPacketEvent(&gossip.Packet{

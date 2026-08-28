@@ -129,61 +129,6 @@ func TestValidateAutoJoinBootstrapConfigReportsSpecificMissingFields(t *testing.
 	}
 }
 
-func TestTryAdoptAutoJoinDelegationCreatesManagedZone(t *testing.T) {
-	dir := t.TempDir()
-	state, keyPath := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	key, err := readPrivateKeyFile(keyPath)
-	if err != nil {
-		t.Fatalf("readPrivateKeyFile: %v", err)
-	}
-	if !autoJoinPending(state) {
-		t.Fatalf("state should start pending")
-	}
-
-	adopted, err := tryAdoptAutoJoinDelegation(state, time.Unix(1000, 0))
-	if err != nil {
-		t.Fatalf("tryAdoptAutoJoinDelegation: %v", err)
-	}
-	if !adopted {
-		t.Fatalf("adopted = false, want true")
-	}
-	if autoJoinPending(state) {
-		t.Fatalf("state still pending after adoption")
-	}
-	zs := state.Network.Zones[state.ManagedZone]
-	if zs == nil || zs.Authority == nil {
-		t.Fatalf("managed zone was not created")
-	}
-	if !authorityHasKey(zs.Authority, key.PublicKey) {
-		t.Fatalf("managed zone authority missing local key")
-	}
-	if len(zs.ParentProof) != 1 || zs.ParentProof[0].ZoneName != state.ManagedZone {
-		t.Fatalf("parent proof = %#v, want direct proof for managed zone", zs.ParentProof)
-	}
-	if err := photoncrypto.VerifyChain(state.Network, state.ManagedZone, time.Unix(1000, 0)); err != nil {
-		t.Fatalf("VerifyChain: %v", err)
-	}
-}
-
-func TestTryAdoptAutoJoinDelegationIgnoresKeyMismatch(t *testing.T) {
-	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
-
-	adopted, err := tryAdoptAutoJoinDelegation(state, time.Unix(1000, 0))
-	if err != nil {
-		t.Fatalf("tryAdoptAutoJoinDelegation: %v", err)
-	}
-	if adopted {
-		t.Fatalf("adopted = true, want false")
-	}
-	if state.Network.Zones[state.ManagedZone] != nil {
-		t.Fatalf("managed zone should not be created for mismatched delegation")
-	}
-	if !autoJoinPending(state) {
-		t.Fatalf("state should remain pending")
-	}
-}
-
 func TestLoadStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
 	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")

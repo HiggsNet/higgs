@@ -7,6 +7,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
@@ -25,9 +26,9 @@ func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
 		},
 	}
 	transport := &gossip.Transport{}
-	sr := newSyncRuntime(config, transport, &Runtime{Clock: func() time.Time { return now }})
-
-	sr.seedObservedPeerPathAt(state, peerID, sr.now())
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service.Sync.Transport = transport
+	service.updateDiscoveredPeers()
 
 	grace := state.SyncPeers[peerID].ObservedGraceAddrs
 	if len(grace) != 2 || grace[0].Addr != "127.0.0.1:1000" || grace[1].Addr != "127.0.0.1:2000" {
@@ -58,9 +59,8 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	}
 
 	transport := &gossip.Transport{}
-	rt := &Runtime{Clock: func() time.Time { return now }}
-	sr := newSyncRuntime(config, transport, rt)
-	sr.seedObservedPeerPathAt(state, "node-b.catofes.", sr.now())
+	service.Sync.Transport = transport
+	service.updateDiscoveredPeers()
 
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:2000" {
 		t.Fatalf("ObservedPeerAddr = %v, want 127.0.0.1:2000", addr)
@@ -70,7 +70,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	if peers := corehost.GossipOutboundPeers(service.currentGossipDiscoveryInput(), now); len(peers) != 0 {
 		t.Fatalf("outboundSyncPeers after observed expiry = %v, want empty", peers)
 	}
-	sr.seedObservedPeerPathAt(state, "node-b.catofes.", sr.now())
+	service.updateDiscoveredPeers()
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr != nil {
 		t.Fatalf("ObservedPeerAddr after expiry = %v, want nil", addr)
 	}
@@ -78,50 +78,53 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 
 func TestObservedPathPreferenceAndFailureCount(t *testing.T) {
 	now := time.Unix(1000, 0)
-	peerState := syncPeerState{
+	state, config := buildTestNetworkState(t)
+	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {
 		DiscoveredAddr:    "127.0.0.1:9999",
 		ObservedAddr:      "127.0.0.1:2000",
 		ObservedUntilUnix: now.Add(time.Minute).Unix(),
-	}
-	if observedPathPreferFirst(peerState, now) {
+	}}
+	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	input := service.currentGossipDiscoveryInput()
+	if corehost.PlanGossipDiscovery(input, now).Peers["node-b.catofes."].PreferObserved {
 		t.Fatalf("observedPathPreferFirst should prefer direct endpoint before failure")
 	}
-	peerState.LastError = "sync once timed out"
-	if !observedPathPreferFirst(peerState, now) {
+	peer := input.Peers["node-b.catofes."]
+	peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureTimeout, Message: "sync once timed out", AtUnix: now.Unix()}
+	input.Peers["node-b.catofes."] = peer
+	if !corehost.PlanGossipDiscovery(input, now).Peers["node-b.catofes."].PreferObserved {
 		t.Fatalf("observedPathPreferFirst should prefer observed path after failure")
 	}
-	peerState.LastError = ""
-	peerState.DiscoveredAddr = "10.16.255.8:33435"
-	if !observedPathPreferFirst(peerState, now) {
+	peer.LastFailure = nil
+	peer.DiscoveredEndpoint = "10.16.255.8:33435"
+	input.Peers["node-b.catofes."] = peer
+	if !corehost.PlanGossipDiscovery(input, now).Peers["node-b.catofes."].PreferObserved {
 		t.Fatalf("observedPathPreferFirst should prefer observed path over private discovered endpoint")
 	}
 
-	peerState.ObservedFailureCount = 1
-	state := &stateFile{SyncPeers: map[string]syncPeerState{"node-b": peerState}}
-	recordPeerSyncAt(state, "node-b", nil, now)
-	if got := state.SyncPeers["node-b"].ObservedFailureCount; got != 0 {
+	peer.ObservedFailureCount = 1
+	recordPeerSyncCheckpoint(&peer, nil, now)
+	if got := peer.ObservedFailureCount; got != 0 {
 		t.Fatalf("ObservedFailureCount after success = %d, want 0", got)
 	}
 }
 
 func TestRecordPeerSyncAtUsesInjectedTime(t *testing.T) {
-	state := &stateFile{}
+	peer := corestate.PeerCheckpoint{}
 	now := time.Unix(1000, 0)
 
-	recordPeerSyncAt(state, "node-b", errors.New("dial failed"), now)
+	recordPeerSyncCheckpoint(&peer, errors.New("dial failed"), now)
 
-	peerState := state.SyncPeers["node-b"]
-	if peerState.LastAttemptUnix != now.Unix() {
-		t.Fatalf("LastAttemptUnix = %d, want %d", peerState.LastAttemptUnix, now.Unix())
+	if peer.LastAttemptUnix != now.Unix() {
+		t.Fatalf("LastAttemptUnix = %d, want %d", peer.LastAttemptUnix, now.Unix())
 	}
-	if peerState.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
-		t.Fatalf("BackoffUntilUnix = %d, want %d", peerState.BackoffUntilUnix, now.Add(2*time.Second).Unix())
+	if peer.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
+		t.Fatalf("BackoffUntilUnix = %d, want %d", peer.BackoffUntilUnix, now.Add(2*time.Second).Unix())
 	}
 
 	recoveredAt := now.Add(time.Minute)
-	recordPeerSyncAt(state, "node-b", nil, recoveredAt)
-	peerState = state.SyncPeers["node-b"]
-	if peerState.LastSyncUnix != recoveredAt.Unix() {
-		t.Fatalf("LastSyncUnix = %d, want %d", peerState.LastSyncUnix, recoveredAt.Unix())
+	recordPeerSyncCheckpoint(&peer, nil, recoveredAt)
+	if peer.LastSyncUnix != recoveredAt.Unix() {
+		t.Fatalf("LastSyncUnix = %d, want %d", peer.LastSyncUnix, recoveredAt.Unix())
 	}
 }

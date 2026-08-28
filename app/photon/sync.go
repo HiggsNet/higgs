@@ -24,7 +24,6 @@ import (
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 const defaultSyncRoundTimeout = 5 * time.Second
@@ -248,10 +247,11 @@ func syncServe(ctx context.Context) error {
 	defer boltStore.Close()
 	config := service.Sync.Config
 	logger := newAppLogger(config)
-	transport, err := service.Sync.openTransport(service.currentState())
+	transport, err := service.Sync.openTransport()
 	if err != nil {
 		return err
 	}
+	service.updateDiscoveredPeers()
 	err = service.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
@@ -309,10 +309,11 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	defer boltStore.Close()
-	transport, err := service.Sync.openTransport(service.currentState())
+	transport, err := service.Sync.openTransport()
 	if err != nil {
 		return err
 	}
+	service.updateDiscoveredPeers()
 	logger := newAppLogger(service.Sync.Config)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
@@ -330,7 +331,6 @@ func syncOnce(peerID string) error {
 	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
-	service.updateDiscoveredPeers()
 	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
 		return err
 	}
@@ -449,112 +449,7 @@ func recordObservedSource(store *observability.PeerObservabilityStore, peerID st
 	})
 }
 
-func observedPathActive(peerState syncPeerState, now time.Time) bool {
-	return peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0))
-}
-
-func pruneObservedGraceAddrs(grace []observedGraceAddrState, current string, now time.Time) []observedGraceAddrState {
-	if len(grace) == 0 {
-		return nil
-	}
-	out := grace[:0]
-	for _, entry := range grace {
-		if entry.Addr == "" || entry.Addr == current || entry.UntilUnix == 0 || !now.Before(time.Unix(entry.UntilUnix, 0)) {
-			continue
-		}
-		duplicate := false
-		for _, existing := range out {
-			if existing.Addr == entry.Addr {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			out = append(out, entry)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func observedPathPreferFirst(peerState syncPeerState, now time.Time) bool {
-	return observedPathActive(peerState, now) && (peerState.LastError != "" || peerState.DiscoveredAddr == "" || discoveredAddrIsPrivate(peerState.DiscoveredAddr))
-}
-
-func discoveredAddrIsPrivate(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
-}
-
-func peerChainVerified(state *stateFile, peerID string, now time.Time) bool {
-	if state == nil || state.Network == nil || peerID == "" {
-		return false
-	}
-	path := zone.ZonePath(peerID)
-	if !path.Valid() {
-		return false
-	}
-	if state.ManagedZone == path {
-		return false
-	}
-	// Validation hooks are runtime-only fields. Configure them on a shallow
-	// Network root so callers using an immutable StateStore view do not mutate
-	// the structurally shared committed Network.
-	network := *state.Network
-	configureValidation(&network)
-	return photoncrypto.VerifyChain(&network, path, now) == nil
-}
-
-// seedObservedPeerPaths mutates transport observed paths based on a read-only
-// state view.
-func (sr *SyncRuntime) seedObservedPeerPaths(state *stateFile) {
-	if sr == nil || state == nil || sr.Transport == nil {
-		return
-	}
-	now := sr.now()
-	for peerID := range state.SyncPeers {
-		sr.seedObservedPeerPathAt(state, peerID, now)
-	}
-}
-
-func (sr *SyncRuntime) seedObservedPeerPathAt(state *stateFile, peerID string, now time.Time) {
-	if sr == nil || state == nil || sr.Transport == nil || peerID == "" {
-		return
-	}
-	// pruneObservedGraceAddrs compacts its input slice in place. Detach the
-	// peer so seeding transport state cannot mutate a committed state
-	// child through the shared slice backing array.
-	peerState := cloneSyncPeerState(state.SyncPeers[peerID])
-	if !observedPathActive(peerState, now) || !peerChainVerified(state, peerID, now) {
-		sr.Transport.RemoveObservedPeerAddr(peerID)
-		return
-	}
-	addr, err := net.ResolveUDPAddr("udp", peerState.ObservedAddr)
-	if err != nil {
-		sr.Transport.RemoveObservedPeerAddr(peerID)
-		return
-	}
-	paths := []gossip.ObservedPath{{Addr: addr, Until: time.Unix(peerState.ObservedUntilUnix, 0)}}
-	for _, entry := range pruneObservedGraceAddrs(peerState.ObservedGraceAddrs, peerState.ObservedAddr, now) {
-		graceAddr, err := net.ResolveUDPAddr("udp", entry.Addr)
-		if err != nil {
-			continue
-		}
-		paths = append(paths, gossip.ObservedPath{Addr: graceAddr, Until: time.Unix(entry.UntilUnix, 0)})
-	}
-	sr.Transport.SetObservedPeerPaths(peerID, paths, observedPathPreferFirst(peerState, now))
-}
-
-func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error) {
+func (sr *SyncRuntime) openTransport() (*gossip.Transport, error) {
 	deps := sr.syncTransportDeps()
 	listenAddr := sr.Config.ListenAddr
 	if listenAddr == "" {
@@ -570,7 +465,6 @@ func (sr *SyncRuntime) openTransport(state *stateFile) (*gossip.Transport, error
 		return nil, err
 	}
 	sr.Transport = transport
-	sr.seedTransportPeers(state, deps)
 	return transport, nil
 }
 
@@ -583,33 +477,6 @@ func (sr *SyncRuntime) transportConfig(deps *SyncTransportDeps) gossip.Config {
 		Quotas:          deps.Quotas,
 		Clock:           sr.now,
 		Log:             deps.Log,
-	}
-}
-
-func (sr *SyncRuntime) seedTransportPeers(state *stateFile, deps *SyncTransportDeps) {
-	if state == nil || sr.Transport == nil {
-		return
-	}
-	sr.addVerifiedZonePeers(state)
-	sr.seedObservedPeerPaths(state)
-	for peerID, entries := range gossip.ExtractPeerEndpoints(state.Network) {
-		if peerID == sr.Config.PeerID || peerID == string(state.ManagedZone) {
-			continue
-		}
-		if _, ok := deps.KnownPeers[peerID]; ok {
-			continue
-		}
-		var addrs []*net.UDPAddr
-		for _, entry := range sortedEndpointEntriesForDial(entries) {
-			addr, err := entry.UDPAddr()
-			if err != nil {
-				continue
-			}
-			addrs = append(addrs, addr)
-		}
-		if len(addrs) > 0 {
-			sr.Transport.SetPeerAddrs(peerID, addrs)
-		}
 	}
 }
 
@@ -789,73 +656,6 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(state *stateFile) (*co
 		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: state.ManagedZone,
 		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
 	}, nil
-}
-
-// addVerifiedZonePeers mutates transport known-peer state based on a read-only
-// state view.
-func (sr *SyncRuntime) addVerifiedZonePeers(state *stateFile) {
-	transport := sr.Transport
-	config := sr.Config
-	if state == nil || state.Network == nil {
-		return
-	}
-	// Validation hooks are runtime-only. Install them on a shallow root so a
-	// transport refresh never mutates the state view supplied by StateStore.
-	network := *state.Network
-	configureValidation(&network)
-	now := sr.now()
-	for path := range network.Zones {
-		peerID := string(path)
-		if peerID == config.PeerID || peerID == string(state.ManagedZone) {
-			continue
-		}
-		if err := photoncrypto.VerifyChain(&network, path, now); err != nil {
-			continue
-		}
-		transport.AddKnownPeerID(peerID)
-	}
-	for parentPath, zs := range network.Zones {
-		if zs == nil || len(zs.Delegations) == 0 {
-			continue
-		}
-		if err := photoncrypto.VerifyChain(&network, parentPath, now); err != nil {
-			continue
-		}
-		for childPath := range zs.Delegations {
-			peerID := string(childPath)
-			if peerID == config.PeerID || peerID == string(state.ManagedZone) || network.IsZoneRevoked(childPath, now) {
-				continue
-			}
-			transport.AddKnownPeerID(peerID)
-		}
-	}
-}
-
-func sortedEndpointEntriesForDial(entries []gossip.EndpointEntry) []gossip.EndpointEntry {
-	out := append([]gossip.EndpointEntry(nil), entries...)
-	sort.SliceStable(out, func(i, j int) bool {
-		ri := endpointDialRank(out[i])
-		rj := endpointDialRank(out[j])
-		if ri != rj {
-			return ri < rj
-		}
-		if out[i].Priority != out[j].Priority {
-			return out[i].Priority > out[j].Priority
-		}
-		return out[i].LastObserved > out[j].LastObserved
-	})
-	return out
-}
-
-func endpointDialRank(entry gossip.EndpointEntry) int {
-	ip := net.ParseIP(entry.Address)
-	if ip == nil {
-		return 3
-	}
-	if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return 2
-	}
-	return 0
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {

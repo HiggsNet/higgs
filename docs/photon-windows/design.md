@@ -181,7 +181,7 @@ listener/client 的 composition 与 verified-state lookup，不另建 server wor
 active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
 executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。
-daemon 的 sync、endpoint publisher、IPsec 和 routing 周期 deadline 也复用 HostRuntime 的 namespaced Scheduler；
+daemon 的 sync、endpoint publisher、IPsec、routing 和 firewall 周期 deadline 也复用 HostRuntime 的 namespaced Scheduler；
 平台循环不再另建 deadline 集合或 wakeup timer。timer fire 与 gossip packet/object-pull completion 进入同一有界
 event queue，在 single-writer 接受 generation 后才触发 controller reconcile。
 同步事件的稳定诊断名和 peer ID 提取也由公共包提供，executor 不重复维护 event type switch。

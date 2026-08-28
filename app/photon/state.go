@@ -550,31 +550,6 @@ func globalRootHash(digests []corestate.ZoneDigest) []byte {
 	return photoncrypto.Hash(parts...)
 }
 
-func recordPeerSyncAt(state *stateFile, peerID string, err error, now time.Time) {
-	if state == nil || peerID == "" {
-		return
-	}
-	normalizeSyncPeers(state)
-	peerState := state.SyncPeers[peerID]
-	peerState.LastAttemptUnix = now.Unix()
-	if err != nil {
-		peerState.FailureCount++
-		backoff := time.Duration(1<<minInt(peerState.FailureCount, 6)) * time.Second
-		peerState.BackoffUntilUnix = now.Add(backoff).Unix()
-		peerState.LastError = err.Error()
-	} else {
-		peerState.LastSyncUnix = now.Unix()
-		peerState.BackoffUntilUnix = 0
-		peerState.FailureCount = 0
-		peerState.LastError = ""
-		if peerState.ObservedAddr != "" && peerState.ObservedUntilUnix != 0 && now.Before(time.Unix(peerState.ObservedUntilUnix, 0)) {
-			peerState.ObservedLastSyncUnix = now.Unix()
-			peerState.ObservedFailureCount = 0
-		}
-	}
-	state.SyncPeers[peerID] = peerState
-}
-
 func recordSyncActivePull(store *observability.PeerObservabilityStore, peerID, event string, session *gossip.SyncSession, now time.Time) {
 	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if session != nil {

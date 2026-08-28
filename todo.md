@@ -807,16 +807,18 @@ package dependency: app -> host -> gossip -> state -> zone
     committed verified view 构造响应，在 `diagnostics.go` 消费可丢失观测结果。旧全局 client limiter、peer limiter、
     quota wrapper、timeout helper、worker adapter 和两套 offline/online pull 路径均已删除；HostRuntime 的 4 个有界
     worker 是唯一全局并发边界。
-  - [x] E2e：daemon 的 sync 周期、endpoint 发布、IPsec reconcile 和 routing reconcile 不再维护私有 deadline
-    集合或每轮创建 `time.Timer`；四类 deadline 使用独立 key 进入 HostRuntime 的同一 namespaced Scheduler，fire
+  - [x] E2e：daemon 的 sync 周期、endpoint 发布、IPsec reconcile、routing reconcile 和 firewall reconcile
+    不再维护私有 deadline 集合或每轮创建 `time.Timer`；五类 deadline 使用独立 key 进入 HostRuntime 的同一 namespaced Scheduler，fire
     通过公共 event queue 回到 daemon single-writer 后才校验 generation 并执行。配置变化、dirty flush 和显式 sync
     trigger 都以 replace/cancel 方式更新同一 timer identity，禁用 controller 时取消对应 timer。VICI 订阅重试和
     health probe 自身的异步生命周期尚未迁入公共调度，不能据此把全部 controller runtime 标为完成。
   - [ ] E2f：进入 F 前完成 `app/photon` 在线边界收口审计，不带着旧组合视图入口继续扩平台。当前已删除旧 catalog
     filter、单 snapshot commit wrapper、legacy rejected/observed 写 helper、aggregate Linux commit 和重复 snapshot
-    codec/hash helper，并将测试改到公共 Store 与正式 gossip controller。尚需完成：启动 transport 不再从旧
-    `stateFile.SyncPeers` 恢复 observed path；补上 firewall 周期 safety reconcile；删除确认无调用的 admission、旧
-    auto-join、revocation wrapper 与 state helper；区分并保留真正的旧数据库单向迁移。完成后重新扫描
+    codec/hash helper，并将测试改到公共 Store 与正式 gossip controller。transport 启动已不再接收 `stateFile`，
+    daemon、`sync serve` 与 `sync once` 均在启动 receiver 前通过同一 HostRuntime discovery 从公共
+    verified/checkpoint 恢复 known peer、endpoint 和 observed path，旧 SyncRuntime 恢复/校验/排序 helper 已删除。
+    firewall 也已补齐 30 秒周期 safety reconcile：启用实例时调度，显式 reconcile 后替换同一 timer，禁用全部实例时取消。
+    尚需完成：删除确认无调用的 admission、旧 auto-join、revocation wrapper 与 state helper；区分并保留真正的旧数据库单向迁移。完成后重新扫描
     `app/photon`，逐项说明仍留在 composition root 的原因，再开始 F。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；

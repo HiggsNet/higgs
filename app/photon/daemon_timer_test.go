@@ -27,3 +27,19 @@ func TestScheduleDaemonTimerUsesHostRuntimeNamespace(t *testing.T) {
 		t.Fatal("daemon timer did not fire")
 	}
 }
+
+func TestScheduleDaemonTimerCancelsDisabledFirewallInterval(t *testing.T) {
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1)
+	defer runtime.Stop()
+	d := &DaemonService{hostRuntime: runtime}
+	id := corehost.TimerID{Namespace: daemonTimerNamespace, Owner: daemonTimerOwner, Key: daemonTimerFirewall}
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(time.Now(), 0)); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.AcceptTimer(corehost.TimerFired{ID: id, Generation: 1}) {
+		t.Fatal("cancelled firewall timer generation was accepted")
+	}
+}

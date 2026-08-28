@@ -15,15 +15,16 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestOpenSyncTransportAddsVerifiedZones(t *testing.T) {
+func TestStartupDiscoveryAddsVerifiedZones(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 
-	transport, err := newSyncRuntime(config, nil, nil).openTransport(state)
+	transport, err := newSyncRuntime(config, nil, nil).openTransport()
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("openSyncTransport: %v", err)
 	}
 	defer transport.Close()
+	updateDiscoveredPeersForTest(t, state, config, transport)
 
 	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
@@ -50,13 +51,11 @@ func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncCo
 	state.SyncPeers = committed.SyncPeers
 }
 
-func TestAddVerifiedZonePeersAddsDelegatedChildWithoutZoneState(t *testing.T) {
+func TestStartupDiscoveryAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	delete(state.Network.Zones, zone.ZonePath("node-b.catofes."))
 	transport := &gossip.Transport{}
-	sr := newSyncRuntime(config, transport, &Runtime{Clock: func() time.Time { return time.Unix(123, 0) }})
-
-	sr.addVerifiedZonePeers(state)
+	updateDiscoveredPeersForTest(t, state, config, transport)
 
 	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
@@ -320,7 +319,7 @@ func TestDefaultSyncTransportDeps(t *testing.T) {
 func TestUpdateDiscoveredPeersAddsAddrsForEndpoints(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 
-	transport, err := newSyncRuntime(config, nil, nil).openTransport(state)
+	transport, err := newSyncRuntime(config, nil, nil).openTransport()
 	if err != nil {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("openSyncTransport: %v", err)
