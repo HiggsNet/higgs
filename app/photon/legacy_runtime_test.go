@@ -130,11 +130,7 @@ func revokeIPAMAssignmentWithRuntime(rt *Runtime, path zone.ZonePath, prefix str
 }
 
 func pullObjectTCP(addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	return pullObjectTCPForPeer("", addr, req)
-}
-
-func pullObjectTCPForPeer(peerID, addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	return pullObjectTCPForPeerUntil(peerID, addr, req, time.Time{})
+	return (photonlinux.GossipObjectPullClient{}).Exchange(context.Background(), addr, req)
 }
 
 func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
@@ -145,7 +141,6 @@ func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest
 			network = state.Network
 		}
 		response := gossip.BuildObjectPullResponse(network, req, time.Now())
-		logObjectPullSnapshot(req, response)
 		return response
 	}
 }

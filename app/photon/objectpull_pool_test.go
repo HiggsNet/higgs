@@ -1,10 +1,12 @@
 package main
 
 import (
+	"net"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -28,16 +30,21 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		t.Fatalf("PutAt: %v", err)
 	}
 
-	listener, err := objectPullTCPServe("127.0.0.1:0", objectPullLookup(func() *stateFile { return state }))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		skipRestrictedSocket(t, err)
-		t.Fatalf("objectPullTCPServe: %v", err)
+		t.Fatalf("Listen: %v", err)
 	}
-	defer listener.Close()
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
+	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, objectPullLookup(func() *stateFile { return state }), 0, 0); err != nil {
+		_ = listener.Close()
+		t.Fatalf("StartGossipObjectPullServer: %v", err)
+	}
+	defer runtime.Stop()
 
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
 	service := newTestDaemonService(&Runtime{}, state, config, time.Second)
-	completion := (daemonObjectPullWorker{daemon: service}).PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err != nil {
 		t.Fatalf("object pull failed: %v", completion.Err)
 	}
@@ -53,7 +60,7 @@ func TestDaemonObjectPullWorkerReturnsErrorForUnreachable(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}}}
 	service := newTestDaemonService(&Runtime{}, state, config, time.Second)
-	completion := (daemonObjectPullWorker{daemon: service}).PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err == nil {
 		t.Fatal("expected error for unreachable peer")
 	}

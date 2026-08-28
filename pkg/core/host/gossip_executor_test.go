@@ -3,12 +3,14 @@ package host
 import (
 	"context"
 	"errors"
+	"net"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 type memoryGossipController struct {
@@ -26,13 +28,27 @@ type memoryGossipController struct {
 type memoryLinuxGossipController struct{ memoryGossipController }
 type memoryWindowsGossipController struct{ memoryGossipController }
 
-type memoryGossipObjectPullWorker struct {
-	pulls chan gossip.StartObjectPullAction
+type successfulObjectPullClient struct{}
+
+func (successfulObjectPullClient) Exchange(_ context.Context, _ string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+	return &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: request.Zone}}, nil
 }
 
-func (worker *memoryGossipObjectPullWorker) PullGossipObject(_ context.Context, pull gossip.StartObjectPullAction) GossipObjectPullCompletion {
-	worker.pulls <- pull
-	return GossipObjectPullCompletion{PeerID: pull.PeerID, Zone: pull.Zone}
+func memoryObjectPullExecutor(pulls chan gossip.StartObjectPullAction) *GossipObjectPullExecutor {
+	return NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
+		Client: successfulObjectPullClient{},
+		Discovery: func() GossipDiscoveryInput {
+			return GossipDiscoveryInput{
+				Network:   zone.NewNetworkState(),
+				Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}},
+			}
+		},
+		ObserveAttempt: func(peerID string, path zone.ZonePath, _ time.Time) {
+			if pulls != nil {
+				pulls <- gossip.StartObjectPullAction{PeerID: peerID, Zone: path}
+			}
+		},
+	})
 }
 
 func (controller *memoryGossipController) GossipStateView(context.Context) GossipStateView {
@@ -88,8 +104,8 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	runtime := NewRuntime(clock, 4)
 	defer runtime.Stop()
-	pullWorker := &memoryGossipObjectPullWorker{pulls: make(chan gossip.StartObjectPullAction, 1)}
-	if err := runtime.StartGossipObjectPullWorkers(t.Context(), pullWorker, 1, 1); err != nil {
+	pulls := make(chan gossip.StartObjectPullAction, 1)
+	if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(pulls), 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	controller := &memoryGossipController{
@@ -124,7 +140,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	if controller.completion == nil || controller.completion.PeerID != "peer-a" || controller.completion.Err != nil {
 		t.Fatalf("completion = %#v", controller.completion)
 	}
-	if pull := <-pullWorker.pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
+	if pull := <-pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
 		t.Fatalf("pull = %#v", pull)
 	}
 	if event, ok := runtime.GossipEventFor(<-runtime.Events()); !ok {
@@ -198,7 +214,7 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	commitErr := errors.New("commit failed")
 	for _, adapter := range adapters {
 		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
-		if err := runtime.StartGossipObjectPullWorkers(t.Context(), &memoryGossipObjectPullWorker{pulls: make(chan gossip.StartObjectPullAction, 1)}, 1, 1); err != nil {
+		if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(nil), 1, 1); err != nil {
 			t.Fatal(err)
 		}
 		controller, memory := adapter.new()

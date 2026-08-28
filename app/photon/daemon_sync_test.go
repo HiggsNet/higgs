@@ -76,25 +76,17 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	listenerA, err := startObjectPullServer(serviceA)
-	if err != nil {
+	if err := startObjectPullServer(ctx, serviceA); err != nil {
 		t.Fatalf("startObjectPullServer(A): %v", err)
 	}
-	if listenerA != nil {
-		defer listenerA.Close()
-	}
-	listenerB, err := startObjectPullServer(serviceB)
-	if err != nil {
+	if err := startObjectPullServer(ctx, serviceB); err != nil {
 		t.Fatalf("startObjectPullServer(B): %v", err)
 	}
-	if listenerB != nil {
-		defer listenerB.Close()
-	}
-	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceA}, 0, 0); err != nil {
+	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceA.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	defer serviceA.hostRuntime.Stop()
-	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: serviceB}, 0, 0); err != nil {
+	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceB.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	defer serviceB.hostRuntime.Stop()

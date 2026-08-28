@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,17 +54,20 @@ type Runtime struct {
 
 	events chan Event
 
-	mu                sync.RWMutex
-	scheduler         *Scheduler
-	objectPullCancel  context.CancelFunc
-	objectPullJobs    chan gossip.StartObjectPullAction
-	objectPullWG      sync.WaitGroup
-	objectPullPending atomic.Int64
-	gossipChunks      *gossip.ChunkAssemblyStore
-	datagramReceiver  DatagramReceiver
-	datagramCancel    context.CancelFunc
-	datagramWG        sync.WaitGroup
-	stopped           bool
+	mu                       sync.RWMutex
+	scheduler                *Scheduler
+	objectPullCancel         context.CancelFunc
+	objectPullJobs           chan gossip.StartObjectPullAction
+	objectPullWG             sync.WaitGroup
+	objectPullPending        atomic.Int64
+	objectPullServerCancel   context.CancelFunc
+	objectPullServerListener net.Listener
+	objectPullServerWG       sync.WaitGroup
+	gossipChunks             *gossip.ChunkAssemblyStore
+	datagramReceiver         DatagramReceiver
+	datagramCancel           context.CancelFunc
+	datagramWG               sync.WaitGroup
+	stopped                  bool
 }
 
 func NewRuntime(clock Clock, eventBuffer int) *Runtime {
@@ -217,6 +221,8 @@ func (runtime *Runtime) Stop() {
 	runtime.stopped = true
 	scheduler := runtime.scheduler
 	objectPullCancel := runtime.objectPullCancel
+	objectPullServerCancel := runtime.objectPullServerCancel
+	objectPullServerListener := runtime.objectPullServerListener
 	datagramCancel := runtime.datagramCancel
 	runtime.mu.Unlock()
 	if datagramCancel != nil {
@@ -225,9 +231,16 @@ func (runtime *Runtime) Stop() {
 	if objectPullCancel != nil {
 		objectPullCancel()
 	}
+	if objectPullServerCancel != nil {
+		objectPullServerCancel()
+	}
+	if objectPullServerListener != nil {
+		_ = objectPullServerListener.Close()
+	}
 	scheduler.Stop()
 	runtime.datagramWG.Wait()
 	runtime.objectPullWG.Wait()
+	runtime.objectPullServerWG.Wait()
 	runtime.objectPullPending.Store(0)
 	if runtime.gossipChunks != nil {
 		runtime.gossipChunks.Close()

@@ -176,7 +176,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `linux_state_view.go` | 公共 view + Linux runtime 合成 stateFile | 迁移期读桥；consumer 改用 typed view 后删除 |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
-| `objectpull.go` | TCP object-pull transport、quota、统计 | request/response 构造已进 gossip，在线 worker/completion、recovery lookup 和 peer 地址选择已进 host；继续把跨平台 dial/listen/deadline capability 迁入公共 transport，统计进 observability |
+| `objectpull.go` | 已删除 | request/response/framing 留在 gossip；地址策略、outbound executor、peer 并发、quota、响应校验、worker/server 生命周期在 host；Linux TCP dial/exchange 在 photonlinux；daemon 仅在 `daemon_sync.go` 装配 listener/client 和 verified lookup，在 `diagnostics.go` 接收可丢失统计 |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |
 | `observer_server.go` | HTTP/OpenMetrics/SSE provider wiring | server/read model 进 observer；Linux app 只注入 provider |
 | `peer_lifecycle_cleanup.go` | peer 过期、checkpoint/observability/platform cleanup | policy/调度进 host；checkpoint 由 state 删除；平台资源通过 action 清理 |

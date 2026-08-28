@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -21,6 +22,80 @@ const syncIngressRouteTTL = time.Minute
 type syncIngressRoute struct {
 	addr  *net.UDPAddr
 	until time.Time
+}
+
+// objectPullTCPAddr derives the TCP object-pull address from a gossip UDP
+// endpoint. TCP and UDP intentionally share the numeric port.
+func objectPullTCPAddr(udpAddr string) string {
+	udp, err := net.ResolveUDPAddr("udp", udpAddr)
+	if err != nil {
+		return ""
+	}
+	return (&net.TCPAddr{IP: udp.IP, Port: udp.Port}).String()
+}
+
+func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+	if d == nil || d.StateStore == nil {
+		return &gossip.ObjectPullResponse{Error: "invalid request"}
+	}
+	view := d.StateStore.common.ReadView()
+	var network *zone.NetworkState
+	if view.State != nil {
+		network = view.State.Network
+	}
+	response := gossip.BuildObjectPullResponse(network, req, time.Now())
+	if req != nil && response != nil && response.OK && response.Snapshot != nil {
+		encoded, _ := gossip.EncodeZoneSnapshotObject(response.Snapshot)
+		d.logDebug("object_pull", "lookup_snapshot", map[string]any{
+			"zone": req.Zone.String(), "records": len(response.Snapshot.Records), "bytes": len(encoded),
+		})
+	}
+	return response
+}
+
+func newDaemonObjectPullExecutor(d *DaemonService) *corehost.GossipObjectPullExecutor {
+	return corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
+		Client:    photonlinux.GossipObjectPullClient{},
+		Discovery: d.currentGossipDiscoveryInput,
+		Now:       d.Sync.now,
+		ObserveAttempt: func(peerID string, path zone.ZonePath, now time.Time) {
+			d.observeObjectPullAttempt(peerID, path, now)
+			d.logDebug("object_pull", "worker_start", map[string]any{"peer_id": peerID, "zone": path.String()})
+		},
+		ObserveResult: func(result corehost.GossipObjectPullDiagnostics) {
+			d.observeObjectPullResult(result)
+			errorText := ""
+			if result.Err != nil {
+				errorText = result.Err.Error()
+			}
+			d.logDebug("object_pull", "worker_done", map[string]any{
+				"peer_id": result.PeerID, "zone": result.Zone.String(), "ok": result.Err == nil,
+				"bytes": result.Bytes, "error": errorText,
+			})
+		},
+	})
+}
+
+// startObjectPullServer binds the platform listener and gives its lifecycle to
+// HostRuntime.
+func startObjectPullServer(ctx context.Context, d *DaemonService) error {
+	if d == nil || d.Sync == nil || d.Sync.Transport == nil || d.hostRuntime == nil {
+		return errors.New("object-pull server runtime is not configured")
+	}
+	addr := objectPullTCPAddr(d.Sync.Transport.LocalAddr().String())
+	if addr == "" {
+		return nil
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	if err := d.hostRuntime.StartGossipObjectPullServer(ctx, listener, d.objectPullResponse, 0, 0); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	d.logInfo("object_pull", "serve_started", map[string]any{"addr": listener.Addr()})
+	return nil
 }
 
 // event-loop sync path is the only daemon sync path; this helper remains for

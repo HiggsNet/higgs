@@ -172,6 +172,12 @@ backpressure 和顺序边界，不创建第二条 packet channel 或 per-packet 
 不再持有 `UDPConn` 或执行 bind/read/write，只通过 `DatagramIO` capability 使用注入的 packet socket；它继续
 统一负责 wire codec、allowlist、replay/quota 和地址选择。Linux 的 bind、`SO_REUSEPORT`、read/write/deadline
 实现位于 `internal/photonlinux`，未来 Windows 注入自己的 adapter，不复制 Transport 策略。
+TCP object-pull 的 listener 生命周期同样由唯一 HostRuntime 持有：平台 composition 只创建并注入
+`net.Listener`，Runtime 统一执行有界 accept、连接 deadline、过载关闭、context cancellation 和 shutdown drain。
+`pkg/core/gossip` 继续唯一拥有 object-pull framing、codec 与 request/response 语义；Linux app 目前只保留
+listener/client 的 composition 与 verified-state lookup，不另建 server worker/event queue。公共 host executor 统一
+地址选择、peer 并发、quota、响应校验和 completion/diagnostics 结果；Linux TCP adapter 只执行 dial、deadline 和
+一次 stream exchange，Windows 后续注入等价 adapter 即可。
 active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
 executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。

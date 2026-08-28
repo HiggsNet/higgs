@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/urfave/cli/v3"
@@ -270,6 +273,10 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	limits.MaxBytes = 8 << 20
 
 	deadline := time.Now().Add(timeout)
+	pullExecutor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
+		Client: photonlinux.GossipObjectPullClient{},
+		Now:    rt.Now,
+	})
 	results := make([]*corestate.ApplyResult, 0, len(paths))
 	// Commit each ancestor before validating its child. An interrupted chain
 	// recovery may leave a valid recovered prefix, never an unverified child.
@@ -281,11 +288,13 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		}
 		view = startup.Common.ReadView()
 		input := buildGossipDiscoveryInput(view, startup.Runtime.PeerCleanups, config)
-		snapshot, err := tryObjectPullTCPUntil(input, peerID, path, deadline)
-		if err != nil {
-			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
+		pullCtx, cancel := context.WithDeadline(ctx, deadline)
+		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
+		cancel()
+		if completion.Err != nil {
+			return fmt.Errorf("recover %s from %s: %w", path, peerID, completion.Err)
 		}
-		imported, err := startup.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: snapshot, Limits: limits}, rt.Now())
+		imported, err := startup.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, rt.Now())
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}

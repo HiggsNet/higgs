@@ -793,6 +793,20 @@ package dependency: app -> host -> gossip -> state -> zone
     协议测试使用测试注入 adapter，Linux adapter 单独验证 UDP round-trip 与端口复用。当前 TCP object-pull
     listener 仍由 `app/photon` 创建，daemon 中 controller/control/health 的剩余调度也尚未收口，不能把 E2b
     误记为全部 runtime I/O 已完成。
+  - [x] E2c：将 TCP object-pull server 生命周期收归唯一 HostRuntime。Linux composition 只负责按实际 UDP
+    endpoint 创建 `net.Listener` 并注入；Runtime 独占 accept loop、默认 16 连接上限、单连接 deadline、过载拒绝、
+    context cancel、listener close 与 handler drain。daemon、`advanced sync serve`、`sync once` 和测试均已切换，
+    `objectPullTCPServe`、app 私有 accept goroutine、全局 server limiter 与重复 listen-address helper 已删除。
+    gossip 继续独占 length-prefixed msgpack request/response codec 与 `ServeObjectPull` 语义；outbound TCP dial、
+    client quota/diagnostics 目前仍由 Linux worker 执行，后续切 capability 时不得再创建第二套 worker/event queue。
+    daemon 中 controller/control/health 的剩余调度尚未收口，不能把 E2c 误记为整个 daemon runtime 已完成。
+  - [x] E2d：删除 `app/photon/objectpull.go` 与 Linux 私有 outbound worker。公共 host executor 统一处理
+    discovery/address policy、每 peer 并发、字节/对象 quota、请求构造、响应/目标 zone 校验、completion 和
+    diagnostics 分类，并同时供在线 Runtime worker 与离线 recovery 复用；Linux adapter 只负责 context-aware TCP
+    dial、连接 deadline 和一次 gossip stream exchange。daemon 只在 `daemon_sync.go` 注入 listener/client、从
+    committed verified view 构造响应，在 `diagnostics.go` 消费可丢失观测结果。旧全局 client limiter、peer limiter、
+    quota wrapper、timeout helper、worker adapter 和两套 offline/online pull 路径均已删除；HostRuntime 的 4 个有界
+    worker 是唯一全局并发边界。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

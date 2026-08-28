@@ -56,8 +56,9 @@ type DaemonService struct {
 	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
 
-	hostRuntime       *corehost.Runtime
-	syncIngressRoutes map[string]syncIngressRoute
+	hostRuntime        *corehost.Runtime
+	objectPullExecutor *corehost.GossipObjectPullExecutor
+	syncIngressRoutes  map[string]syncIngressRoute
 
 	// Test overrides for BIRD routing reconcile.
 	birdProcessManager   birdProcessManager
@@ -191,6 +192,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
 	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
+	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	d.configureHealthManager()
 	return d
 }
@@ -298,14 +300,11 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	objectPullListener, err := startObjectPullServer(d)
+	err = startObjectPullServer(ctx, d)
 	if err != nil {
 		d.logError("object_pull", "server_start_failed", map[string]any{"error": err})
 	}
-	if objectPullListener != nil {
-		defer objectPullListener.Close()
-	}
-	if err := d.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: d}, 0, 0); err != nil {
+	if err := d.hostRuntime.StartGossipObjectPullWorkers(ctx, d.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
 	stopControl, err := d.startControlServer(ctx)

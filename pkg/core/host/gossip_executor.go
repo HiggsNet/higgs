@@ -134,7 +134,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 	for _, pull := range plan.ObjectPulls {
 		if err := runtime.SubmitGossipObjectPull(pull); err != nil {
 			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
-			_ = runtime.PostGossipObjectPullCompletion(GossipObjectPullCompletion{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
+			_ = runtime.PostGossip(&gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}
 	}
 	for _, timer := range plan.Timers {

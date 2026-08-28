@@ -3,8 +3,71 @@ package main
 import (
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
+
+func recordObjectPullAttempt(store *observability.PeerObservabilityStore, peerID, object string, zoneName zone.ZonePath, key string, now time.Time) {
+	if store == nil || peerID == "" {
+		return
+	}
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
+		if snapshot.ObjectPullStats == nil {
+			snapshot.ObjectPullStats = &objectPullStats{}
+		}
+		stats := snapshot.ObjectPullStats
+		stats.Attempts++
+		stats.LastUnix = now.Unix()
+		stats.LastObject = object
+		stats.LastZone = string(zoneName)
+		stats.LastKey = key
+		stats.LastSourcePeer = peerID
+		stats.LastUnreachable = false
+	})
+}
+
+func recordObjectPullResult(store *observability.PeerObservabilityStore, peerID, object string, zoneName zone.ZonePath, key string, bytes int, err error, unreachable bool, now time.Time) {
+	if store == nil || peerID == "" {
+		return
+	}
+	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
+		if snapshot.ObjectPullStats == nil {
+			snapshot.ObjectPullStats = &objectPullStats{}
+		}
+		stats := snapshot.ObjectPullStats
+		stats.LastUnix = now.Unix()
+		stats.LastObject = object
+		stats.LastZone = string(zoneName)
+		stats.LastKey = key
+		stats.LastBytes = bytes
+		stats.LastSourcePeer = peerID
+		stats.LastUnreachable = unreachable
+		if err != nil {
+			stats.Failures++
+			stats.LastError = err.Error()
+			if unreachable {
+				stats.LargeObjectUnreachable++
+			}
+			return
+		}
+		stats.Successes++
+		stats.LastError = ""
+	})
+}
+
+func (d *DaemonService) observeObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
+	if d != nil {
+		recordObjectPullAttempt(d.PeerObservability, peerID, "zone", path, "", now)
+	}
+}
+
+func (d *DaemonService) observeObjectPullResult(result corehost.GossipObjectPullDiagnostics) {
+	if d != nil && d.Sync != nil {
+		recordObjectPullResult(d.PeerObservability, result.PeerID, "zone", result.Zone, "", result.Bytes, result.Err, result.Unreachable, result.At)
+	}
+}
 
 func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
 	if !debugLogEnabled(config) {

@@ -263,15 +263,10 @@ func syncServe(ctx context.Context) error {
 	}
 	defer service.hostRuntime.Stop()
 	service.Sync.Transport = transport
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
-	if err != nil {
+	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
-	if objectPullListener != nil {
-		defer objectPullListener.Close()
-		logger.Info("object_pull", "serve_started", map[string]any{"addr": objectPullListener.Addr()})
-	}
-	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
+	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
 	stopControl, err := service.startControlServer(ctx)
@@ -332,14 +327,10 @@ func syncOnce(peerID string) error {
 	}
 	defer service.hostRuntime.Stop()
 	service.Sync.Transport = transport
-	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
-	if err != nil {
+	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
-	if objectPullListener != nil {
-		defer objectPullListener.Close()
-	}
-	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
+	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
 	service.updateDiscoveredPeers()

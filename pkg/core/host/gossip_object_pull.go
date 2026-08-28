@@ -15,9 +15,9 @@ const (
 )
 
 var (
-	ErrGossipObjectPullWorkerRequired = errors.New("gossip object-pull worker is required")
-	ErrGossipObjectPullAlreadyStarted = errors.New("gossip object-pull workers already started")
-	ErrGossipObjectPullQueueFull      = errors.New("gossip object-pull queue full")
+	ErrGossipObjectPullExecutorRequired = errors.New("gossip object-pull executor is required")
+	ErrGossipObjectPullAlreadyStarted   = errors.New("gossip object-pull workers already started")
+	ErrGossipObjectPullQueueFull        = errors.New("gossip object-pull queue full")
 )
 
 // GossipObjectPullCompletion is the platform-neutral result returned by an
@@ -30,21 +30,14 @@ type GossipObjectPullCompletion struct {
 	Err      error
 }
 
-// GossipObjectPullWorker performs one blocking transport operation. The
-// object-pull protocol remains in gossip; Runtime owns bounded concurrency and
-// ordered completion delivery.
-type GossipObjectPullWorker interface {
-	PullGossipObject(context.Context, gossip.StartObjectPullAction) GossipObjectPullCompletion
-}
-
 // StartGossipObjectPullWorkers starts Runtime's only object-pull worker group.
 // Platform composition supplies the TCP I/O capability, not another queue.
-func (runtime *Runtime) StartGossipObjectPullWorkers(ctx context.Context, worker GossipObjectPullWorker, workers, buffer int) error {
+func (runtime *Runtime) StartGossipObjectPullWorkers(ctx context.Context, executor *GossipObjectPullExecutor, workers, buffer int) error {
 	if runtime == nil {
 		return ErrRuntimeStopped
 	}
-	if worker == nil {
-		return ErrGossipObjectPullWorkerRequired
+	if executor == nil {
+		return ErrGossipObjectPullExecutorRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -72,7 +65,7 @@ func (runtime *Runtime) StartGossipObjectPullWorkers(ctx context.Context, worker
 
 	for range workers {
 		runtime.objectPullWG.Add(1)
-		go runtime.runGossipObjectPullWorker(workerCtx, jobs, worker)
+		go runtime.runGossipObjectPullWorker(workerCtx, jobs, executor)
 	}
 	return nil
 }
@@ -90,7 +83,7 @@ func (runtime *Runtime) SubmitGossipObjectPull(action gossip.StartObjectPullActi
 		return ErrRuntimeStopped
 	}
 	if jobs == nil {
-		return ErrGossipObjectPullWorkerRequired
+		return ErrGossipObjectPullExecutorRequired
 	}
 	runtime.objectPullPending.Add(1)
 	select {
@@ -109,14 +102,14 @@ func (runtime *Runtime) PendingGossipObjectPullCount() int {
 	return int(runtime.objectPullPending.Load())
 }
 
-func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-chan gossip.StartObjectPullAction, worker GossipObjectPullWorker) {
+func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-chan gossip.StartObjectPullAction, executor *GossipObjectPullExecutor) {
 	defer runtime.objectPullWG.Done()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case action := <-jobs:
-			completion := worker.PullGossipObject(ctx, action)
+			completion := executor.PullGossipObject(ctx, action)
 			if completion.PeerID == "" {
 				completion.PeerID = action.PeerID
 			}
@@ -136,15 +129,4 @@ func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-ch
 			}
 		}
 	}
-}
-
-// PostGossipObjectPullCompletion returns an asynchronous pull result to the
-// same ordered event queue used by UDP packets and gossip timers.
-func (runtime *Runtime) PostGossipObjectPullCompletion(completion GossipObjectPullCompletion) error {
-	return runtime.PostGossip(&gossip.ObjectPullResultEvent{
-		PeerID:   completion.PeerID,
-		Zone:     completion.Zone,
-		Snapshot: completion.Snapshot,
-		Err:      completion.Err,
-	})
 }

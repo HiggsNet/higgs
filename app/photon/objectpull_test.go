@@ -5,10 +5,10 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -34,12 +34,17 @@ func TestObjectPullTCPServerClient(t *testing.T) {
 		t.Fatalf("PutAt: %v", err)
 	}
 
-	listener, err := objectPullTCPServe("127.0.0.1:0", objectPullLookup(func() *stateFile { return state }))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		skipRestrictedSocket(t, err)
-		t.Fatalf("objectPullTCPServe: %v", err)
+		t.Fatalf("Listen: %v", err)
 	}
-	defer listener.Close()
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
+	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, objectPullLookup(func() *stateFile { return state }), 0, 0); err != nil {
+		_ = listener.Close()
+		t.Fatalf("StartGossipObjectPullServer: %v", err)
+	}
+	defer runtime.Stop()
 
 	// Pull zone snapshot.
 	resp, err := pullObjectTCP(listener.Addr().String(), &gossip.ObjectPullRequest{
@@ -82,12 +87,6 @@ func TestObjectPullTCPAddrDerivation(t *testing.T) {
 	}
 	if got := objectPullTCPAddr("[2001:db8::1]:33434"); got != "[2001:db8::1]:33434" {
 		t.Fatalf("objectPullTCPAddr v6 = %q, want [2001:db8::1]:33434", got)
-	}
-}
-
-func TestObjectPullListenAddr(t *testing.T) {
-	if got := objectPullListenAddr("127.0.0.1:33434"); got != "127.0.0.1:33434" {
-		t.Fatalf("objectPullListenAddr = %q, want 127.0.0.1:33434", got)
 	}
 }
 
@@ -138,9 +137,10 @@ func TestCommonObjectPullAddressUsesSignedEndpoint(t *testing.T) {
 
 func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
-	_, err := tryObjectPullTCPUntil(corehost.GossipDiscoveryInput{Network: state.Network}, "node-b.catofes.", "node-b.catofes.", time.Time{})
-	if err == nil {
-		t.Fatalf("tryObjectPullTCP succeeded without a TCP address")
+	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: photonlinux.GossipObjectPullClient{}})
+	completion := executor.PullFrom(t.Context(), corehost.GossipDiscoveryInput{Network: state.Network}, gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	if completion.Err == nil {
+		t.Fatalf("object pull succeeded without a TCP address")
 	}
 }
 
@@ -160,11 +160,12 @@ func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *te
 
 	state.Lock()
 	unlock := state.Unlock
-	service.observeObjectPullResult(objectPullTransportResult{
+	service.observeObjectPullResult(corehost.GossipObjectPullDiagnostics{
 		PeerID:      "node-b.catofes.",
 		Zone:        "node-b.catofes.",
 		Bytes:       4096,
 		Unreachable: false,
+		At:          now,
 	})
 	unlock()
 
@@ -200,7 +201,7 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLoc
 
 	state.Lock()
 	unlock := state.Unlock
-	(daemonObjectPullWorker{daemon: service}).PullGossipObject(context.Background(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	service.objectPullExecutor.PullGossipObject(context.Background(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	unlock()
 
 	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
@@ -219,116 +220,15 @@ func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLoc
 	}
 }
 
-func TestObjectPullClientTimeoutHonorsOuterDeadline(t *testing.T) {
-	if got, err := objectPullClientTimeoutUntil(time.Time{}, objectPullClientDialTimeout); err != nil || got != objectPullClientDialTimeout {
-		t.Fatalf("zero deadline timeout = %s/%v, want %s/nil", got, err, objectPullClientDialTimeout)
-	}
-	deadline := time.Now().Add(50 * time.Millisecond)
-	got, err := objectPullClientTimeoutUntil(deadline, objectPullClientDialTimeout)
-	if err != nil {
-		t.Fatalf("objectPullClientTimeoutUntil future: %v", err)
-	}
-	if got <= 0 || got > 100*time.Millisecond {
-		t.Fatalf("future deadline timeout = %s, want small positive timeout", got)
-	}
-	if _, err := objectPullClientTimeoutUntil(time.Now().Add(-time.Millisecond), objectPullClientDialTimeout); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expired deadline error = %v, want DeadlineExceeded", err)
-	}
-}
-
 func TestOfflineObjectPullExpiredDeadlineDoesNotPersistDiagnostics(t *testing.T) {
 	input := corehost.GossipDiscoveryInput{Bootstrap: map[string]*net.UDPAddr{
 		"node-b.catofes.": {IP: net.ParseIP("127.0.0.1"), Port: 1},
-	}}
-	_, err := tryObjectPullTCPUntil(input, "node-b.catofes.", "node-b.catofes.", time.Now().Add(-time.Millisecond))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("tryObjectPullTCPUntil error = %v, want DeadlineExceeded", err)
-	}
-}
-
-func TestObjectPullConcurrencyLimit(t *testing.T) {
-	for range maxObjectPullConcurrency {
-		objectPullClientLimiter <- struct{}{}
-	}
-	defer func() {
-		for range maxObjectPullConcurrency {
-			<-objectPullClientLimiter
-		}
-	}()
-
-	_, err := pullObjectTCP("127.0.0.1:1", &gossip.ObjectPullRequest{
-		Type: gossip.ObjectPullZone,
-		Zone: "node-b.catofes.",
-	})
-	if err == nil {
-		t.Fatalf("pullObjectTCP succeeded with full limiter")
-	}
-}
-
-func TestObjectPullServerConcurrencyLimit(t *testing.T) {
-	var releases []func()
-	for i := range maxObjectPullServerConcurrency {
-		release, ok := acquireObjectPullServerSlot()
-		if !ok {
-			t.Fatalf("acquire server slot %d failed", i)
-		}
-		releases = append(releases, release)
-	}
-	defer func() {
-		for _, release := range releases {
-			release()
-		}
-	}()
-
-	if release, ok := acquireObjectPullServerSlot(); ok {
-		release()
-		t.Fatalf("acquireObjectPullServerSlot succeeded with full limiter")
-	}
-}
-
-func TestObjectPullPerPeerInflightLimit(t *testing.T) {
-	var releases []func()
-	for i := range maxObjectPullPerPeerInflight {
-		release, err := objectPullPeerLimiter.acquire("node-b.catofes.")
-		if err != nil {
-			t.Fatalf("acquire(%d): %v", i, err)
-		}
-		releases = append(releases, release)
-	}
-	defer func() {
-		for _, release := range releases {
-			release()
-		}
-	}()
-
-	_, err := pullObjectTCPForPeer("node-b.catofes.", "127.0.0.1:1", &gossip.ObjectPullRequest{
-		Type: gossip.ObjectPullZone,
-		Zone: "node-b.catofes.",
-	})
-	if err == nil {
-		t.Fatalf("pullObjectTCPForPeer succeeded with full peer limiter")
-	}
-	if got, want := err.Error(), "object pull per-peer inflight limit reached"; !strings.Contains(got, want) {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
-}
-
-func TestObjectPullQuotaAccountsBytesAndObjects(t *testing.T) {
-	quotas := newLockedPeerQuotas(gossip.QuotaConfig{
-		ByteRate:    1,
-		ByteBurst:   8,
-		ObjectRate:  1,
-		ObjectBurst: 1,
-	})
-	now := time.Unix(1000, 0)
-
-	if err := quotas.allow("node-b.catofes.", 4, 1, now); err != nil {
-		t.Fatalf("allow(first): %v", err)
-	}
-	if err := quotas.allow("node-b.catofes.", 1, 1, now); !errors.Is(err, gossip.ErrQuotaExceeded) {
-		t.Fatalf("allow(over objects) = %v, want ErrQuotaExceeded", err)
-	}
-	if err := quotas.allow("node-b.catofes.", 9, 0, now.Add(2*time.Second)); !errors.Is(err, gossip.ErrQuotaExceeded) {
-		t.Fatalf("allow(over bytes) = %v, want ErrQuotaExceeded", err)
+	}, Network: zone.NewNetworkState()}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Millisecond))
+	cancel()
+	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: photonlinux.GossipObjectPullClient{}})
+	completion := executor.PullFrom(ctx, input, gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
+	if !errors.Is(completion.Err, context.DeadlineExceeded) {
+		t.Fatalf("object pull error = %v, want DeadlineExceeded", completion.Err)
 	}
 }

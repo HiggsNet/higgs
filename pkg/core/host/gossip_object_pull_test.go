@@ -3,74 +3,47 @@ package host
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-type blockingObjectPullWorker struct{ entered chan struct{} }
+type blockingObjectPullClient struct{ entered chan struct{} }
 
-func (worker *blockingObjectPullWorker) PullGossipObject(ctx context.Context, action gossip.StartObjectPullAction) GossipObjectPullCompletion {
+func (client *blockingObjectPullClient) Exchange(ctx context.Context, _ string, _ *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
 	select {
-	case worker.entered <- struct{}{}:
+	case client.entered <- struct{}{}:
 	default:
 	}
 	<-ctx.Done()
-	return GossipObjectPullCompletion{PeerID: action.PeerID, Zone: action.Zone, Err: ctx.Err()}
-}
-
-func TestPostGossipObjectPullCompletionMapsAndQueuesFSMEvent(t *testing.T) {
-	runtime := NewRuntime(nil, 1)
-	defer runtime.Stop()
-
-	pullErr := errors.New("pull failed")
-	snapshot := &corestate.ZoneSnapshot{Zone: "node-a.catofes."}
-	err := runtime.PostGossipObjectPullCompletion(GossipObjectPullCompletion{
-		PeerID:   "peer-a",
-		Zone:     snapshot.Zone,
-		Snapshot: snapshot,
-		Err:      pullErr,
-	})
-	if err != nil {
-		t.Fatalf("PostGossipObjectPullCompletion: %v", err)
-	}
-
-	event, ok := runtime.GossipEventFor(<-runtime.Events())
-	if !ok {
-		t.Fatal("completion did not produce a gossip event")
-	}
-	result, ok := event.(*gossip.ObjectPullResultEvent)
-	if !ok {
-		t.Fatalf("event = %T, want *gossip.ObjectPullResultEvent", event)
-	}
-	if result.PeerID != "peer-a" || result.Zone != snapshot.Zone || result.Snapshot != snapshot || !errors.Is(result.Err, pullErr) {
-		t.Fatalf("result = %+v, want mapped completion", result)
-	}
-}
-
-func TestPostGossipObjectPullCompletionPreservesBackpressure(t *testing.T) {
-	runtime := NewRuntime(nil, 1)
-	defer runtime.Stop()
-	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
-		t.Fatalf("fill queue: %v", err)
-	}
-	if err := runtime.PostGossipObjectPullCompletion(GossipObjectPullCompletion{PeerID: "peer-a"}); !errors.Is(err, ErrEventQueueFull) {
-		t.Fatalf("completion error = %v, want %v", err, ErrEventQueueFull)
-	}
+	return nil, ctx.Err()
 }
 
 func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) {
 	runtime := NewRuntime(nil, 4)
-	worker := &blockingObjectPullWorker{entered: make(chan struct{}, 1)}
-	if err := runtime.StartGossipObjectPullWorkers(t.Context(), worker, 1, 1); err != nil {
+	client := &blockingObjectPullClient{entered: make(chan struct{}, 1)}
+	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
+		Client: client,
+		Discovery: func() GossipDiscoveryInput {
+			return GossipDiscoveryInput{
+				Network: zone.NewNetworkState(),
+				Bootstrap: map[string]*net.UDPAddr{
+					"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1},
+					"peer-b": {IP: net.ParseIP("127.0.0.1"), Port: 2},
+				},
+			}
+		},
+	})
+	if err := runtime.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	first := gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}
 	if err := runtime.SubmitGossipObjectPull(first); err != nil {
 		t.Fatal(err)
 	}
-	<-worker.entered
+	<-client.entered
 	if err := runtime.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-b", Zone: "b.catofes."}); err != nil {
 		t.Fatal(err)
 	}
