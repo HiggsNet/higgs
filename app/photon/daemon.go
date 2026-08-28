@@ -292,10 +292,12 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	packetCh, stopRecv := gossip.StartPacketReceiver(ctx, transport, gossip.DefaultPacketReceiveBuffer, func(err error) {
+	err = d.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
 		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 	})
-	defer stopRecv()
+	if err != nil {
+		return err
+	}
 	objectPullListener, err := startObjectPullServer(d)
 	if err != nil {
 		d.logError("object_pull", "server_start_failed", map[string]any{"error": err})
@@ -460,21 +462,23 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				nextSync = d.Sync.now()
 				forceSync = true
 			}
-		case packet := <-packetCh:
-			timer.Stop()
-			result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
-			if result.Error != nil {
-				d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-					"peer_id": packet.Message.PeerID,
-					"type":    packet.Message.Type,
-					"error":   result.Error,
-					"reason":  gossip.RejectReason(result.Error),
-				}, result.Error))
-			}
 		case hostEvent := <-d.hostRuntime.Events():
 			timer.Stop()
-			event, ok := d.hostRuntime.GossipEventFor(hostEvent)
-			if ok && d.handleSyncEvent(ctx, event) {
+			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
+				packet := received.Packet
+				result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
+				if result.Error != nil {
+					d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
+						"peer_id": packet.Message.PeerID,
+						"type":    packet.Message.Type,
+						"error":   result.Error,
+						"reason":  gossip.RejectReason(result.Error),
+					}, result.Error))
+				}
+				continue
+			}
+			if event, ok := d.hostRuntime.GossipEventFor(hostEvent); ok {
+				d.handleSyncEvent(ctx, event)
 			}
 		case <-d.healthUpdates:
 			timer.Stop()

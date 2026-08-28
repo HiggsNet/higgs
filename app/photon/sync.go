@@ -20,6 +20,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -253,10 +254,13 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	packetCh, stopRecv := gossip.StartPacketReceiver(ctx, transport, gossip.DefaultPacketReceiveBuffer, func(err error) {
+	err = service.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
-	defer stopRecv()
+	if err != nil {
+		return err
+	}
+	defer service.hostRuntime.Stop()
 	service.Sync.Transport = transport
 	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
 	if err != nil {
@@ -269,7 +273,6 @@ func syncServe(ctx context.Context) error {
 	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
 		return err
 	}
-	defer service.hostRuntime.Stop()
 	stopControl, err := service.startControlServer(ctx)
 	if err != nil {
 		return err
@@ -283,19 +286,19 @@ func syncServe(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case packet := <-packetCh:
-			if packet == nil {
+		case hostEvent := <-service.hostRuntime.Events():
+			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
+				packet := received.Packet
+				if err := service.processPacketEvent(packet, ctx); err != nil {
+					logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
+						"peer_id": packet.Message.PeerID,
+						"type":    packet.Message.Type,
+						"reason":  gossip.RejectReason(err),
+						"error":   err,
+					}, err))
+				}
 				continue
 			}
-			if err := service.processPacketEvent(packet, ctx); err != nil {
-				logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-					"peer_id": packet.Message.PeerID,
-					"type":    packet.Message.Type,
-					"reason":  gossip.RejectReason(err),
-					"error":   err,
-				}, err))
-			}
-		case hostEvent := <-service.hostRuntime.Events():
 			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
 				service.handleSyncEvent(ctx, event)
 			}
@@ -317,7 +320,16 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	defer transport.Close()
+	logger := newAppLogger(service.Sync.Config)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
+	defer cancel()
+	err = service.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
+		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
+	})
+	if err != nil {
+		return err
+	}
+	defer service.hostRuntime.Stop()
 	service.Sync.Transport = transport
 	objectPullListener, err := objectPullTCPServe(objectPullTCPAddr(transport.LocalAddr().String()), service.objectPullResponse)
 	if err != nil {
@@ -326,12 +338,9 @@ func syncOnce(peerID string) error {
 	if objectPullListener != nil {
 		defer objectPullListener.Close()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
-	defer cancel()
 	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, daemonObjectPullWorker{daemon: service}, 0, 0); err != nil {
 		return err
 	}
-	defer service.hostRuntime.Stop()
 	service.updateDiscoveredPeers()
 	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
 		return err
@@ -350,40 +359,44 @@ func syncOnce(peerID string) error {
 		} else {
 			responderQuietUntil = time.Time{}
 		}
+		var quiet <-chan time.Time
+		var quietTimer *time.Timer
+		if drained && !responderQuietUntil.IsZero() {
+			remaining := time.Until(responderQuietUntil)
+			if remaining <= 0 {
+				return nil
+			}
+			quietTimer = time.NewTimer(remaining)
+			quiet = quietTimer.C
+		}
 		select {
 		case <-ctx.Done():
+			if quietTimer != nil {
+				quietTimer.Stop()
+			}
 			if session := service.hostRuntime.Gossip.Session(peerID); session != nil && session.PendingCount() > 0 {
 				pending := session.PendingZones()
 				return &syncPendingZonesError{zones: pending}
 			}
 			return errors.New("sync receive timed out")
 		case hostEvent := <-service.hostRuntime.Events():
+			if quietTimer != nil {
+				quietTimer.Stop()
+			}
+			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
+				packet := received.Packet
+				responderQuietUntil = time.Time{}
+				if err := service.processPacketEvent(packet, ctx); err != nil {
+					return err
+				}
+				continue
+			}
 			responderQuietUntil = time.Time{}
 			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
 				service.handleSyncEvent(ctx, event)
 			}
-		default:
-			deadline := time.Now().Add(100 * time.Millisecond)
-			if drained && !responderQuietUntil.IsZero() && responderQuietUntil.Before(deadline) {
-				deadline = responderQuietUntil
-			}
-			packet, err := receiveWithContext(ctx, transport, deadline)
-			if err == nil {
-				responderQuietUntil = time.Time{}
-				if handleErr := service.processPacketEvent(packet, ctx); handleErr != nil {
-					return handleErr
-				}
-				continue
-			}
-			if ctx.Err() != nil {
-				continue
-			}
-			if drained && !responderQuietUntil.IsZero() && !time.Now().Before(responderQuietUntil) {
-				return nil
-			}
-			if !isReceiveTimeout(err) {
-				return err
-			}
+		case <-quiet:
+			return nil
 		}
 	}
 }
@@ -956,57 +969,6 @@ func endpointDialRank(entry gossip.EndpointEntry) int {
 
 func endpointEntryIsPrivate(entry gossip.EndpointEntry) bool {
 	return endpointDialRank(entry) == 2
-}
-
-func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		readDeadline := deadline
-		// UDP reads are blocking syscalls.  We cap each read at 250 ms so the
-		// caller can respond to context cancellation and (in daemon mode) its
-		// own timers even when no gossip packets are arriving.  Timeouts are
-		// routine and are no longer logged by the transport.
-		shortDeadline := time.Now().Add(250 * time.Millisecond)
-		if shortDeadline.Before(readDeadline) {
-			readDeadline = shortDeadline
-		}
-		packet, err := receiveWithDeadline(transport, readDeadline)
-		if err == nil {
-			return packet, nil
-		}
-		if time.Now().After(deadline) || !isReceiveTimeout(err) {
-			return nil, err
-		}
-	}
-}
-
-func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
-	if err := transport.SetReadDeadline(deadline); err != nil {
-		return nil, err
-	}
-	for {
-		packet, err := transport.Receive()
-		if err == nil {
-			return packet, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, errors.New("sync receive timed out")
-		}
-		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
-			continue
-		}
-		return nil, err
-	}
-}
-
-func isReceiveTimeout(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
 }
 
 func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {

@@ -164,10 +164,13 @@ root/diff/projection 和 `ApplySnapshot`；`pkg/core/gossip` 直接引用这些 
 `internal/photonwindows`，也不得引入 Windows 专属 snapshot 或“精简 gossip”语义。
 每 peer 无 I/O 的同步 FSM 也位于 `pkg/core/gossip`；Linux daemon 和 Photon Windows 直接
 引用公共事件、action 与状态机，不在各自入口保留类型别名或转发函数。
-有界 packet receive loop 同样位于 `pkg/core/gossip`，只依赖 `PacketReceiver` 的
-`Receive/Close` capability。Linux `Transport` 与未来 Windows adapter 共用该 loop；默认
-队列为 64，backpressure 会暂停下一次 receive，不创建 per-packet goroutine。stop 拥有并
-关闭 receiver，以解除不感知 context 的阻塞读取。
+有界 packet receive loop 位于 `pkg/core/host`，由唯一 `host.Runtime` 持有，只依赖
+`DatagramReceiver` 的 `Receive/Close` capability。Linux `Transport` 与未来 Windows adapter
+共用该 loop；packet 直接进入 Runtime 已有的默认 64 项 event queue，与 timer/completion 共用同一
+backpressure 和顺序边界，不创建第二条 packet channel 或 per-packet goroutine。`Runtime.Stop` 取消接收、
+关闭 receiver 以解除不感知 context 的阻塞读取，并等待 receive goroutine 退出。当前 Linux
+`gossip.Transport` 仍负责 UDP bind、wire decode、allowlist/replay/quota；后续 raw
+`DatagramIO` adapter 切换将继续移动 socket/read/write 实现，不在迁移期伪装成已经完成。
 active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。Linux 与 Windows 的
 executor 分别处理 responder、状态提交和平台日志，不能把这些副作用放回 classifier。
@@ -182,7 +185,7 @@ catalog-root equality，以及 Pong 后按需请求 catalog page 的顺序；exe
 event queue、timer 资源、数据库或平台副作用。公共 `host.Runtime` 拥有 bounded event queue 和单
 heap/wakeup Scheduler；timer policy/期限仍由 gossip session action 决定，Scheduler 只统一执行
 replace/cancel、generation stale 防护、背压和 stop。Linux daemon 与 Photon Windows 都把共享 receive
-loop 产出的 verified packet 注入同一 HostRuntime，再按相同顺序执行 Engine 返回的 action。
+loop 产出的 verified packet 已直接注入同一 HostRuntime event queue，再按相同顺序执行 Engine 返回的 action。
 send action 到 wire message 的映射由 gossip 唯一实现；HostRuntime 的公共 action plan 固定
 apply -> outbound -> object-pull -> timer -> backoff/persistence 分相和 persistence scope 合并。
 平台 controller 只执行各相，不得再次按具体 gossip action 类型建立 switch。

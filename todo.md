@@ -124,10 +124,10 @@ authorization 和 transport records 作为可信事实来源。
   原样抽到现有 `pkg/core/gossip` 公共包；Linux 与 Windows 直接引用同一状态机，Windows
   compile guard 覆盖同一包。Linux event loop、bbolt commit、日志仍留在 composition layer，
   未把 Linux 专属副作用错误抽进公共协议包。
-- [x] 将 `gossip_recv.go` 的有界 receive loop 抽到现有 `pkg/core/gossip`：公共实现只依赖
-  `PacketReceiver.Receive/Close`，固定 bounded backpressure、timeout/close 静默、普通错误
-  回调后继续和幂等 stop/资源 ownership；Linux composition root 直接调用公共 API 并就地映射
-  日志。memory contract tests 不需要 socket 权限，Windows 后续可直接注入自己的 receiver。
+- [x] 先将 Linux `gossip_recv.go` 的有界 receive loop 移出 daemon，随后在 E2a 进一步归入
+  `pkg/core/host.Runtime`：公共实现只依赖 `DatagramReceiver.Receive/Close`，固定 bounded
+  backpressure、timeout/close 静默、普通错误回调后继续和唯一 stop/资源 ownership；Linux
+  composition root 直接注入 transport 并就地映射日志，Windows 后续可注入自己的 receiver。
 - [x] 将 `packet_demux.go` 的 active-session/unsolicited classifier 与事件类型抽到现有
   `pkg/core/gossip`；Linux 直接调用公共 classifier，不保留类型别名或转发函数。公共测试覆盖
   active hit、miss、nil packet/message 和 nil session entry，classifier 不解释 message type，
@@ -411,7 +411,7 @@ package dependency: app -> host -> gossip -> state -> zone
   private key material，并在独立逻辑分区中原子组合 loss-tolerant `GossipCheckpoint`；它不是第二个后台 runtime，
   不创建 goroutine/写入线程/独立 DB handle，也不拥有 socket、session、timer、object-pull worker、SA、
   route、firewall rule、BIRD process、Wintun/WFP handle 或任何 observed platform object。
-- `pkg/core/gossip` 只拥有 wire codec、receiver/demux、session FSM、Engine、timer action/event types、
+- `pkg/core/gossip` 只拥有 wire codec、packet classifier、session FSM、Engine、timer action/event types、
   chunk/cache 和 object-pull protocol；timer deadline policy 留在 FSM，但不再
   持有 scheduler。HostRuntime 把平台 UDP 收到的相同 packet/event 注入 Engine，
   Engine 只返回平台无关的有序 Action；所有 read/apply/send/pull/persist/log effect 都交还同一个
@@ -779,6 +779,15 @@ package dependency: app -> host -> gossip -> state -> zone
         签名，任一失败整批回滚，只执行一次持久化且 VerifiedRevision 最多推进一次；原单条 API 反向复用该实现，
         避免形成两套 mutation 语义。startup/endpoint、admin、remote snapshot、discovery、cleanup 与全部 controller
         completion 均已切换；全量 `make check`（含 Windows amd64 编译）通过。
+  - [x] E2a：将有界 gossip packet receive loop 从 `pkg/core/gossip` 迁入公共 `host.Runtime`。公共 runtime
+    现在独占唯一阻塞 Receive goroutine，packet 直接进入已有的 64 项 event queue，与 timer/completion 共用
+    backpressure 和顺序边界，不再创建第二条 packet channel；`Runtime.Stop` 会 cancel、关闭注入的
+    `DatagramReceiver` 并等待 goroutine 收口。Linux daemon、长期
+    `advanced sync serve` 与一次性 `sync once` 已改用该入口，后者不再用 100ms deadline 轮询；gossip
+    中原 `StartPacketReceiver`、资源接口和重复测试已删除，旧轮询 helper 也已移出生产代码。
+    当前 `gossip.Transport` 仍负责 Linux UDP bind、wire decode、allowlist/replay/quota；后续 E2 继续切换
+    send/receive socket adapter，并把 Linux daemon 中 controller/control/health 的剩余调度收口，不能把本切口
+    误记为 raw `DatagramIO` 或整个 daemon event loop 已全部完成。
 - [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
   双节点收敛后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。

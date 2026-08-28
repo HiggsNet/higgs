@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -1137,6 +1138,53 @@ func controlRequestViaPipe(t *testing.T, service *DaemonService, request control
 	}
 	<-done
 	return response
+}
+
+func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		readDeadline := deadline
+		shortDeadline := time.Now().Add(250 * time.Millisecond)
+		if shortDeadline.Before(readDeadline) {
+			readDeadline = shortDeadline
+		}
+		packet, err := receiveWithDeadline(transport, readDeadline)
+		if err == nil {
+			return packet, nil
+		}
+		if time.Now().After(deadline) || !isReceiveTimeout(err) {
+			return nil, err
+		}
+	}
+}
+
+func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
+	if err := transport.SetReadDeadline(deadline); err != nil {
+		return nil, err
+	}
+	for {
+		packet, err := transport.Receive()
+		if err == nil {
+			return packet, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("sync receive timed out")
+		}
+		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
+			continue
+		}
+		return nil, err
+	}
+}
+
+func isReceiveTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
 }
 
 func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transports []*gossip.Transport) {

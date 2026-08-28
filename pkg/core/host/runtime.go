@@ -36,6 +36,15 @@ type GossipEvent struct {
 
 func (GossipEvent) isHostEvent() {}
 
+// GossipPacketReceived carries one packet accepted by the injected datagram
+// receiver. Packets and protocol timer/completion events share the same
+// bounded runtime queue, preserving one backpressure and ordering boundary.
+type GossipPacketReceived struct {
+	Packet *gossip.Packet
+}
+
+func (GossipPacketReceived) isHostEvent() {}
+
 // Runtime owns the common gossip engine, bounded event queue and scheduler.
 // Platform composition roots inject I/O and controllers around this object;
 // they do not create a second protocol queue or timer manager.
@@ -51,6 +60,9 @@ type Runtime struct {
 	objectPullWG      sync.WaitGroup
 	objectPullPending atomic.Int64
 	gossipChunks      *gossip.ChunkAssemblyStore
+	datagramReceiver  DatagramReceiver
+	datagramCancel    context.CancelFunc
+	datagramWG        sync.WaitGroup
 	stopped           bool
 }
 
@@ -205,11 +217,16 @@ func (runtime *Runtime) Stop() {
 	runtime.stopped = true
 	scheduler := runtime.scheduler
 	objectPullCancel := runtime.objectPullCancel
+	datagramCancel := runtime.datagramCancel
 	runtime.mu.Unlock()
+	if datagramCancel != nil {
+		datagramCancel()
+	}
 	if objectPullCancel != nil {
 		objectPullCancel()
 	}
 	scheduler.Stop()
+	runtime.datagramWG.Wait()
 	runtime.objectPullWG.Wait()
 	runtime.objectPullPending.Store(0)
 	if runtime.gossipChunks != nil {
