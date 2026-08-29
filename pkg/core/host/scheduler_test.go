@@ -243,7 +243,7 @@ func TestSchedulerStopAndValidation(t *testing.T) {
 
 func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	runtime := NewRuntime(clock, 1)
+	runtime := NewRuntime(clock, 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	external := &gossip.SyncTimerEvent{PeerID: "peer-a"}
 	if err := runtime.PostGossip(external); err != nil {
@@ -270,7 +270,7 @@ func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 }
 
 func TestRuntimePostCompletionUsesCommonQueue(t *testing.T) {
-	runtime := NewRuntime(NewClock(nil), 1)
+	runtime := NewRuntime(NewClock(nil), 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	want := Completion{Namespace: "controller", Owner: "health", Key: "probe_completed"}
 	if err := runtime.PostCompletion(t.Context(), want); err != nil {
@@ -288,7 +288,7 @@ func TestRuntimePostCompletionUsesCommonQueue(t *testing.T) {
 
 func TestRuntimeSchedulesControllerTimerInSharedQueue(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 1)
+	runtime := NewRuntime(clock, 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	id := TimerID{Namespace: "controller", Owner: "daemon", Key: "routing"}
 	if _, err := runtime.ScheduleTimer(id, clock.Now().Add(time.Second)); err != nil {

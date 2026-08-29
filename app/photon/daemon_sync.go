@@ -109,7 +109,7 @@ func (d *DaemonService) EnableEventLoopSync(clock corehost.Clock) {
 		}
 	}
 	if d.hostRuntime == nil {
-		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer)
+		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore, corehost.GossipRuntimeConfig{PeerID: d.Sync.Config.PeerID, Limits: syncLimits(d.Sync.Config)})
 		return
 	}
 	d.hostRuntime.ResetScheduler(clock)
@@ -476,93 +476,11 @@ func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
 	d.recordSyncPeerStateBatch(b.peerID, strings.Join(labels, ","), fns...)
 }
 
-type syncSnapshotApply struct {
-	action gossip.ApplySnapshotAction
-	limits corestate.SyncLimits
-}
-
 func snapshotApplyVia(action gossip.ApplySnapshotAction) string {
 	if action.Via != "" {
 		return action.Via
 	}
 	return "event_loop"
-}
-
-type syncSnapshotOutcome struct {
-	result         *corestate.ApplyResult
-	applyErr       error
-	networkChanged bool
-	adopted        bool
-	adoptionErr    error
-	refreshed      bool
-	refreshErr     error
-	managedZone    zone.ZonePath
-}
-
-// syncSnapshotCommit separates publication of the detached state workspace
-// from a real Network transition. A successful snapshot may still commit
-// peer/admission metadata while leaving every relevant Zone root unchanged.
-type syncSnapshotCommit struct {
-	StateCommitted bool
-	NetworkChanged bool
-}
-
-func (d *DaemonService) applySyncSnapshotBatch(peerID string, applies []syncSnapshotApply, now time.Time) ([]syncSnapshotOutcome, syncSnapshotCommit, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil {
-		return nil, syncSnapshotCommit{}, errors.New("daemon service is not initialized")
-	}
-	managedZone := zone.ZonePath("")
-	view := d.StateStore.common.ReadView()
-	if view.State != nil {
-		managedZone = view.State.ManagedZone
-	}
-	batch := make([]corestate.RemoteSnapshot, 0, len(applies))
-	for _, apply := range applies {
-		batch = append(batch, corestate.RemoteSnapshot{
-			Snapshot: apply.action.Snapshot, ExpectedRoot: append([]byte(nil), apply.action.ExpectedRoot...), Limits: apply.limits,
-		})
-	}
-	result, err := d.StateStore.ApplyCommonRemoteBatch(context.Background(), peerID, batch, now)
-	if err != nil {
-		return nil, syncSnapshotCommit{}, err
-	}
-	outcomes := make([]syncSnapshotOutcome, len(result.Outcomes))
-	for i, item := range result.Outcomes {
-		outcomes[i] = syncSnapshotOutcome{
-			result: item.Result, applyErr: item.Err, networkChanged: item.Result != nil && item.Result.NetworkChanged || item.ManagedZoneAdopted || item.AuthorityRefreshed,
-			adopted: item.ManagedZoneAdopted, refreshed: item.AuthorityRefreshed, managedZone: managedZone,
-		}
-	}
-	return outcomes, syncSnapshotCommit{StateCommitted: result.Committed, NetworkChanged: result.Changes.NetworkChanged}, nil
-}
-
-func (d *DaemonService) logSnapshotAdoption(peerID string, outcome syncSnapshotOutcome) {
-	if outcome.adoptionErr != nil {
-		d.logWarn("auto_join", "adopt_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    outcome.managedZone,
-			"via":     "event_loop",
-			"error":   outcome.adoptionErr,
-		})
-	} else if outcome.adopted {
-		d.logInfo("auto_join", "adopted", map[string]any{
-			"peer_id": peerID,
-			"zone":    outcome.managedZone,
-			"via":     "event_loop",
-		})
-	}
-	if outcome.refreshErr != nil {
-		d.logWarn("authority", "managed_zone_refresh_failed", map[string]any{
-			"peer_id": peerID,
-			"zone":    outcome.managedZone,
-			"error":   outcome.refreshErr,
-		})
-	} else if outcome.refreshed {
-		d.logInfo("authority", "managed_zone_refreshed", map[string]any{
-			"peer_id": peerID,
-			"zone":    outcome.managedZone,
-		})
-	}
 }
 
 type daemonGossipActionController struct {
@@ -571,18 +489,6 @@ type daemonGossipActionController struct {
 	now       time.Time
 	limits    corestate.SyncLimits
 	replyAddr *net.UDPAddr
-}
-
-func (controller *daemonGossipActionController) GossipStateView(context.Context) corehost.GossipStateView {
-	view := controller.daemon.StateStore.common.ReadView()
-	if view.State == nil || view.State.Network == nil {
-		return corehost.GossipStateView{}
-	}
-	return corehost.GossipStateView{
-		Loaded:       true,
-		Digests:      corestate.ZoneDigests(view.State.Network),
-		SenderPeerID: controller.daemon.Sync.Config.PeerID,
-	}
 }
 
 func (controller *daemonGossipActionController) GossipDatagramBudget() int {
@@ -656,76 +562,51 @@ func (controller *daemonGossipActionController) HandleGossipObjectChunkNACK(_ co
 	return controller.daemon.Sync.handleObjectChunkNACKFrom(message, controller.replyAddr)
 }
 
-func (controller *daemonGossipActionController) ApplyGossipSnapshots(_ context.Context, peerID string, actions []gossip.ApplySnapshotAction) (corehost.GossipSnapshotApplyResult, error) {
-	view := controller.daemon.StateStore.common.ReadView()
-	managedZone := zone.ZonePath("")
-	if view.State != nil {
-		managedZone = view.State.ManagedZone
+func (controller *daemonGossipActionController) ObserveGossipSnapshot(observation corehost.GossipSnapshotObservation) {
+	action := observation.Action
+	if action.Snapshot == nil {
+		return
 	}
-	var applies []syncSnapshotApply
-	for _, action := range actions {
-		if action.Snapshot == nil {
-			continue
-		}
-		if action.Snapshot.Zone == managedZone {
-			controller.daemon.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
-				"peer_id": peerID,
-				"zone":    action.Snapshot.Zone,
-			})
-			continue
-		}
-		limits := controller.limits
-		if action.RelaxedLimits {
-			limits.MaxBytes = 8 << 20
-		}
-		applies = append(applies, syncSnapshotApply{action: action, limits: limits})
+	if observation.SkippedOwnZone {
+		controller.daemon.logDebug("sync", "skipping_own_zone_snapshot", map[string]any{
+			"peer_id": observation.PeerID,
+			"zone":    action.Snapshot.Zone,
+		})
+		return
 	}
-	if len(applies) == 0 {
-		return corehost.GossipSnapshotApplyResult{}, nil
+	outcome := observation.Outcome
+	if outcome.Err != nil {
+		controller.daemon.logWarn("sync", "zone_apply_failed", map[string]any{
+			"peer_id": observation.PeerID,
+			"zone":    action.Snapshot.Zone,
+			"reason":  gossip.RejectReason(outcome.Err),
+			"error":   outcome.Err,
+		})
+		return
 	}
-	outcomes, committed, err := controller.daemon.applySyncSnapshotBatch(peerID, applies, controller.now)
-	if err != nil {
-		return corehost.GossipSnapshotApplyResult{}, err
-	}
-	for i, outcome := range outcomes {
-		apply := applies[i]
-		if outcome.applyErr != nil {
-			controller.daemon.logWarn("sync", "zone_apply_failed", map[string]any{
-				"peer_id": peerID,
-				"zone":    apply.action.Snapshot.Zone,
-				"reason":  gossip.RejectReason(outcome.applyErr),
-				"error":   outcome.applyErr,
-			})
-			continue
-		}
-		if outcome.result == nil {
-			continue
-		}
-		controller.daemon.logSnapshotAdoption(peerID, outcome)
-		if !committed.NetworkChanged || !outcome.networkChanged {
-			continue
-		}
-		controller.daemon.logInfo("sync", "zone_applied", map[string]any{
-			"peer_id":     peerID,
-			"zone":        apply.action.Snapshot.Zone,
-			"records":     outcome.result.Records,
-			"delegations": outcome.result.Delegation,
-			"via":         snapshotApplyVia(apply.action),
+	if outcome.ManagedZoneAdopted {
+		controller.daemon.logInfo("auto_join", "adopted", map[string]any{
+			"peer_id": observation.PeerID,
+			"zone":    observation.ManagedZone,
+			"via":     "event_loop",
 		})
 	}
-	for i, apply := range applies {
-		if !apply.action.ReportResult || apply.action.Snapshot == nil {
-			continue
-		}
-		event := &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: apply.action.Snapshot.Zone}
-		if i >= len(outcomes) {
-			event.Err = errors.New("snapshot apply produced no outcome")
-		} else {
-			event.Err = outcomes[i].applyErr
-		}
-		_ = controller.daemon.postSyncEvent(event)
+	if outcome.AuthorityRefreshed {
+		controller.daemon.logInfo("authority", "managed_zone_refreshed", map[string]any{
+			"peer_id": observation.PeerID,
+			"zone":    observation.ManagedZone,
+		})
 	}
-	return corehost.GossipSnapshotApplyResult{StateCommitted: committed.StateCommitted, NetworkChanged: committed.NetworkChanged}, nil
+	if outcome.Result == nil || (!outcome.Result.NetworkChanged && !outcome.ManagedZoneAdopted && !outcome.AuthorityRefreshed) {
+		return
+	}
+	controller.daemon.logInfo("sync", "zone_applied", map[string]any{
+		"peer_id":     observation.PeerID,
+		"zone":        action.Snapshot.Zone,
+		"records":     outcome.Result.Records,
+		"delegations": outcome.Result.Delegation,
+		"via":         snapshotApplyVia(action),
+	})
 }
 
 func (controller *daemonGossipActionController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {

@@ -98,16 +98,21 @@ authorization 和 transport records 作为可信事实来源。
 
 **实现进度（2026-08-25）：**
 
+**架构纠偏（2026-08-29）：** `pkg/core/host.Runtime` 已经是唯一 common runtime。Windows composition
+应与 Linux daemon 一样直接创建一个 HostRuntime、一个公共 Store/BoltStore 和一个平台 runtime；不得再增加持有
+HostRuntime/Store 的 `photonclient.Runtime`。`internal/photonclient` 只在 IKE/ESP/Babel/SADR/TUN packet pipeline
+出现真实复用点后承载用户态客户端数据面，不拥有 gossip、公共状态或产品生命周期。当前工作区中的 client runtime、
+通用 `Resources.Validate` 和 gossip controller glue 已在 F0b 撤回，不作为 F 阶段产品边界。
+
 - [x] 新建 `app/photon-windows`，提供独立 `photon-windows.exe`、`version`/`help` 和
   Windows amd64 交叉编译；Wintun/service 尚未接入前不暴露假的 `run`/connected 状态。
 - [x] 新建 `docs/photon-windows/design.md`，冻结 leaf-only、单 active gateway、split
   tunnel、用户态 IKEv2/ESP/Babel/SADR 和平台资源注入边界，并记录 route-origin 剩余风险。
-- [x] 新建 `internal/photonclient` portable contract：TUN、共享 datagram、network
-  observer、secure key store、verified state source、clock 和资源完整性/MTU 校验。
-- [x] 实现 portable runtime 的 created/starting/running/stopping/stopped/failed 状态、
-  同步 ready、意外退出 fail-closed、并发 Start/Stop 串行化和 owned resource 关闭；memory
-  TUN/datagram/network/state/key store 与 manual clock 测试替身已覆盖复制、rebind、timer 和
-  lifecycle。
+- [x] 撤回提前建立的 `photonclient.Runtime`、通用 `Resources` capability bag、资源完整性探测和 client gossip
+  controller glue。保留可复用的 memory adapter/fixture 时必须把它们改为直接测试公共 HostRuntime、Store 或未来真实
+  packet consumer，不能为了保住测试而维持第二个 runtime；对应 runtime/contracts/testkit 生产骨架与 Makefile 点名入口已删除。
+- [ ] 用户态 IKE/ESP/Babel/SADR/TUN packet pipeline 出现首个真实调用点后，再从 consumer 侧提取最小接口和生命周期；
+  Windows composition root 直接构造实际启用的组件，初始化失败当场返回具体错误，不先注入 nil 再探测平台能力。
 - [x] Makefile 增加 `photon-windows-build`、`photon-windows-cross-build`、
   `photon-windows-test`，并把 Windows amd64 compile guard 纳入 `make check`；当前复用候选
   `pkg/core/zone`、`pkg/core/gossip`、`pkg/crypto`、`pkg/routing`、`pkg/transport/ipsec` 已通过
@@ -116,10 +121,9 @@ authorization 和 transport records 作为可信事实来源。
   bbolt state、overlay/split aggregates、gateway selector/bootstrap
   hints、Wintun、log、reconnect 均严格解析；未知字段、多 YAML 文档、full-tunnel default
   route 和不完整配置 fail closed。
-- [x] 新建 `internal/photonclient/trust` 预置状态 adapter：不复制 gossip 实现，而是把现有
-  bbolt Zone state 逐层送入共享 `state.Snapshot`/`ApplySnapshot`，校验 root pin、delegation、
-  record、revocation 和有效期后才发布 detached `StateSnapshot`；篡改 record、错误 root、
-  revoked managed zone 已有负向测试。
+- [x] 保留 F0a 已验证的公共 Store 恢复语义并修正 owner：`internal/photonwindows.StateStore` 由 Windows
+  composition 使用唯一 `state.BoltStore`、`LoadCommon/RestoreStore` 和真实 revision，执行 managed zone/root pin
+  校验及 legacy-only/第二 handle fail closed；`photonclient` 不再持有公共 Store。
 - [x] 将原先位于 Linux `app/photon/sync_session.go` 的无 I/O per-peer gossip FSM 与完整单测
   原样抽到现有 `pkg/core/gossip` 公共包；Linux 与 Windows 直接引用同一状态机，Windows
   compile guard 覆盖同一包。Linux event loop、bbolt commit、日志仍留在 composition layer，
@@ -300,7 +304,7 @@ authorization 和 transport records 作为可信事实来源。
 
 - [ ] 新建 `app/photon-windows`，第一版只做 composition root 和命令入口；业务协议不得
   继续堆进 `main.go`。建议目录边界：
-  - `internal/photonclient`：portable runtime、packet pipeline、peer lifecycle；
+  - `internal/photonclient`：未来 Windows/Android 可复用的用户态 packet pipeline、IKE/ESP/Babel/SADR；
   - `internal/photonclient/ike`、`esp`、`babel`、`sadr`、`transport`：协议窄包；
   - `internal/photonclient/trust`：Photon verified state 到 client desired state 的 adapter；
   - `internal/photonwindows`：service、Wintun、IP Helper、named pipe、Event Log；
@@ -325,24 +329,19 @@ authorization 和 transport records 作为可信事实来源。
   hash 获取，不能下载 “latest” 后直接随包发布；明确 DLL/driver 的签名校验、升级与卸载
   所有权。
 
-### 10.2 Portable core contract 先行
+### 10.2 Portable 用户态数据面按调用点提取
 
-- [x] 在写 Wintun 前冻结平台接口，并为每个接口定义资源所有者、并发模型、关闭顺序、
-  backpressure 和 error semantics。最小接口族：
-  - `TunnelDevice`：batch read/write、MTU、name/LUID metadata、close；
-  - `DatagramTransport`：共享 UDP receive/send、peer endpoint、rebind、close；
-  - `NetworkObserver`：interface/default-route/address/cost 变化事件；
-  - `Clock/Scheduler`：单 deadline heap、可测试 timer，不在协议包中散落 ticker；
-  - `StateSource`：detached verified snapshot + local raw identity key + revision/change stream。
-- [ ] portable core 不得自行创建 TUN、bind 系统 socket、修改 OS route/DNS、安装 service、
-  读取 Windows registry 或监听 Unix signal。平台 adapter 创建并注入资源，core 只消费
-  capability。
-- [x] 增加 memory TUN、fake datagram、fake network observer、含 raw identity key 的 memory state source 和 manual
-  clock；无管理员权限完成 `inner packet -> route lookup -> fake ESP/peer -> datagram` 及
-  反向注入的端到端测试。
-- [x] 定义统一 lifecycle：`Start(ctx)` 成功前不宣告 ready；任一关键 receive loop 退出要
-  使 runtime 进入 degraded/failed，而不是静默停止；shutdown 顺序为停止新 TUN read、
-  撤销路由、关闭 peer/SA、关闭 UDP、关闭 Wintun session/adapter、落盘安全状态。
+- [ ] 不在写 Wintun/IKE/ESP 前冻结一整套平台 capability。每个真实 consumer 出现时才提取最小接口，并同时定义
+  资源所有者、并发模型、关闭顺序、backpressure 和 error semantics；接口由 consumer 定义，不建立包含未来所有
+  能力的 `Resources` struct，也不做平台能力 nil 扫描。
+- [ ] portable packet core 不得自行创建 Wintun、修改 OS route/DNS、安装 service、读取 Windows registry 或监听
+  Unix signal。socket/TUN 的创建和 Windows handle ownership 留在 `internal/photonwindows`；用户态协议只消费首个
+  真实数据路径所需的窄 read/write/rebind 调用面。
+- [ ] 现有 memory TUN/datagram/network/clock 只证明各 adapter 的复制、阻塞、rebind 和 close 行为；仓库尚无
+  `inner packet -> route lookup -> ESP -> datagram` pipeline，不得将其标成端到端完成。真正 packet pipeline 落地时再
+  建立正反向、丢包、背压和关闭测试。
+- [ ] 生命周期由 Windows service/composition root 统一管理。公共 HostRuntime、Store、Windows 平台 runtime 和未来
+  packet engine 各自暴露真实 Start/Close/Wait 语义；不再创建一个通用 portable supervisor 包住所有组件。
 - [ ] 定义 packet ownership：buffer pool 借用/归还规则、最大 inner/outer packet、batch
   上限、有界 channel 和过载策略。不得 per-packet goroutine；加密并行可以乱序执行但同一
   flow/读批次的发射顺序必须按已定义语义保持。
@@ -375,19 +374,18 @@ authorization 和 transport records 作为可信事实来源。
 
 ```text
 app/photon                         app/photon-windows
-  inject Linux resources            inject Windows resources
-  StrongSwan/BIRD/firewall          IKE/ESP/WFP/Wintun
-            │                                  │
-            └──────────────┬───────────────────┘
-                           ▼
-                  pkg/core/host.Runtime
-             one event queue / scheduler / writer
-                  action executor / BoltStore owner
-                    │                 │
-        event/action│                 │transaction
-                    ▼                 ▼
-          pkg/core/gossip       pkg/core/state ──> pkg/core/zone
-          Engine/FSM only       verified aggregate   domain/bbolt primitive
+  one Linux composition root      one Windows composition root
+       │          │                    │          │
+       │          └─ photonlinux       │          └─ photonwindows
+       │                               │             + future photonclient data plane
+       ├───────────────┬───────────────┤
+       ▼               ▼               ▼
+ pkg/core/host.Runtime   pkg/core/state.Store/BoltStore
+ queue/scheduler/gossip  verified/checkpoint + one DB handle
+            │                         │
+            ▼                         ▼
+   pkg/core/gossip              pkg/core/zone
+   Engine/FSM only              domain primitive
 
 package dependency: app -> host -> gossip -> state -> zone
                     app ───────> platform controller implementations
@@ -402,10 +400,10 @@ package dependency: app -> host -> gossip -> state -> zone
 - `pkg/core/zone` 只保存最低层 `NetworkState`、`ZoneState`、authority/delegation/revocation/record
   模型、COW clone 与现有 bbolt bucket primitive；它不知道 managed zone、peer、sync round、
   auto-join、平台 controller 或 ChangeSet。
-- `pkg/core/host` 提供 Linux/Windows 共用的唯一 HostRuntime 实现：拥有 bounded event queue、单写
-  event loop、scheduler、gossip action executor、object-pull worker completion、唯一 `state.BoltStore`
-  owner、persistence ordering 和 ChangeSet dispatch。平台 composition 只注入 UDP/clock/BoltStore、
-  lifecycle/logger 与 controller capabilities，不复制 host event/action switch。
+- `pkg/core/host` 提供 Linux/Windows 共用的唯一 HostRuntime 实现：拥有 bounded event queue、scheduler、
+  gossip Engine/action ordering、receive/object-pull/chunk runtime。产品 composition 创建唯一 Store/BoltStore 并把
+  common state/persistence 调用面交给 HostRuntime；HostRuntime 不自行按路径打开第二个 DB，也不把公共 gossip 执行
+  回调给另一个所谓 client runtime。
 - `pkg/core/state` 提供唯一一套 verified aggregate 与事务语义。公共 HostRuntime 同步调用
   `state.Store`，后者拥有 managed zone、root trust/pin、已验证 Network、本机 raw Ed25519
   private key material，并在独立逻辑分区中原子组合 loss-tolerant `GossipCheckpoint`；它不是第二个后台 runtime，
@@ -418,23 +416,22 @@ package dependency: app -> host -> gossip -> state -> zone
   HostRuntime 执行。gossip 不直接调用 Store、打开 DB、保存私钥、修改 Network 指针或调用
   StrongSwan/firewall/WFP。
 
-**公共 HostRuntime 与平台 controller：**
+**公共 HostRuntime 与平台 composition：**
 
-- [ ] 新建公共 `pkg/core/host`（最终名称在首个切口冻结），把 Linux daemon 中与平台无关的 event drain、
-  Engine 驱动、action ordering、state transaction/persistence ordering、object-pull completion、timer
-  dispatch、shutdown drain 和 ChangeSet fanout 迁入；`app/photon` 与 `app/photon-windows` 只创建一个
-  `host.Runtime` 实例并注入 resources/controllers。公共 host 不 bind socket、不加载 registry、不调用
-  systemd/SCM，也不 import 具体 Linux/Windows controller package。
-- [ ] 定义平台 capability，而不是两个 HostRuntime 实现：`DatagramIO`、`state.BoltStore`、
-  `Clock/SchedulerWakeup`、`Logger/Metrics`、`PlatformController`。Linux/Windows adapter
-  的输入、错误、背压、close 和 ownership contract 必须一致；平台差异不能扩展 gossip Action 语义。
-- [ ] `PlatformController` 只接收 detached state view/ChangeSet 和自己的 observed input，返回 typed
+- [ ] `pkg/core/host.Runtime` 已存在；继续把 Linux daemon 中与平台无关的 event drain、Engine 驱动、common state
+  transaction/persistence ordering、object-pull completion、timer dispatch 和 shutdown drain 收入同一个实例。
+  `app/photon` 与 `app/photon-windows` 各自只创建一个 HostRuntime，不复制 host event/action switch。公共 host 不
+  bind 平台 socket、不读取 registry、不调用 systemd/SCM，也不 import 具体 Linux/Windows 包。
+- [ ] 只为 HostRuntime 的真实依赖保留窄 capability，例如已经存在的 `DatagramIO`、Clock 和 detached common Store
+  调用面；不要预建统一 `PlatformController`。Linux/Windows 的 IPsec、route、firewall、Wintun 等差异保留在各自
+  platform runtime，出现共同 consumer 后再抽取接口。
+- [ ] 平台 reconcile 只接收 detached state view/ChangeSet 和自己的 observed input，返回 typed
   plan/completion；不得直接访问 Engine、event channel、bbolt handle 或 committed root。耗时 Observe/Apply
   可在 HostRuntime 管理的 bounded worker 中运行，completion 必须回到公共 event queue，由唯一 writer
   做 source-revision CAS 和 checkpoint commit。
 - [ ] HostRuntime action executor 对 Linux/Windows 只有一份 type switch/order 测试。平台 adapter 只执行
-  `SendDatagram`、controller apply 等 capability；测试用 memory UDP/fake commit sink/manual clock/
-  fake controllers 驱动完整 `packet -> Engine -> state commit -> completion -> send/controller`，不需要 OS。
+  真实平台 I/O；测试用 memory UDP、公共 memory Store/Bolt fixture 和 manual clock 驱动完整
+  `packet -> Engine -> state commit -> completion -> send`，不为测试引入第二个 runtime 或通用平台 controller。
 
 **计时器 ownership：**
 
@@ -618,8 +615,9 @@ package dependency: app -> host -> gossip -> state -> zone
   执行其公共 Action，并通过 DaemonStateStore 调用公共 state transaction。随后将该 executor/event loop
   迁入公共 `host.Runtime`；Windows 只注入 Windows UDP/controller adapter，两端不得维护不同的 action
   switch 语义。
-- [ ] `internal/photonclient/trust.StaticSource` 改为公共 Store 的 read adapter，随后 Photon Windows 直接使用
-  同一公共 Store/BoltStore 接收网络同步；不在 trust adapter 中重新逐 zone 实现验证循环。
+- [x] 删除 `internal/photonclient/trust.StaticSource/LoadBoltSnapshot`，恢复入口已迁到
+  `internal/photonwindows.StateStore`，由 Windows composition/state wiring 持有；复用公共 Store/BoltStore、真实
+  revision 和 root/managed-zone 校验，不在平台 adapter 中重新逐 zone 实现验证循环。
 
 **验收与迁移顺序：**
 
@@ -914,11 +912,43 @@ package dependency: app -> host -> gossip -> state -> zone
     - [x] 每个子阶段独立提交并运行 `make check`；回归测试确认 daemon 独占 Bolt handle、第二个 handle 超时时，CLI control 查询仍成功；
       daemon 关闭后 offline fallback 生成逐字段相同的 Zone canonical DTO；control、CLI presenter 与 Observer HTTP 对同一 owner fixture
       保持 Zone path、record/delegation/revocation count 和 revoked 语义一致。
-- [ ] F：Photon Windows 注入 Windows capabilities/controllers 并嵌入同一 VerifiedStore，memory transport
-  双节点收敛后再连接真实 Windows UDP；
+- [ ] F：Photon Windows composition root 直接创建唯一 HostRuntime、公共 Store/BoltStore 和 Windows platform
+  runtime；memory transport 双节点直接验证 common runtime 后再连接真实 Windows UDP；
   断言 Linux/Windows 对相同 snapshot、reject reason、revision、catalog 和 bbolt reload 得到逐字节等价结果。
-- [ ] 更新 `docs/photon-windows/design.md` 与 app modularization 设计，记录最终 ownership matrix、依赖图、
-  五条调用链、schema/key migration 和 crash/reconcile 保证。完成前不得开始 Windows 专属 gossip/state 分支。
+  - [x] F0a：保留已经验证的状态恢复行为并调整 owner/包位置：`internal/photonwindows.StateStore` 不再调用
+    `zone.OpenBoltStore/LoadNetwork`、逐 Zone 重放或把 revision 固定为 1；改为独占打开公共
+    `state.BoltStore`、`LoadCommon`、`RestoreStore`，并校验配置中的 managed zone/root pin 与磁盘 root 一致。
+  - [x] F0b：撤回 `photonclient.Runtime -> host.Runtime` 套层、通用 `Resources.Validate` 和 client gossip controller。
+    `internal/photonclient` 不拥有 common runtime、公共 Store 或产品 lifecycle；未来只承载真实用户态 packet data plane。
+  - [x] F0c：memory 双节点实验已改为直接围绕两个 HostRuntime、两个独立公共 BoltStore 和真实 gossip Transport，
+    通过 Ping/Pong、catalog diff 与公共 object-pull executor 收敛，不借助第二个 client runtime 或
+    `RequestZoneSnapshot` 测试入口；覆盖 snapshot/reject reason、catalog、revision、关闭重开和 common bucket 字节
+    等价，错误 root 不推进 verified revision。
+  - [x] F0d：`app/photon` 的 CLI/config/root smoke 留在 Linux composition；只有出现 Linux/Windows 真实共同调用点时
+    才迁移 typed command/client helper。测试随被测 owner 迁移，不以减少 `app/photon` 文件数作为 F 的前置工作。
+  - [ ] F0e：在连接 Windows UDP 前完成唯一 HostRuntime 的公共 gossip 执行闭环；保持平台 composition 创建 UDP
+    `DatagramIO`、TCP listener/dialer，HostRuntime 独占 receive/accept/worker/event queue 生命周期，gossip 独占 wire
+    codec、验证和 FSM。不得把平台 bind 下沉进 HostRuntime，也不得在 Windows 复制 Linux daemon executor。
+    - [ ] F0e1：把 common Store 作为 HostRuntime 的显式真实依赖；先收回 verified/checkpoint read projection 与 remote
+      snapshot transaction，逐项缩小 `daemonGossipActionController`，不新增 `photonclient.Runtime`、capability bag 或第二条
+      event queue。
+      - [x] F0e1a：HostRuntime 构造时显式接收唯一 `GossipStateStore` 和固定的 peer/limits 配置，直接从 Store 生成
+        verified catalog view，并在公共 executor 内完成 managed-zone guard、remote batch、apply 后重读和
+        `SnapshotAppliedEvent` 回投。Linux 删除 `syncSnapshotApply/applySyncSnapshotBatch` 与 controller 的 state/apply
+        capability；Windows memory 双节点也删除等价 state/apply glue，二者都直接使用同一个 Store transaction。
+      - [ ] F0e1b：把 discovery/catalog filter、fetch-zone/chunk responder 仍需的 checkpoint/verified 输入改为 HostRuntime
+        的同一 Store 读取，删除 daemon 中剩余公共 state projection；Transport address book 仍由公共 transport policy
+        更新，平台只创建并注入 socket。
+    - [ ] F0e2：收回 backoff/completion/checkpoint mutation 与 object-pull completion 的公共执行；同一个 host event 内合并
+      checkpoint patch，继续保持 commit-before-publish 和 checkpoint-only 不推进 `VerifiedRevision`。
+    - [ ] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action
+      dispatch；平台仅保留 socket 构造、日志/metrics hook 和 verified ChangeSet 触发的平台 reconcile。
+    - [ ] F0e4：删除 `daemonGossipActionController` 及 Windows memory test 中等价 controller glue；Linux/Windows composition
+      均直接构造同一个 HostRuntime + Store + Transport。通过 host/state/gossip race、Linux `make check`/smoke 与 Windows
+      amd64 compile guard 后才开始真实 Windows UDP adapter。
+- [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
+  composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
+  client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
 
 - [ ] 从 verified records 生成 gateway candidate：同时满足 identity/key、address/port、
   overlay/path/tunnel address compatibility 和本地 selector；撤销或任一 record 不完整时
@@ -1443,10 +1473,9 @@ package dependency: app -> host -> gossip -> state -> zone
 
 ## 下一步
 
-1. 10.3A A、B1 已完成：state-domain snapshot/digest/catalog DTO 与纯函数已从 gossip 迁出，Engine 已收敛为同步 FSM/session registry，公共 HostRuntime queue + Scheduler 已替换 Linux gossip 的 Engine queue/TimerManager。下一步执行 B2：收敛公共 read/apply/send/pull/persist action executor 与 object-pull completion ordering。
-2. 随后执行 10.3A C/D/E：公共 VerifiedStore、单 BoltStore bbolt transaction/schema migration；Linux 保留单 daemon writer，先切换 verified bucket，再用公共 HostRuntime 替换平台无关 event/action loop。全量 race/smoke 通过后才让 Windows 接网络 gossip。
-3. 完成 10.3A F 后继续 10.3 gateway/route desired adapter；Windows 只注入 capabilities/controllers，预置 snapshot 和网络同步必须复用相同 HostRuntime/VerifiedStore，禁止静态 registry 或 Windows 专属 state 旁路。
-4. 然后按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization 实现；每层先有 parser/state tests 和 fuzz，再接真实 Wintun。
-5. Windows adapter 顺序为 Wintun session -> IP Helper address/route ownership -> SCM service -> named-pipe IPC -> network-change/rebind；每层都验证 restart/adopt/cleanup，不能把 route/driver 残留留给安装器兜底。
-6. Photon Android 保持独立后续项目；只复用完成后的公共 state/gossip/zone 与 portable core，不创建 Android 空工程，也不让移动端功耗优化改变当前 Windows desktop vertical slice。
-7. Phase 7 的稳态写放大/XFRM CPU 收口已经达到 todo 中记录的实机指标；继续保留其未完成长期候选，但当前实现优先级让位于 Photon Windows。Phase 8、Phase 9 已完成验收。
+1. F0a/F0b/F0c 已完成纠偏：没有第二个 client runtime，Windows Store 恢复归 Windows composition/state wiring，memory 双节点直接驱动 HostRuntime/Store/Transport。
+2. 下一步继续收口唯一 HostRuntime：把 Linux daemon 中仍属公共 gossip 的 event drain、state apply/persistence、backoff/checkpoint 和 object-pull completion 执行移入公共边界；Windows 不复制 `daemonGossipActionController`。
+3. 上述收口通过 Linux race/root smoke 与 Windows compile guard 后，才实现 Windows composition root 和真实 UDP adapter；不继续按文件数量搬迁 Linux CLI/config/test。
+4. Windows 数据面按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization -> Wintun pipeline 推进；每个真实 consumer 出现时再提取窄接口。
+5. 随后接 IP Helper address/route ownership、SCM service、named-pipe IPC 和 network-change/rebind；每层验证 restart/adopt/cleanup。
+6. Photon Android 保持独立后续项目；只复用已经由 Windows 真实使用并稳定的用户态协议/packet core，不预建 Android 工程或抽象。

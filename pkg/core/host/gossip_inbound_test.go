@@ -11,7 +11,6 @@ import (
 )
 
 type memoryInboundController struct {
-	view          GossipStateView
 	budget        int
 	outbound      []gossip.OutboundMessage
 	summaries     []*corestate.CatalogSummary
@@ -24,10 +23,6 @@ type memoryInboundController struct {
 	nacks         int
 	issues        []GossipExecutionIssue
 	controllerErr error
-}
-
-func (controller *memoryInboundController) GossipStateView(context.Context) GossipStateView {
-	return controller.view
 }
 
 func (controller *memoryInboundController) GossipDatagramBudget() int { return controller.budget }
@@ -79,11 +74,9 @@ func (controller *memoryInboundController) ReportGossipIssue(issue GossipExecuti
 }
 
 func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 2)
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
-	controller := &memoryInboundController{
-		view: GossipStateView{Loaded: true, Digests: []corestate.ZoneDigest{{Zone: "local.catofes.", RootHash: []byte("local")}}},
-	}
+	controller := &memoryInboundController{}
 	packet := &gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: "peer-a",
@@ -102,14 +95,10 @@ func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
 }
 
 func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("a.catofes.", "b.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	controller := &memoryInboundController{
 		budget: gossip.DefaultDatagramBudget,
-		view: GossipStateView{Loaded: true, Digests: []corestate.ZoneDigest{
-			{Zone: "a.catofes.", RootHash: []byte("a")},
-			{Zone: "b.catofes.", RootHash: []byte("b")},
-		}},
 	}
 	packet := &gossip.Packet{Message: &gossip.Message{
 		Type:             gossip.MessageFetchCatalogPage,
@@ -128,13 +117,13 @@ func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
 }
 
 func TestRuntimeExecuteGossipInboundRespondsToActivePingWhenQueueFull(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
 	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
 		t.Fatalf("fill queue: %v", err)
 	}
-	controller := &memoryInboundController{view: GossipStateView{Loaded: true}}
+	controller := &memoryInboundController{}
 	packet := &gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: "peer-a",

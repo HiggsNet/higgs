@@ -6,6 +6,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const (
@@ -24,6 +25,7 @@ var ErrGossipControllerRequired = errors.New("gossip action controller is requir
 // executor after snapshot application. It never exposes a live state root.
 type GossipStateView struct {
 	Loaded       bool
+	ManagedZone  zone.ZonePath
 	Digests      []corestate.ZoneDigest
 	SenderPeerID string
 }
@@ -55,8 +57,7 @@ type GossipExecutionIssue struct {
 // Implementations perform effects but never reinterpret SyncAction types or
 // reorder phases.
 type GossipActionController interface {
-	GossipStateView(context.Context) GossipStateView
-	ApplyGossipSnapshots(context.Context, string, []gossip.ApplySnapshotAction) (GossipSnapshotApplyResult, error)
+	ObserveGossipSnapshot(GossipSnapshotObservation)
 	SendGossip(context.Context, gossip.OutboundMessage) error
 	RecordGossipBackoffs(context.Context, []gossip.RecordBackoffAction) error
 	PersistGossip(context.Context, GossipPersistenceIntent, *GossipCompletionIntent) error
@@ -91,7 +92,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	view := controller.GossipStateView(ctx)
+	view := runtime.gossipStateView()
 	if !view.Loaded {
 		return result
 	}
@@ -104,7 +105,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 			peerID = session.PeerID
 		}
 		var err error
-		applyResult, err = controller.ApplyGossipSnapshots(ctx, peerID, plan.Snapshots)
+		applyResult, err = runtime.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view, controller)
 		if err != nil {
 			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			result.Aborted = true
@@ -112,7 +113,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
 		if result.NetworkChanged {
-			view = controller.GossipStateView(ctx)
+			view = runtime.gossipStateView()
 			if !view.Loaded {
 				controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
 				result.Aborted = true

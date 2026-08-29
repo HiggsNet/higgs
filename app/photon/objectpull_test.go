@@ -39,7 +39,7 @@ func TestObjectPullTCPServerClient(t *testing.T) {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("Listen: %v", err)
 	}
-	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipRuntimeConfig{})
 	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, objectPullLookup(func() *stateFile { return state }), 0, 0); err != nil {
 		_ = listener.Close()
 		t.Fatalf("StartGossipObjectPullServer: %v", err)

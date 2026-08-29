@@ -78,11 +78,11 @@ photon-windows-build: photon-windows-cross-build
 photon-windows-cross-build:
 	@mkdir -p $(BUILD_DIR)/windows-amd64
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME) $(PHOTON_WINDOWS_MAIN_PACKAGE)
-	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonclient/... ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
+	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonwindows ./pkg/core/host ./pkg/core/state ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
 	@echo "Built: $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
 
 photon-windows-test:
-	$(GO_ENV) $(GO) test ./internal/photonclient/... $(PHOTON_WINDOWS_MAIN_PACKAGE)
+	$(GO_ENV) $(GO) test ./internal/photonwindows $(PHOTON_WINDOWS_MAIN_PACKAGE)
 
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)

@@ -22,7 +22,7 @@ func (client *blockingObjectPullClient) Exchange(ctx context.Context, _ string, 
 }
 
 func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) {
-	runtime := NewRuntime(nil, 4)
+	runtime := NewRuntime(nil, 4, nil, GossipRuntimeConfig{})
 	client := &blockingObjectPullClient{entered: make(chan struct{}, 1)}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,

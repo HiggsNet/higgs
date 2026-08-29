@@ -30,7 +30,7 @@ func TestRuntimeDatagramReceiverAcceptsGossipTransport(t *testing.T) {
 
 	transportA.AddPeer("test-b", transportB.LocalAddr())
 	transportB.AddPeer("test-a", transportA.LocalAddr())
-	runtime := host.NewRuntime(host.NewClock(nil), host.DefaultEventBuffer)
+	runtime := host.NewRuntime(host.NewClock(nil), host.DefaultEventBuffer, nil, host.GossipRuntimeConfig{})
 	if err := runtime.StartGossipDatagramReceiver(t.Context(), transportB, nil); err != nil {
 		t.Fatalf("StartGossipDatagramReceiver: %v", err)
 	}

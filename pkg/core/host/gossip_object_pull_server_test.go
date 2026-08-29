@@ -14,7 +14,7 @@ func TestRuntimeGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
 	if err != nil {
 		t.Skipf("TCP sockets are unavailable: %v", err)
 	}
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer)
+	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, func(request *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		return &gossip.ObjectPullResponse{OK: request != nil && request.Type == gossip.ObjectPullZone}
 	}, 1, time.Second); err != nil {
@@ -43,7 +43,7 @@ func TestRuntimeGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
 }
 
 func TestRuntimeGossipObjectPullServerValidatesSingleOwnership(t *testing.T) {
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer)
+	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	lookup := func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		return &gossip.ObjectPullResponse{OK: true}
@@ -78,7 +78,7 @@ func TestRuntimeGossipObjectPullServerRejectsConnectionsAboveLimit(t *testing.T)
 	if err != nil {
 		t.Skipf("TCP sockets are unavailable: %v", err)
 	}
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer)
+	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})

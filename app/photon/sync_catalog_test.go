@@ -9,10 +9,19 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
+
+func executeTestGossipSnapshots(service *DaemonService, controller *daemonGossipActionController, peerID string, actions []gossip.ApplySnapshotAction) corehost.GossipExecutionResult {
+	syncActions := make([]gossip.SyncAction, len(actions))
+	for index := range actions {
+		syncActions[index] = actions[index]
+	}
+	return service.hostRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: peerID}, syncActions, controller)
+}
 
 func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	state, config := buildTestNetworkState(t)
@@ -26,8 +35,8 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
-	if _, err := controller.ApplyGossipSnapshots(context.Background(), "node-b.catofes.", []gossip.ApplySnapshotAction{{PeerID: "node-b.catofes.", Snapshot: snapshot}}); err != nil {
-		t.Fatalf("ApplyGossipSnapshots: %v", err)
+	if result := executeTestGossipSnapshots(service, controller, "node-b.catofes.", []gossip.ApplySnapshotAction{{PeerID: "node-b.catofes.", Snapshot: snapshot}}); result.Aborted {
+		t.Fatal("snapshot execution aborted")
 	}
 	rejected := service.StateStore.common.ReadView().Gossip.Peers["node-b.catofes."].RejectedObjects[snapshot.Zone]
 	if !bytes.Equal(rejected.RootHash, corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))) || rejected.UntilUnix <= now.Unix() {
@@ -60,9 +69,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
-	if result, err := controller.ApplyGossipSnapshots(context.Background(), "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); err != nil {
-		t.Fatalf("ApplyGossipSnapshots(root grant): %v", err)
-	} else if !result.StateCommitted || !result.NetworkChanged {
+	if result := executeTestGossipSnapshots(service, controller, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted || !result.NetworkChanged {
 		t.Fatal("root grant snapshot was not committed")
 	}
 
@@ -113,8 +120,8 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	controller := &daemonGossipActionController{daemon: service, now: now, limits: corestate.DefaultSyncLimits()}
-	if _, err := controller.ApplyGossipSnapshots(context.Background(), "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); err != nil {
-		t.Fatalf("ApplyGossipSnapshots(root grant): %v", err)
+	if result := executeTestGossipSnapshots(service, controller, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted {
+		t.Fatal("snapshot execution aborted")
 	}
 
 	committed, _ := service.StateStore.Snapshot()

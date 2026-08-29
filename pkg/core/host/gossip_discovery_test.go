@@ -31,7 +31,7 @@ func TestRuntimeDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T)
 			ObservedUntilUnix: now.Add(-time.Minute).Unix(),
 		}},
 	}
-	runtime := NewRuntime(nil, 1)
+	runtime := NewRuntime(nil, 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	if err := runtime.RefreshGossipDiscovery(context.Background(), input, now, failingDiscoveryWriter{err: wantErr}, transport); !errors.Is(err, wantErr) {
 		t.Fatalf("RefreshGossipDiscovery error = %v", err)

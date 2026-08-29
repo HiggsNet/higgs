@@ -50,6 +50,15 @@ type protocolPublishResult struct {
 	Common           corestate.LocalIntentBatchResult
 }
 
+// ReadView exposes the one common committed view to HostRuntime. Linux runtime
+// state remains a separate owner and is never projected through this method.
+func (s *DaemonStateStore) ReadView() corestate.View {
+	if s == nil || s.common == nil {
+		return corestate.View{}
+	}
+	return s.common.ReadView()
+}
+
 // NewDaemonStateStore combines the common state owner and Linux runtime owner
 // into the detached read view consumed by daemon planners and projections.
 func NewDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState) (*DaemonStateStore, error) {
@@ -232,6 +241,13 @@ func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID st
 		s.refreshMeta()
 	}
 	return result, nil
+}
+
+// ApplyRemoteBatch is the common HostRuntime transaction boundary. The Linux
+// wrapper only serializes it with Linux runtime commits and refreshes metadata;
+// verification and mutation semantics remain owned by state.Store.
+func (s *DaemonStateStore) ApplyRemoteBatch(ctx context.Context, peerID string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
+	return s.ApplyCommonRemoteBatch(ctx, peerID, batch, now)
 }
 
 func (s *DaemonStateStore) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {

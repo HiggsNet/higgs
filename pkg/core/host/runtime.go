@@ -64,6 +64,9 @@ func (Completion) isHostEvent() {}
 type Runtime struct {
 	Gossip *gossip.Engine
 
+	gossipState  GossipStateStore
+	gossipConfig GossipRuntimeConfig
+
 	events chan Event
 
 	mu                       sync.RWMutex
@@ -82,12 +85,14 @@ type Runtime struct {
 	stopped                  bool
 }
 
-func NewRuntime(clock Clock, eventBuffer int) *Runtime {
+func NewRuntime(clock Clock, eventBuffer int, gossipState GossipStateStore, gossipConfig GossipRuntimeConfig) *Runtime {
 	if eventBuffer <= 0 {
 		eventBuffer = DefaultEventBuffer
 	}
 	runtime := &Runtime{
 		Gossip:       gossip.NewEngine(),
+		gossipState:  gossipState,
+		gossipConfig: gossipConfig,
 		events:       make(chan Event, eventBuffer),
 		gossipChunks: gossip.NewChunkAssemblyStore(),
 	}

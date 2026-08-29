@@ -33,10 +33,10 @@ func (controller *observingGossipEventController) FilterGossipCatalogPage(_ cont
 
 func TestRuntimeHandleGossipEventOwnsEngineToActionBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 2)
+	controller := &memoryGossipController{}
+	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &controller.trace}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
-	controller := &memoryGossipController{views: []GossipStateView{{Loaded: true}}}
 
 	result, err := runtime.HandleGossipEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
 	if err != nil {
@@ -51,7 +51,7 @@ func TestRuntimeHandleGossipEventOwnsEngineToActionBridge(t *testing.T) {
 }
 
 func TestRuntimeHandleGossipEventRejectsMissingPeerOrSession(t *testing.T) {
-	runtime := NewRuntime(nil, 1)
+	runtime := NewRuntime(nil, 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
 	controller := &memoryGossipController{}
 	if _, err := runtime.HandleGossipEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
@@ -63,7 +63,7 @@ func TestRuntimeHandleGossipEventRejectsMissingPeerOrSession(t *testing.T) {
 }
 
 func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
-	runtime := NewRuntime(nil, 2)
+	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
 	id := []byte("0123456789abcdef")
@@ -71,7 +71,7 @@ func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 	if _, complete, err := runtime.AddGossipObjectChunk("peer-a", first, time.Now()); err != nil || complete {
 		t.Fatalf("first chunk: complete=%t err=%v", complete, err)
 	}
-	controller := &memoryGossipController{views: []GossipStateView{{Loaded: true}}}
+	controller := &memoryGossipController{}
 	if _, err := runtime.HandleGossipEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +82,11 @@ func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 }
 
 func TestRuntimeHandleGossipEventOwnsCatalogEnrichment(t *testing.T) {
-	runtime := NewRuntime(nil, 2)
+	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	session := runtime.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCatalogDiffing
-	controller := &observingGossipEventController{memoryGossipController: memoryGossipController{views: []GossipStateView{{Loaded: true}}}}
+	controller := &observingGossipEventController{}
 	event := &gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{}}
 	if _, err := runtime.HandleGossipEvent(context.Background(), event, time.Now(), controller); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestRuntimeHandleGossipEventOwnsCatalogEnrichment(t *testing.T) {
 
 func TestRuntimeSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 2)
+	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
 	id := []byte("0123456789abcdef")
@@ -115,7 +115,7 @@ func TestRuntimeSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.
 	if !ok {
 		t.Fatalf("host event %#v was not a gossip event", hostEvent)
 	}
-	controller := &memoryGossipController{views: []GossipStateView{{Loaded: true}}}
+	controller := &memoryGossipController{}
 	if _, err := runtime.HandleGossipEvent(context.Background(), event, clock.Now(), controller); err != nil {
 		t.Fatal(err)
 	}

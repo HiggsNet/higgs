@@ -13,7 +13,6 @@ const GossipPhaseInbound = "inbound"
 // remaining host effects required by verified inbound packets. Ping and
 // catalog response protocol logic stays in this package and pkg/core/gossip.
 type GossipInboundController interface {
-	GossipStateView(context.Context) GossipStateView
 	GossipDatagramBudget() int
 	SendGossip(context.Context, gossip.OutboundMessage) error
 	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
@@ -89,7 +88,7 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 	if message == nil || message.Ping == nil {
 		return nil
 	}
-	view := controller.GossipStateView(ctx)
+	view := runtime.gossipStateView()
 	if !view.Loaded {
 		return nil
 	}
@@ -113,7 +112,7 @@ func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *g
 	if message == nil || message.FetchCatalogPage == nil {
 		return
 	}
-	view := controller.GossipStateView(ctx)
+	view := runtime.gossipStateView()
 	if !view.Loaded {
 		return
 	}

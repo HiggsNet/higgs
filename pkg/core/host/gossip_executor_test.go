@@ -14,19 +14,66 @@ import (
 )
 
 type memoryGossipController struct {
-	trace       []string
-	views       []GossipStateView
-	applyResult GossipSnapshotApplyResult
-	applyErr    error
-	issues      []GossipExecutionIssue
-	persisted   GossipPersistenceIntent
-	completion  *GossipCompletionIntent
+	trace        []string
+	issues       []GossipExecutionIssue
+	observations []GossipSnapshotObservation
+	persisted    GossipPersistenceIntent
+	completion   *GossipCompletionIntent
 }
 
 // These adapters intentionally add no behavior: their only purpose is to
 // prove that platform composition selects capabilities, not an executor.
 type memoryLinuxGossipController struct{ memoryGossipController }
 type memoryWindowsGossipController struct{ memoryGossipController }
+
+type memoryGossipStateStore struct {
+	views       []corestate.View
+	trace       *[]string
+	applyResult corestate.RemoteBatchResult
+	applyErr    error
+	batch       []corestate.RemoteSnapshot
+	appliedAt   time.Time
+}
+
+func (reader *memoryGossipStateStore) ApplyRemoteBatch(_ context.Context, _ string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
+	if reader.trace != nil {
+		*reader.trace = append(*reader.trace, "apply")
+	}
+	reader.batch = append([]corestate.RemoteSnapshot(nil), batch...)
+	reader.appliedAt = now
+	return reader.applyResult, reader.applyErr
+}
+
+func (reader *memoryGossipStateStore) ReadView() corestate.View {
+	if reader == nil {
+		return corestate.View{}
+	}
+	if reader.trace != nil {
+		*reader.trace = append(*reader.trace, "read")
+	}
+	if len(reader.views) == 0 {
+		return corestate.View{}
+	}
+	view := reader.views[0]
+	if len(reader.views) > 1 {
+		reader.views = reader.views[1:]
+	}
+	return view
+}
+
+func loadedGossipState(paths ...zone.ZonePath) corestate.View {
+	network := zone.NewNetworkState()
+	for _, path := range paths {
+		network.Zones[path] = zone.NewZoneState(path, nil)
+	}
+	return corestate.View{State: &corestate.VerifiedState{Network: network}}
+}
+
+func loadedManagedGossipState(managed zone.ZonePath, paths ...zone.ZonePath) corestate.View {
+	view := loadedGossipState(paths...)
+	view.State.ManagedZone = managed
+	return view
+}
 
 type successfulObjectPullClient struct{}
 
@@ -51,21 +98,8 @@ func memoryObjectPullExecutor(pulls chan gossip.StartObjectPullAction) *GossipOb
 	})
 }
 
-func (controller *memoryGossipController) GossipStateView(context.Context) GossipStateView {
-	controller.trace = append(controller.trace, "read")
-	if len(controller.views) == 0 {
-		return GossipStateView{}
-	}
-	view := controller.views[0]
-	if len(controller.views) > 1 {
-		controller.views = controller.views[1:]
-	}
-	return view
-}
-
-func (controller *memoryGossipController) ApplyGossipSnapshots(context.Context, string, []gossip.ApplySnapshotAction) (GossipSnapshotApplyResult, error) {
-	controller.trace = append(controller.trace, "apply")
-	return controller.applyResult, controller.applyErr
+func (controller *memoryGossipController) ObserveGossipSnapshot(observation GossipSnapshotObservation) {
+	controller.observations = append(controller.observations, observation)
 }
 
 func (controller *memoryGossipController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
@@ -102,18 +136,17 @@ func (controller *memoryGossipController) ReportGossipIssue(issue GossipExecutio
 
 func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 4)
+	controller := &memoryGossipController{}
+	state := &memoryGossipStateStore{
+		views:       []corestate.View{loadedGossipState(), loadedGossipState(), loadedGossipState("node-a.catofes.")},
+		trace:       &controller.trace,
+		applyResult: corestate.RemoteBatchResult{CommitResult: corestate.CommitResult{Committed: true, Changes: corestate.ChangeSet{NetworkChanged: true}}, Outcomes: []corestate.RemoteApplyOutcome{{Zone: "node-a.catofes.", Result: &corestate.ApplyResult{NetworkChanged: true}}}},
+	}
+	runtime := NewRuntime(clock, 4, state, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	pulls := make(chan gossip.StartObjectPullAction, 1)
 	if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(pulls), 1, 1); err != nil {
 		t.Fatal(err)
-	}
-	controller := &memoryGossipController{
-		views: []GossipStateView{
-			{Loaded: true},
-			{Loaded: true, Digests: []corestate.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("root")}}},
-		},
-		applyResult: GossipSnapshotApplyResult{StateCommitted: true, NetworkChanged: true},
 	}
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
 	deadline := clock.Now().Add(time.Second)
@@ -155,13 +188,10 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 }
 
 func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
-	defer runtime.Stop()
 	applyErr := errors.New("commit failed")
-	controller := &memoryGossipController{
-		views:    []GossipStateView{{Loaded: true}},
-		applyErr: applyErr,
-	}
+	controller := &memoryGossipController{}
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer runtime.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionObjectPulling}
 	result := runtime.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
@@ -176,6 +206,45 @@ func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	}
 	if len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhaseApply || !errors.Is(controller.issues[0].Err, applyErr) {
 		t.Fatalf("issues = %#v", controller.issues)
+	}
+}
+
+func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
+	now := time.Unix(100, 0)
+	clock := newFakeClock(now)
+	controller := &memoryGossipController{}
+	state := &memoryGossipStateStore{
+		views: []corestate.View{
+			loadedManagedGossipState("local.catofes.", "local.catofes."),
+			loadedManagedGossipState("local.catofes.", "local.catofes.", "remote.catofes."),
+		},
+		applyResult: corestate.RemoteBatchResult{
+			CommitResult: corestate.CommitResult{Committed: true, Changes: corestate.ChangeSet{NetworkChanged: true}},
+			Outcomes:     []corestate.RemoteApplyOutcome{{Zone: "remote.catofes.", Result: &corestate.ApplyResult{NetworkChanged: true}}},
+		},
+	}
+	runtime := NewRuntime(clock, 2, state, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer runtime.Stop()
+	result := runtime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
+		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
+		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true},
+	}, controller)
+	if result.Aborted || !result.NetworkChanged {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.appliedAt.Equal(now) {
+		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
+	}
+	if len(controller.observations) != 2 || !controller.observations[0].SkippedOwnZone || controller.observations[1].Outcome.Zone != "remote.catofes." {
+		t.Fatalf("observations = %#v", controller.observations)
+	}
+	event, ok := runtime.GossipEventFor(<-runtime.Events())
+	if !ok {
+		t.Fatal("snapshot completion was not queued")
+	}
+	applied, ok := event.(*gossip.SnapshotAppliedEvent)
+	if !ok || applied.Zone != "remote.catofes." || applied.Err != nil {
+		t.Fatalf("completion = %#v", event)
 	}
 }
 
@@ -198,14 +267,14 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 		{
 			name: "linux",
 			new: func() (GossipActionController, *memoryGossipController) {
-				controller := &memoryLinuxGossipController{memoryGossipController: memoryGossipController{views: []GossipStateView{{Loaded: true}}}}
+				controller := &memoryLinuxGossipController{}
 				return controller, &controller.memoryGossipController
 			},
 		},
 		{
 			name: "windows",
 			new: func() (GossipActionController, *memoryGossipController) {
-				controller := &memoryWindowsGossipController{memoryGossipController: memoryGossipController{views: []GossipStateView{{Loaded: true}}}}
+				controller := &memoryWindowsGossipController{}
 				return controller, &controller.memoryGossipController
 			},
 		},
@@ -213,17 +282,16 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	var outcomes []outcome
 	commitErr := errors.New("commit failed")
 	for _, adapter := range adapters {
-		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
+		controller, memory := adapter.new()
+		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &memory.trace}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 		if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(nil), 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		controller, memory := adapter.new()
 		runtime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, actions, controller)
 		runtime.Stop()
 
-		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1)
 		failureController, failureMemory := adapter.new()
-		failureMemory.applyErr = commitErr
+		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 		failureRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 			gossip.SendPingAction{PeerID: "peer-a"},

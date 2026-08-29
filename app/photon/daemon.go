@@ -195,7 +195,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
-	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer)
+	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore, corehost.GossipRuntimeConfig{PeerID: config.PeerID, Limits: syncLimits(config)})
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	return d
 }

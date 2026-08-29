@@ -9,7 +9,7 @@ import (
 )
 
 func TestForwardHealthCompletionsUsesHostRuntimeQueue(t *testing.T) {
-	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1)
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1, nil, corehost.GossipRuntimeConfig{})
 	defer runtime.Stop()
 	d := &DaemonService{hostRuntime: runtime}
 	updates := make(chan struct{}, 1)
@@ -32,7 +32,7 @@ func TestForwardHealthCompletionsUsesHostRuntimeQueue(t *testing.T) {
 }
 
 func TestScheduleDaemonTimerUsesHostRuntimeNamespace(t *testing.T) {
-	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1)
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1, nil, corehost.GossipRuntimeConfig{})
 	defer runtime.Stop()
 	d := &DaemonService{hostRuntime: runtime}
 	if err := d.scheduleDaemonTimer(daemonTimerRouting, time.Now()); err != nil {
@@ -53,7 +53,7 @@ func TestScheduleDaemonTimerUsesHostRuntimeNamespace(t *testing.T) {
 }
 
 func TestScheduleDaemonTimerCancelsDisabledFirewallInterval(t *testing.T) {
-	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1)
+	runtime := corehost.NewRuntime(corehost.NewClock(nil), 1, nil, corehost.GossipRuntimeConfig{})
 	defer runtime.Stop()
 	d := &DaemonService{hostRuntime: runtime}
 	id := corehost.TimerID{Namespace: daemonRuntimeNamespace, Owner: daemonTimerOwner, Key: daemonTimerFirewall}
