@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const DefaultGossipObjectPullPerPeer = 2
@@ -22,24 +21,12 @@ type GossipObjectPullClient interface {
 	Exchange(context.Context, string, *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error)
 }
 
-type GossipObjectPullDiagnostics struct {
-	PeerID      string
-	Zone        zone.ZonePath
-	Addr        string
-	Bytes       int
-	Unreachable bool
-	Err         error
-	At          time.Time
-}
-
 type GossipObjectPullExecutorConfig struct {
-	Client         GossipObjectPullClient
-	Discovery      func() GossipDiscoveryInput
-	Now            func() time.Time
-	PerPeerLimit   int
-	Quota          gossip.QuotaConfig
-	ObserveAttempt func(peerID string, path zone.ZonePath, now time.Time)
-	ObserveResult  func(GossipObjectPullDiagnostics)
+	Client       GossipObjectPullClient
+	Discovery    func() GossipDiscoveryInput
+	Now          func() time.Time
+	PerPeerLimit int
+	Quota        gossip.QuotaConfig
 }
 
 // GossipObjectPullExecutor is the common worker used by Runtime and offline
@@ -87,26 +74,22 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 	now := executor.config.Now()
 	if input.Network == nil {
 		completion.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)
-		executor.observeResult(action, "", 0, completion.Err, true, now)
+		completion.Unreachable = true
 		return completion
 	}
 	addr := ResolveGossipObjectPullAddress(input, action.PeerID, now)
 	if addr == "" {
 		completion.Err = fmt.Errorf("no TCP address for peer %s", action.PeerID)
-		executor.observeResult(action, "", 0, completion.Err, true, now)
+		completion.Unreachable = true
 		return completion
 	}
+	completion.Addr = addr
 	release, err := executor.acquirePeer(action.PeerID)
 	if err != nil {
 		completion.Err = err
-		executor.observeResult(action, addr, 0, err, false, now)
 		return completion
 	}
 	defer release()
-	if executor.config.ObserveAttempt != nil {
-		executor.config.ObserveAttempt(action.PeerID, action.Zone, now)
-	}
-
 	request := &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: action.Zone}
 	requestBytes, err := gossip.EncodeObjectPullRequest(request)
 	if err == nil {
@@ -114,7 +97,6 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 	}
 	if err != nil {
 		completion.Err = err
-		executor.observeResult(action, addr, 0, err, false, now)
 		return completion
 	}
 	response, err := executor.config.Client.Exchange(ctx, addr, request)
@@ -136,10 +118,12 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 		err = fmt.Errorf("object pull returned zone %s for request %s", response.Snapshot.Zone, action.Zone)
 	}
 	completion.Err = err
+	completion.Addr = addr
+	completion.Bytes = responseBytes
+	completion.Unreachable = isGossipObjectPullUnreachable(err)
 	if err == nil {
 		completion.Snapshot = response.Snapshot
 	}
-	executor.observeResult(action, addr, responseBytes, err, isGossipObjectPullUnreachable(err), executor.config.Now())
 	return completion
 }
 
@@ -164,15 +148,6 @@ func (executor *GossipObjectPullExecutor) allowQuota(peerID string, bytes int64,
 	executor.quotaMu.Lock()
 	defer executor.quotaMu.Unlock()
 	return executor.quotas.Allow(peerID, bytes, 1, now)
-}
-
-func (executor *GossipObjectPullExecutor) observeResult(action gossip.StartObjectPullAction, addr string, bytes int, err error, unreachable bool, now time.Time) {
-	if executor.config.ObserveResult != nil {
-		executor.config.ObserveResult(GossipObjectPullDiagnostics{
-			PeerID: action.PeerID, Zone: action.Zone, Addr: addr, Bytes: bytes,
-			Err: err, Unreachable: unreachable, At: now,
-		})
-	}
 }
 
 func encodedObjectPullResponseSize(response *gossip.ObjectPullResponse) int {

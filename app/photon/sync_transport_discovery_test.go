@@ -221,10 +221,8 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 		PeerID: "node-a.catofes.",
 		Ping:   &gossip.Ping{Summary: remoteSummary},
 	}
-	controller := &daemonGossipActionController{
+	controller := &daemonGossipIO{
 		daemon: service,
-		now:    service.Sync.now(),
-		limits: syncLimits(config),
 	}
 	state.Lock()
 	_, err = service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, service.Sync.now(), controller)

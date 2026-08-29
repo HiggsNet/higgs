@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -159,8 +159,8 @@ func diagnosticPeerObservability(now time.Time) observability.PeerDiagnostics {
 	}
 }
 
-func diagnosticDatagramStats(now time.Time) *datagramStats {
-	return &datagramStats{
+func diagnosticDatagramStats(now time.Time) *observability.PeerDatagramStats {
+	return &observability.PeerDatagramStats{
 		TooLargeDropped:       2,
 		DigestOnlyAnnounces:   1,
 		LastTooLargeUnix:      now.Unix(),
@@ -173,8 +173,8 @@ func diagnosticDatagramStats(now time.Time) *datagramStats {
 	}
 }
 
-func diagnosticObjectPullStats(now time.Time) *objectPullStats {
-	return &objectPullStats{
+func diagnosticObjectPullStats(now time.Time) *observability.PeerObjectPullStats {
+	return &observability.PeerObjectPullStats{
 		Attempts:               3,
 		Successes:              2,
 		Failures:               1,

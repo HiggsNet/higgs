@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,9 +16,9 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/internal/observability"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -30,14 +29,11 @@ const maxRelayFanoutPerUpdate = 8
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
-var udpSentChunkCache = gossip.NewSentChunkCache()
-
 type SyncRuntime struct {
 	App           *Runtime
 	Config        *syncConfigFile
 	Transport     *gossip.Transport
 	TransportDeps *SyncTransportDeps
-	Observability *observability.PeerObservabilityStore
 }
 
 type SyncTransportDeps struct {
@@ -308,7 +304,7 @@ func syncOnce(peerID string) error {
 	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
-	if err := service.startHintedSyncSession(peerID, "sync_once"); err != nil {
+	if err := service.hostRuntime.StartGossipSession(peerID, "sync_once"); err != nil {
 		return err
 	}
 	var responderQuietUntil time.Time
@@ -627,105 +623,13 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(verified *corestate.Ve
 	}, nil
 }
 
-func (sr *SyncRuntime) handleObjectChunkNACKFrom(message *gossip.Message, replyAddr *net.UDPAddr) error {
-	if sr == nil || sr.Transport == nil || message == nil || message.ObjectChunkNACK == nil {
-		return nil
-	}
-	chunks := udpSentChunkCache.Repair(message.PeerID, message.ObjectChunkNACK, sr.now())
-	if len(chunks) == 0 {
-		recordDatagramRepairNACK(sr.Observability, message.PeerID, true, sr.now())
-		return nil
-	}
-	for _, chunk := range chunks {
-		msg := &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}
-		var err error
-		if replyAddr != nil {
-			err = sr.Transport.SendTo(message.PeerID, replyAddr, msg)
-		} else {
-			err = sr.Transport.Send(message.PeerID, msg)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	recordDatagramRepairSent(sr.Observability, message.PeerID, len(chunks), sr.now())
-	return nil
-}
-
-type datagramSendDiagnostics struct {
-	Oversized      []gossip.OversizedDatagramObject
-	ChunkFallbacks int
-}
-
-func sendDetachedSnapshotWithDiagnosticsTo(snapshot *corestate.ZoneSnapshot, plan gossip.DatagramPlan, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time, logger *appLogger) (datagramSendDiagnostics, error) {
-	diag := datagramSendDiagnostics{Oversized: append([]gossip.OversizedDatagramObject(nil), plan.Oversized...)}
-	for _, oversized := range plan.Oversized {
-		if logger != nil && logger.debugEnabled() {
-			logger.Debug("transport", "datagram_too_large", map[string]any{
-				"peer_id": peerID, "object": oversized.Object, "zone": oversized.Zone,
-				"key": oversized.Key, "bytes": oversized.Size, "limit": transport.MaxMessageBytes(), "action": "skip_udp",
-			})
-		}
-	}
-	for _, announce := range plan.Announces {
-		msg := &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}
-		var err error
-		if replyAddr != nil {
-			err = transport.SendTo(peerID, replyAddr, msg)
-		} else {
-			err = transport.Send(peerID, msg)
-		}
-		if err != nil {
-			return diag, err
-		}
-	}
-	chunks, err := sendDetachedZoneSnapshotChunksTo(snapshot, transport, peerID, replyAddr, now)
-	diag.ChunkFallbacks = chunks
-	return diag, err
-}
-
-func sendDetachedZoneSnapshotChunksTo(snapshot *corestate.ZoneSnapshot, transport *gossip.Transport, peerID string, replyAddr *net.UDPAddr, now time.Time) (int, error) {
-	if snapshot == nil || transport == nil {
-		return 0, nil
-	}
-	transferID := make([]byte, 16)
-	if _, err := rand.Read(transferID); err != nil {
-		return 0, fmt.Errorf("create chunk transfer id: %w", err)
-	}
-	chunks, err := gossip.BuildZoneSnapshotChunks(snapshot, transport.MaxMessageBytes(), transport.PeerID(), transferID)
-	if err != nil {
-		return 0, err
-	}
-	if !udpSentChunkCache.Put(peerID, transferID, chunks, now) {
-		return 0, errors.New("chunk send cache limits exceeded")
-	}
-	sent := 0
-	for _, chunk := range chunks {
-		msg := &gossip.Message{
-			Type:        gossip.MessageObjectChunk,
-			ObjectChunk: chunk,
-		}
-		var err error
-		if replyAddr != nil {
-			err = transport.SendTo(peerID, replyAddr, msg)
-		} else {
-			err = transport.Send(peerID, msg)
-		}
-		if err != nil {
-			return sent, err
-		}
-		sent++
-	}
-	return sent, nil
-}
-
 func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
 	if store == nil || peerID == "" {
 		return
 	}
 	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
 		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
+			snapshot.DatagramStats = &observability.PeerDatagramStats{}
 		}
 		snapshot.DatagramStats.TooLargeDropped++
 		snapshot.DatagramStats.LastTooLargeUnix = now.Unix()
@@ -735,107 +639,6 @@ func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID,
 		snapshot.DatagramStats.LastTooLargeKey = key
 		snapshot.DatagramStats.LastTooLargeBytes = size
 		snapshot.DatagramStats.LastTooLargeLimit = limit
-	})
-}
-
-func recordDatagramSendDiagnostics(store *observability.PeerObservabilityStore, peerID string, diag datagramSendDiagnostics, limit int, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	for _, oversized := range diag.Oversized {
-		recordDatagramTooLarge(store, peerID, "send", oversized.Object, oversized.Zone, oversized.Key, oversized.Size, limit, now)
-	}
-	for i := 0; i < diag.ChunkFallbacks; i++ {
-		recordDatagramChunkFallback(store, peerID, now)
-	}
-}
-
-func recordDatagramChunkFallback(store *observability.PeerObservabilityStore, peerID string, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		snapshot.DatagramStats.ChunkFallbacks++
-	})
-}
-
-func recordDatagramRepairNACK(store *observability.PeerObservabilityStore, peerID string, ignored bool, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		if ignored {
-			snapshot.DatagramStats.ChunkRepairIgnored++
-		} else {
-			snapshot.DatagramStats.ChunkRepairNACKs++
-		}
-	})
-}
-
-func recordDatagramRepairSent(store *observability.PeerObservabilityStore, peerID string, chunks int, now time.Time) {
-	if store == nil || peerID == "" || chunks <= 0 {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		snapshot.DatagramStats.ChunkRepairChunks += int64(chunks)
-	})
-}
-
-func recordCatalogSummary(store *observability.PeerObservabilityStore, peerID string, summary *corestate.CatalogSummary, now time.Time) {
-	if store == nil || peerID == "" || summary == nil {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
-		snapshot.DatagramStats.LastCatalogRootHex = hex.EncodeToString(summary.CatalogRoot)
-		snapshot.DatagramStats.LastCatalogZoneCount = summary.ZoneCount
-		snapshot.DatagramStats.LastCatalogCursor = summary.NextCursor
-		if summary.FirstPage != nil {
-			snapshot.DatagramStats.LastCatalogPageEntries = len(summary.FirstPage.Entries)
-		}
-		snapshot.DatagramStats.LastCatalogRejectedReason = ""
-	})
-}
-
-func recordCatalogPage(store *observability.PeerObservabilityStore, peerID string, page *corestate.CatalogPage, now time.Time) {
-	if store == nil || peerID == "" || page == nil {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
-		snapshot.DatagramStats.LastCatalogRootHex = hex.EncodeToString(page.CatalogRoot)
-		snapshot.DatagramStats.LastCatalogCursor = page.NextCursor
-		snapshot.DatagramStats.LastCatalogPageEntries = len(page.Entries)
-		snapshot.DatagramStats.LastCatalogRejectedReason = ""
-	})
-}
-
-func recordCatalogReject(store *observability.PeerObservabilityStore, peerID, cursor, reason string, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &datagramStats{}
-		}
-		snapshot.DatagramStats.LastCatalogUnix = now.Unix()
-		snapshot.DatagramStats.LastCatalogCursor = cursor
-		snapshot.DatagramStats.LastCatalogRejectedReason = reason
 	})
 }
 

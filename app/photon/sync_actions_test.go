@@ -41,7 +41,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 		t.Fatal("metadata-only catalog event reported a Network change")
 	}
 
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok {
 		t.Fatal("peer observability snapshot missing")
 	}
@@ -93,7 +93,7 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 	unlock()
 
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || observed.DatagramStats.LastCatalogRootHex != "3132" {
 		t.Fatalf("catalog stats = %+v, want observability summary", observed.DatagramStats)
 	}
@@ -124,10 +124,8 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 			PeerID:           peerID,
 			FetchCatalogPage: &gossip.FetchCatalogPage{},
 		}
-		controller := &daemonGossipActionController{
+		controller := &daemonGossipIO{
 			daemon: service,
-			now:    now,
-			limits: syncLimits(config),
 		}
 		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
 		done <- err
@@ -148,7 +146,10 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	state.Lock()
 	unlock = state.Unlock
 	go func() {
-		done <- service.respondFetchZoneTo(peerID, "node-b.catofes.", nil)
+		message := &gossip.Message{Type: gossip.MessageFetchZone, PeerID: peerID, FetchZone: &gossip.FetchZone{Zone: "node-b.catofes."}}
+		controller := &daemonGossipIO{daemon: service}
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		done <- err
 	}()
 	select {
 	case err := <-done:
@@ -162,8 +163,8 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	}
 	unlock()
 
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
-	if !ok || observed.ReadOnlyResponder != 1 || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
+	if !ok || observed.ReadOnlyResponder != 2 || observed.DatagramStats == nil || (observed.DatagramStats.LastCatalogCursor == "" && observed.DatagramStats.LastCatalogPageEntries == 0) {
 		t.Fatalf("catalog page stats = %+v, want observability catalog page", observed.DatagramStats)
 	}
 }
@@ -196,7 +197,10 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
-		done <- service.respondFetchZoneChunksTo(peerID, "node-b.catofes.", nil)
+		message := &gossip.Message{Type: gossip.MessageFetchZone, PeerID: peerID, FetchZone: &gossip.FetchZone{Zone: "node-b.catofes.", ChunkFallback: true}}
+		controller := &daemonGossipIO{daemon: service}
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		done <- err
 	}()
 
 	select {
@@ -211,7 +215,7 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	}
 	unlock()
 
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok {
 		t.Fatal("peer observability snapshot missing")
 	}
@@ -579,7 +583,7 @@ drainEvents:
 	if notifications != 1 {
 		t.Fatalf("chunk apply notifications = %d, want one after acknowledged completion", notifications)
 	}
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok || observed.DatagramStats == nil || observed.DatagramStats.ChunkFallbacks != 1 {
 		t.Fatalf("chunk fallback observability = %+v, want one apply", observed.DatagramStats)
 	}
@@ -618,7 +622,9 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 		},
 	}
 	result, err := service.hostRuntime.HandleGossipObjectChunk(context.Background(), message, now)
-	(&daemonGossipActionController{daemon: service, now: now}).ObserveGossipObjectChunk(result)
+	if result.CheckpointErr != nil {
+		t.Fatalf("chunk checkpoint: %v", result.CheckpointErr)
+	}
 	if err == nil {
 		t.Fatal("handleObjectChunk accepted invalid object hash")
 	}

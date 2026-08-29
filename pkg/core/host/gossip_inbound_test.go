@@ -8,70 +8,24 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 type memoryInboundController struct {
 	budget        int
 	outbound      []gossip.OutboundMessage
-	summaries     []*corestate.CatalogSummary
-	pages         []*corestate.CatalogPage
-	rejects       []error
-	hints         []string
-	matches       []string
-	fetches       []*gossip.FetchZone
-	chunks        int
-	nacks         int
 	issues        []GossipExecutionIssue
 	controllerErr error
 }
 
-func (controller *memoryInboundController) ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error {
+func (controller *memoryInboundController) PrepareGossipInbound(context.Context, *gossip.Packet, time.Time) error {
 	return nil
 }
-
-func (controller *memoryInboundController) ObserveGossipSnapshot(GossipSnapshotObservation) {}
-
-func (controller *memoryInboundController) ObserveGossipChunkRepair(string) {}
 
 func (controller *memoryInboundController) GossipDatagramBudget() int { return controller.budget }
 
 func (controller *memoryInboundController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	controller.outbound = append(controller.outbound, outbound)
-	return controller.controllerErr
-}
-
-func (controller *memoryInboundController) ObserveGossipCatalogSummary(_ string, summary *corestate.CatalogSummary) {
-	controller.summaries = append(controller.summaries, summary)
-}
-
-func (controller *memoryInboundController) ObserveGossipCatalogPage(_ string, page *corestate.CatalogPage) {
-	controller.pages = append(controller.pages, page)
-}
-
-func (controller *memoryInboundController) ObserveGossipCatalogReject(_ string, _ string, err error) {
-	controller.rejects = append(controller.rejects, err)
-}
-
-func (controller *memoryInboundController) ObserveGossipSummaryMatch(peerID string) {
-	controller.matches = append(controller.matches, peerID)
-}
-
-func (controller *memoryInboundController) HandleGossipAnnounceHint(_ context.Context, peerID string) error {
-	controller.hints = append(controller.hints, peerID)
-	return controller.controllerErr
-}
-
-func (controller *memoryInboundController) RespondGossipFetchZone(_ context.Context, _ string, fetch *gossip.FetchZone) error {
-	controller.fetches = append(controller.fetches, fetch)
-	return controller.controllerErr
-}
-
-func (controller *memoryInboundController) ObserveGossipObjectChunk(GossipObjectChunkResult) {
-	controller.chunks++
-}
-
-func (controller *memoryInboundController) HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error {
-	controller.nacks++
 	return controller.controllerErr
 }
 
@@ -91,8 +45,9 @@ func TestRuntimeExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T
 	if len(controller.outbound) != 2 || controller.outbound[0].Message.Type != gossip.MessagePong || controller.outbound[1].Message.Type != gossip.MessageFetchCatalogPage {
 		t.Fatalf("outbound = %#v, want PONG then FETCH_CATALOG_PAGE", controller.outbound)
 	}
-	if len(controller.summaries) != 1 || len(controller.hints) != 1 || controller.hints[0] != "peer-a" || len(controller.matches) != 0 {
-		t.Fatalf("summary/hint/match = %d/%#v/%#v", len(controller.summaries), controller.hints, controller.matches)
+	diagnostics, ok := runtime.Observability.Snapshot("peer-a", time.Unix(100, 0))
+	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogRootHex == "" || diagnostics.HintAccepted != 1 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }
 
@@ -110,11 +65,58 @@ func TestRuntimeExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T)
 	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(packet), controller); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
-	if len(controller.pages) != 1 || len(controller.outbound) != 1 || controller.outbound[0].Message.CatalogPage != controller.pages[0] {
-		t.Fatalf("pages/outbound = %#v/%#v", controller.pages, controller.outbound)
+	if len(controller.outbound) != 1 || controller.outbound[0].Message.CatalogPage == nil {
+		t.Fatalf("outbound = %#v", controller.outbound)
 	}
 	if size := gossip.MessageWireSize(controller.outbound[0].Message); size > controller.budget {
 		t.Fatalf("catalog page size = %d, limit %d", size, controller.budget)
+	}
+}
+
+func TestRuntimeOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
+	now := time.Unix(100, 0)
+	view := loadedGossipState("remote.catofes.")
+	view.State.Network.Zones["remote.catofes."].Records["large"] = &zone.Record{
+		Zone: "remote.catofes.", Key: "large", Type: "test.data", Value: make([]byte, 3000), Version: 1,
+	}
+	runtime := NewRuntime(newFakeClock(now), 4, &memoryGossipStateStore{views: []corestate.View{view}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer runtime.Stop()
+	controller := &memoryInboundController{budget: gossip.DefaultDatagramBudget}
+	fetch := &gossip.Message{
+		Type: gossip.MessageFetchZone, PeerID: "peer-a",
+		FetchZone: &gossip.FetchZone{Zone: "remote.catofes.", ChunkFallback: true},
+	}
+	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller); err != nil {
+		t.Fatalf("execute FETCH_ZONE: %v", err)
+	}
+	diagnostics, ok := runtime.Observability.Snapshot("peer-a", now)
+	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.ChunkFallbacks == 0 || diagnostics.LastResponderKind != "chunk_fallback" {
+		t.Fatalf("fetch diagnostics = %#v", diagnostics)
+	}
+	var firstChunk *gossip.ObjectChunk
+	for _, outbound := range controller.outbound {
+		if outbound.Message != nil && outbound.Message.ObjectChunk != nil {
+			firstChunk = outbound.Message.ObjectChunk
+			break
+		}
+	}
+	if firstChunk == nil {
+		t.Fatalf("outbound = %#v, want object chunks", controller.outbound)
+	}
+	controller.outbound = nil
+	nack := &gossip.Message{
+		Type: gossip.MessageObjectChunkNACK, PeerID: "peer-a",
+		ObjectChunkNACK: &gossip.ObjectChunkNACK{TransferID: append([]byte(nil), firstChunk.TransferID...), Missing: []uint16{firstChunk.Index}},
+	}
+	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(&gossip.Packet{Message: nack}), controller); err != nil {
+		t.Fatalf("execute OBJECT_CHUNK_NACK: %v", err)
+	}
+	diagnostics, _ = runtime.Observability.Snapshot("peer-a", now)
+	if diagnostics.DatagramStats.ChunkRepairNACKs != 1 || diagnostics.DatagramStats.ChunkRepairChunks != 1 {
+		t.Fatalf("NACK diagnostics = %#v", diagnostics.DatagramStats)
+	}
+	if len(controller.outbound) != 1 || controller.outbound[0].Message.ObjectChunk == nil || controller.outbound[0].Message.ObjectChunk.Index != firstChunk.Index {
+		t.Fatalf("repair outbound = %#v", controller.outbound)
 	}
 }
 

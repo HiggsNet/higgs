@@ -14,10 +14,10 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -270,18 +270,15 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 			RejectedDigests:    map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
 		}
 	})
-	srv.daemon.PeerObservability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+	srv.daemon.hostRuntime.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
 		diagnostics.LastUpdateSource = "announce"
 		diagnostics.LastRelaySuppression = "relay_fanout_limited"
 		diagnostics.ObservedSource = "verified_packet"
+		diagnostics.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 2}
 	})
-	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
-	recordDatagramChunkFallback(srv.daemon.PeerObservability, "node-b.catofes.", now)
-	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
-	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
-	recordObjectPullAttempt(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", now)
-	recordObjectPullResult(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", 0, nil, false, now)
-	recordObjectPullResult(srv.daemon.PeerObservability, "node-b.catofes.", "zone", "node-b.catofes.", "", 0, nil, false, now)
+	srv.daemon.hostRuntime.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+		diagnostics.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 3, Successes: 2, LastUnix: now.Unix(), LastObject: "zone", LastZone: "node-b.catofes.", LastSourcePeer: "node-b.catofes."}
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-b.catofes.", nil)
 	rr := httptest.NewRecorder()

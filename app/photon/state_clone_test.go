@@ -200,8 +200,6 @@ func TestCloneStateFileSchemaGuard(t *testing.T) {
 	assertStateCloneFields(t, syncPeerState{}, "LastSyncUnix", "LastAttemptUnix", "BackoffUntilUnix", "LastRelayUnix", "LastRelayCatalogRootHex", "FailureCount", "LastError", "DiscoveredAddr", "DiscoveredAtUnix", "ObservedAddr", "ObservedFirstSeenUnix", "ObservedLastSeenUnix", "ObservedLastSyncUnix", "ObservedUntilUnix", "ObservedFailureCount", "ObservedGraceAddrs", "RejectedDigests")
 	assertStateCloneFields(t, observedGraceAddrState{}, "Addr", "UntilUnix")
 	assertStateCloneFields(t, rejectedDigestState{}, "Zone", "Object", "Key", "RootHashHex", "ObjectHashHex", "Reason", "RejectedAtUnix", "UntilUnix")
-	assertStateCloneFields(t, datagramStats{}, "TooLargeDropped", "DigestOnlyAnnounces", "ChunkFallbacks", "ChunkRepairNACKs", "ChunkRepairChunks", "ChunkRepairIgnored", "LastCatalogUnix", "LastCatalogRootHex", "LastCatalogZoneCount", "LastCatalogCursor", "LastCatalogPageEntries", "LastCatalogRejectedReason", "LastTooLargeUnix", "LastTooLargeDirection", "LastTooLargeObject", "LastTooLargeZone", "LastTooLargeKey", "LastTooLargeBytes", "LastTooLargeLimit")
-	assertStateCloneFields(t, objectPullStats{}, "Attempts", "Successes", "Failures", "LargeObjectUnreachable", "LastUnix", "LastError", "LastObject", "LastZone", "LastKey", "LastBytes", "LastSourcePeer", "LastUnreachable")
 }
 
 func assertStateCloneFields(t *testing.T, value any, expected ...string) {

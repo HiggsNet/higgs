@@ -952,22 +952,39 @@ package dependency: app -> host -> gossip -> state -> zone
         object-pull completion 统一进入 session FSM。daemon、`sync serve`、`sync once` 和 Windows memory 双节点均已删除
         自己的 packet/event type switch；旧 `daemonEventPacket` 及其单次转发也已删除。平台只读取 detached result 做日志、
         observability 和后续 reconcile，不再决定公共事件走哪条协议路径。
-      - [ ] F0e3b：把 announce hint、fetch-zone/chunk responder 和 chunk/NACK 的剩余公共执行从
-        `daemonGossipActionController` 收进 HostRuntime；reply address 作为本次 ingress 的临时发送上下文，不持久化也不交给
+      - [x] F0e3b：把 announce hint、fetch-zone/chunk responder 和 chunk/NACK 的剩余公共执行从
+        `daemonGossipIO` 收进 HostRuntime；reply address 作为本次 ingress 的临时发送上下文，不持久化也不交给
         平台重新解释协议 action。object chunk assembly、repair schedule、snapshot decode/root check、reject checkpoint 与 completion
-        回投已经整体迁入 HostRuntime，`daemon_object_chunk.go` 已删除；下一刀迁 sent-chunk cache/NACK repair、fetch-zone responder
-        和 announce hint。完成后 controller 只剩 transport send、日志/metrics hook 与 ChangeSet 通知。
+        回投已经整体迁入 HostRuntime，`daemon_object_chunk.go` 已删除。sent-chunk cache、fetch-zone announce/chunk responder 与
+        NACK repair 也已迁入每个 HostRuntime 实例：删除进程级 `udpSentChunkCache`、daemon fetch responder 及
+        `SyncRuntime.handleObjectChunkNACKFrom`，平台只执行本次 ingress reply route 下的实际发送；公共 diagnostics 由 HostRuntime 直接记录。
+        announce hint 的 active-session 判重、defer、session 创建、初始事件排队及 follow-up 启动也已迁入 HostRuntime；删除
+        daemon `handleAnnounceHint/startHintedSyncSession`。common `PeerObservabilityStore` 从 `internal/observability` 移到
+        `pkg/core/observability` 并由每个 HostRuntime 唯一持有，catalog/fetch/chunk/NACK/session/object-pull 统计在事件发生处
+        直接更新；删除 `ObserveGossipCatalog*`、`ObserveGossipFetchZone`、`ObserveGossipChunkNACK`、
+        `ObserveGossipObjectChunk`、`ObserveGossipSnapshot`、object-pull `ObserveAttempt/ObserveResult` 等只为绕回 daemon
+        记账或日志存在的 effect/callback、DTO 和 `app/photon/diagnostics.go`。`SyncRuntime.Observability` 与
+        `DaemonService.PeerObservability` 两个重复 owner 字段也已删除。
         gossip effect failure、event drop、session protocol error 与状态转换日志已先收回 HostRuntime；composition 仅在构造时
         注入统一 logger，不再通过 `ReportGossipIssue` 逐事件接收并重新解释日志。下一步同时把当前公开的
         `ExecuteGossipInbound`/`HandleGossipEvent` 两段改成 HostRuntime 内部 packet dispatch/session FSM dispatch，删除容易误解为
         两套 event loop 的 `InboundController/EventController` 边界。
         该 API 收口已开始：`ExecuteGossipInbound` 已变为私有 `executeGossipPacketActions`，`HandleGossipEvent` 已变为私有
-        `handleGossipSessionEvent`，平台生产代码与 app 测试均只进入 `HandleGossipHostEvent`；两个公开 controller 已折叠为一个
-        临时 `GossipHostEffects`，内部接口按 packet effects/session effects 命名，待剩余 effect 收回后整体删除。packet failure
-        也已由 HostRuntime 记录，`GossipHostEventResult` 不再暴露原始 packet 给 daemon/`sync serve` 二次解释和输出日志。
-    - [ ] F0e4：删除 `daemonGossipActionController` 及 Windows memory test 中等价 controller glue；Linux/Windows composition
+        `handleGossipSessionEvent`，平台生产代码与 app 测试均只进入 `HandleGossipHostEvent`；旧的 packet/session controller
+        已删除，临时平台接口继续缩为 `GossipIO`：只剩本次 ingress route 准备、datagram budget 和真实发送，不再使用
+        `Controller/Effects` 命名；packet failure 也已由 HostRuntime 记录，`GossipHostEventResult` 不再暴露原始 packet 或原始
+        session event 给 daemon/`sync serve` 二次解释和输出日志。
+      - [ ] F0e3c：收回 session 完成后的 remove/pending-hint、relay fanout 与公共 peer observability；daemon 只消费
+        verified `ChangeSet` 触发 Linux reconcile。随后把 `PrepareGossipInbound` 中 common observed-checkpoint/address-book 部分移入
+        HostRuntime，使 `GossipIO` 最终只包含平台 datagram send/reply-route，不再保留一体式 daemon adapter。
+    - [ ] F0e4：删除 `daemonGossipIO` 及 Windows memory test 中等价 I/O glue；Linux/Windows composition
       均直接构造同一个 HostRuntime + Store + Transport。通过 host/state/gossip race、Linux `make check`/smoke 与 Windows
       amd64 compile guard 后才开始真实 Windows UDP adapter。
+    - [ ] F0e5：F0e4 前再做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次
+      wrapper 和 legacy alias 都必须列出真实调用方。只被测试构造器使用的兼容入口直接删除；仍串联 common commit 与 Linux
+      runtime 同一 Bolt transaction 的 `DaemonStateStore` 方法保留到调用方改用 typed owner；F0e5 完成前必须把它迁出
+      HostRuntime 的 common Store 依赖，期间不得新增 aggregate view。完成后同步更新 runtime migration report，而不是靠文档
+      把临时层解释成长期抽象。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

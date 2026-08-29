@@ -18,7 +18,7 @@ const (
 	GossipPhasePersistence = "persistence"
 )
 
-var ErrGossipControllerRequired = errors.New("gossip action controller is required")
+var ErrGossipIORequired = errors.New("gossip I/O is required")
 
 // GossipStateView is the bounded read projection required by the common
 // executor after snapshot application. It never exposes a live state root.
@@ -42,11 +42,8 @@ type GossipExecutionIssue struct {
 	Err    error
 }
 
-// GossipActionController is the platform/runtime-state capability boundary.
-// Implementations perform effects but never reinterpret SyncAction types or
-// reorder phases.
-type GossipActionController interface {
-	ObserveGossipSnapshot(GossipSnapshotObservation)
+// GossipSender is the narrow outbound datagram capability used by Runtime.
+type GossipSender interface {
 	SendGossip(context.Context, gossip.OutboundMessage) error
 }
 
@@ -60,12 +57,12 @@ type GossipExecutionResult struct {
 
 // ExecuteGossipActions owns the shared effect ordering for one FSM event:
 // read/apply, refresh/reconcile, send, object pull, timer, backoff and
-// persistence. Controllers supply capabilities only.
+// persistence. The sender performs only actual datagram I/O.
 func (runtime *Runtime) ExecuteGossipActions(
 	ctx context.Context,
 	session *gossip.SyncSession,
 	actions []gossip.SyncAction,
-	controller GossipActionController,
+	controller GossipSender,
 ) GossipExecutionResult {
 	var result GossipExecutionResult
 	if runtime == nil || controller == nil {
@@ -88,7 +85,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 			peerID = session.PeerID
 		}
 		var err error
-		applyResult, err = runtime.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view, controller)
+		applyResult, err = runtime.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view)
 		if err != nil {
 			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			result.Aborted = true

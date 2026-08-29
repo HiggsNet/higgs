@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -359,7 +360,9 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	}
 	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
+	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
+		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
+	})
 	before := service.StateStore.Meta().Revision
 
 	service.flushRevocationCleanup()
@@ -367,7 +370,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	if after := service.StateStore.Meta().Revision; after != before {
 		t.Fatalf("state revision after already-clean cleanup = %d, want %d", after, before)
 	}
-	if _, ok := service.PeerObservability.Snapshot("node-b.catofes.", now); ok {
+	if _, ok := service.hostRuntime.Observability.Snapshot("node-b.catofes.", now); ok {
 		t.Fatal("already-clean fast path retained revoked peer observability")
 	}
 }
@@ -420,7 +423,9 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	recordDatagramChunkFallback(service.PeerObservability, "node-b.catofes.", now)
+	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
+		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
+	})
 
 	state.Lock()
 	done := make(chan struct{})
@@ -440,7 +445,7 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 	if got := snapshot.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
 		t.Fatalf("committed discovered addr = %q, want cleared", got)
 	}
-	if _, ok := service.PeerObservability.Snapshot("node-b.catofes.", now); ok {
+	if _, ok := service.hostRuntime.Observability.Snapshot("node-b.catofes.", now); ok {
 		t.Fatal("revoked peer diagnostics were not deleted")
 	}
 }

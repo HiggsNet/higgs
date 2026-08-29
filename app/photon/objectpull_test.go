@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -141,82 +140,6 @@ func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	completion := executor.PullFrom(t.Context(), corehost.GossipDiscoveryInput{Network: state.Network}, gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err == nil {
 		t.Fatalf("object pull succeeded without a TCP address")
-	}
-}
-
-func TestObjectPullResultUsesObservabilityStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(7100, 0)
-	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
-	beforeRevision := service.StateStore.Meta().Revision
-
-	state.Lock()
-	unlock := state.Unlock
-	service.observeObjectPullResult(corehost.GossipObjectPullDiagnostics{
-		PeerID:      "node-b.catofes.",
-		Zone:        "node-b.catofes.",
-		Bytes:       4096,
-		Unreachable: false,
-		At:          now,
-	})
-	unlock()
-
-	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
-	if !ok {
-		t.Fatal("object pull observability snapshot missing")
-	}
-	stats := snapshot.ObjectPullStats
-	if stats == nil {
-		t.Fatal("object pull stats missing from observability snapshot")
-	}
-	if stats.Successes != 1 || stats.LastBytes != 4096 || stats.LastZone != "node-b.catofes." {
-		t.Fatalf("object pull stats = %+v, want committed success result", stats)
-	}
-	if after := service.StateStore.Meta().Revision; after != beforeRevision {
-		t.Fatalf("state revision changed for object pull diagnostics: before=%d after=%d", beforeRevision, after)
-	}
-}
-
-func TestSubmitObjectPullNoAddressUsesObservabilityStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(7200, 0)
-	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
-	beforeRevision := service.StateStore.Meta().Revision
-
-	state.Lock()
-	unlock := state.Unlock
-	service.objectPullExecutor.PullGossipObject(context.Background(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
-	unlock()
-
-	snapshot, ok := service.PeerObservability.Snapshot("node-b.catofes.", now)
-	if !ok {
-		t.Fatal("object pull observability snapshot missing")
-	}
-	stats := snapshot.ObjectPullStats
-	if stats == nil {
-		t.Fatal("object pull stats missing from observability snapshot")
-	}
-	if stats.Failures != 1 || stats.LargeObjectUnreachable != 1 || !stats.LastUnreachable {
-		t.Fatalf("object pull stats = %+v, want committed unreachable failure", stats)
-	}
-	if after := service.StateStore.Meta().Revision; after != beforeRevision {
-		t.Fatalf("state revision changed for object pull diagnostics: before=%d after=%d", beforeRevision, after)
 	}
 }
 

@@ -9,30 +9,14 @@ import (
 
 const GossipPhaseInbound = "inbound"
 
-// gossipPacketEffects contains the remaining effects needed while dispatching
-// remaining host effects required by verified inbound packets. Ping and
-// catalog response protocol logic stays in this package and pkg/core/gossip.
-type gossipPacketEffects interface {
-	GossipDatagramBudget() int
-	SendGossip(context.Context, gossip.OutboundMessage) error
-	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
-	ObserveGossipCatalogPage(string, *corestate.CatalogPage)
-	ObserveGossipCatalogReject(string, string, error)
-	ObserveGossipSummaryMatch(string)
-	HandleGossipAnnounceHint(context.Context, string) error
-	RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error
-	ObserveGossipObjectChunk(GossipObjectChunkResult)
-	HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error
-}
-
 // executeGossipPacketActions executes the ordered decisions produced by
 // gossip.PlanInboundPacket. Platforms no longer switch on InboundActionKind.
-func (runtime *Runtime) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, controller gossipPacketEffects) error {
+func (runtime *Runtime) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, controller GossipIO) error {
 	if runtime == nil {
 		return ErrRuntimeStopped
 	}
 	if controller == nil {
-		return ErrGossipControllerRequired
+		return ErrGossipIORequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -62,21 +46,26 @@ func (runtime *Runtime) executeGossipPacketActions(ctx context.Context, actions 
 		case gossip.InboundRespondFetchCatalogPage:
 			runtime.respondGossipCatalogPage(ctx, message, controller)
 		case gossip.InboundRespondFetchZone:
-			if err := controller.RespondGossipFetchZone(ctx, message.PeerID, message.FetchZone); err != nil {
+			if err := runtime.respondGossipFetchZone(ctx, message.PeerID, message.FetchZone, controller); err != nil {
 				return err
 			}
 		case gossip.InboundHandleAnnounce:
-			if err := controller.HandleGossipAnnounceHint(ctx, message.PeerID); err != nil {
+			if err := runtime.StartGossipSession(message.PeerID, "announce_hint"); err != nil {
 				return err
 			}
 		case gossip.InboundHandleObjectChunk:
 			result, err := runtime.HandleGossipObjectChunk(ctx, message, runtime.schedulerForRead().clock.Now())
-			controller.ObserveGossipObjectChunk(result)
+			if result.CheckpointErr != nil {
+				runtime.logGossip("warn", "chunk_reject_state_commit_failed", result.PeerID, "checkpoint", result.CheckpointErr, map[string]any{"zone": result.Zone})
+			}
+			if result.ChunkFallback {
+				runtime.observeChunkFallback(result.PeerID, 1, runtime.schedulerForRead().clock.Now())
+			}
 			if err != nil {
 				return err
 			}
 		case gossip.InboundHandleObjectChunkNACK:
-			if err := controller.HandleGossipObjectChunkNACK(ctx, message); err != nil {
+			if err := runtime.handleGossipObjectChunkNACK(ctx, message, controller); err != nil {
 				return err
 			}
 		}
@@ -84,7 +73,7 @@ func (runtime *Runtime) executeGossipPacketActions(ctx context.Context, actions 
 	return nil
 }
 
-func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.InboundAction, controller gossipPacketEffects) error {
+func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.InboundAction, controller GossipIO) error {
 	message := action.Message
 	if message == nil || message.Ping == nil {
 		return nil
@@ -94,7 +83,7 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 		return nil
 	}
 	summary := corestate.CatalogSummaryForDigests(view.Digests)
-	controller.ObserveGossipCatalogSummary(message.PeerID, summary)
+	runtime.observeCatalogSummary(message.PeerID, summary, runtime.schedulerForRead().clock.Now())
 	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
 		if err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: response}); err != nil {
 			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
@@ -104,16 +93,17 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 		return nil
 	}
 	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {
-		return controller.HandleGossipAnnounceHint(ctx, message.PeerID)
+		return runtime.StartGossipSession(message.PeerID, "announce_hint")
 	}
 	if err := runtime.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, nil, runtime.schedulerForRead().clock.Now()); err != nil {
 		return err
 	}
-	controller.ObserveGossipSummaryMatch(message.PeerID)
+	runtime.observeSyncHint(message.PeerID, "ping_summary_match", "", true, runtime.schedulerForRead().clock.Now())
+	runtime.logGossip("debug", "ping_summary_shortcut", message.PeerID, "session", nil, map[string]any{"reason": "catalog_root_match"})
 	return nil
 }
 
-func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, controller gossipPacketEffects) {
+func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, controller GossipIO) {
 	if message == nil || message.FetchCatalogPage == nil {
 		return
 	}
@@ -124,10 +114,13 @@ func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *g
 	cursor := message.FetchCatalogPage.Cursor
 	page, err := gossip.CatalogPageForDigests(view.Digests, cursor, controller.GossipDatagramBudget(), view.SenderPeerID)
 	if err != nil {
-		controller.ObserveGossipCatalogReject(message.PeerID, cursor, err)
+		runtime.observeDatagramTooLarge(message.PeerID, "catalog_page", "", "", 0, controller.GossipDatagramBudget(), runtime.schedulerForRead().clock.Now())
+		runtime.observeCatalogReject(message.PeerID, cursor, gossip.RejectReason(err), runtime.schedulerForRead().clock.Now())
+		runtime.logGossip("warn", "catalog_page_failed", message.PeerID, "responder", err, map[string]any{"cursor": cursor})
 		return
 	}
-	controller.ObserveGossipCatalogPage(message.PeerID, page)
+	runtime.observeCatalogPage(message.PeerID, page, runtime.schedulerForRead().clock.Now())
+	runtime.observeReadOnlyResponder(message.PeerID, "catalog_page", "", runtime.schedulerForRead().clock.Now())
 	if err := controller.SendGossip(ctx, gossip.OutboundMessage{
 		PeerID: message.PeerID,
 		Message: &gossip.Message{

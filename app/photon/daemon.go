@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
@@ -37,7 +36,6 @@ type DaemonService struct {
 	Events                 chan daemonEvent
 	Hooks                  DaemonHooks
 	StateStore             *DaemonStateStore
-	PeerObservability      *observability.PeerObservabilityStore
 	linuxRuntime           *photonlinux.Runtime
 	ipsecDNSResolver       ipsec.DNSResolver
 	health                 *health.Manager
@@ -74,8 +72,6 @@ const (
 	defaultDaemonInterval                            = 60 * time.Second
 	defaultIPsecReconcileInterval                    = time.Minute
 	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
-	defaultPeerObservabilityTTL                      = 24 * time.Hour
-	defaultPeerObservabilityLimit                    = 2048
 	daemonRuntimeNamespace                           = "daemon"
 	daemonTimerOwner                                 = "periodic"
 	daemonTimerSync                                  = "sync"
@@ -167,13 +163,12 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		socketPath = controlSocketPath(rt.Config)
 	}
 	_, runtime := stateStore.readCommonAndRuntime()
-	peerObservability := observability.NewPeerObservabilityStore(defaultPeerObservabilityLimit, defaultPeerObservabilityTTL)
 	spoolConfig := healthspool.Config{}
 	if rt != nil && rt.Config != nil {
 		spoolConfig = rt.Config.Health.spoolConfig()
 	}
 	syncRuntime := newSyncRuntime(config, nil, rt)
-	syncRuntime.Observability = peerObservability
+	hostRuntime := corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore, gossipHostRuntimeConfig(config))
 	d := &DaemonService{
 		Sync:              syncRuntime,
 		Interval:          interval,
@@ -182,7 +177,6 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        stateStore,
-		PeerObservability: peerObservability,
 		healthSpool:       healthspool.New(spoolConfig),
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
@@ -192,7 +186,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
-	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore, gossipHostRuntimeConfig(config))
+	d.hostRuntime = hostRuntime
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	return d
 }
@@ -1482,7 +1476,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 		return nil, err
 	}
 	for _, peerID := range plan.SyncPeers {
-		d.PeerObservability.Delete(peerID)
+		d.hostRuntime.Observability.Delete(peerID)
 	}
 	if d.Sync.Transport != nil {
 		d.updateDiscoveredPeers()
@@ -1807,7 +1801,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 	}
 	for peerID := range d.peerObservabilitySnapshots() {
 		if revokedZones[zone.ZonePath(peerID)] {
-			d.PeerObservability.Delete(peerID)
+			d.hostRuntime.Observability.Delete(peerID)
 		}
 	}
 }

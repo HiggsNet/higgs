@@ -14,9 +14,8 @@ import (
 )
 
 type memoryGossipController struct {
-	trace        []string
-	issues       []GossipExecutionIssue
-	observations []GossipSnapshotObservation
+	trace  []string
+	issues []GossipExecutionIssue
 }
 
 func gossipConfigCapturingIssues(config GossipRuntimeConfig, issues *[]GossipExecutionIssue) GossipRuntimeConfig {
@@ -92,44 +91,33 @@ func loadedManagedGossipState(managed zone.ZonePath, paths ...zone.ZonePath) cor
 	return view
 }
 
-type successfulObjectPullClient struct{}
+type successfulObjectPullClient struct {
+	pulls chan gossip.StartObjectPullAction
+}
 
-func (successfulObjectPullClient) Exchange(_ context.Context, _ string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+func (client successfulObjectPullClient) Exchange(_ context.Context, _ string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+	if client.pulls != nil {
+		client.pulls <- gossip.StartObjectPullAction{PeerID: "peer-a", Zone: request.Zone}
+	}
 	return &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: request.Zone}}, nil
 }
 
 func memoryObjectPullExecutor(pulls chan gossip.StartObjectPullAction) *GossipObjectPullExecutor {
 	return NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
-		Client: successfulObjectPullClient{},
+		Client: successfulObjectPullClient{pulls: pulls},
 		Discovery: func() GossipDiscoveryInput {
 			return GossipDiscoveryInput{
 				Network:   zone.NewNetworkState(),
 				Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}},
 			}
 		},
-		ObserveAttempt: func(peerID string, path zone.ZonePath, _ time.Time) {
-			if pulls != nil {
-				pulls <- gossip.StartObjectPullAction{PeerID: peerID, Zone: path}
-			}
-		},
 	})
-}
-
-func (controller *memoryGossipController) ObserveGossipSnapshot(observation GossipSnapshotObservation) {
-	controller.observations = append(controller.observations, observation)
 }
 
 func (controller *memoryGossipController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	controller.trace = append(controller.trace, "send:"+string(outbound.Message.Type))
 	return nil
 }
-
-func (controller *memoryGossipController) ObserveGossipCatalogSummary(string, *corestate.CatalogSummary) {
-}
-
-func (controller *memoryGossipController) ObserveGossipCatalogPage(string, *corestate.CatalogPage) {}
-
-func (controller *memoryGossipController) ObserveGossipChunkRepair(string) {}
 
 func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
@@ -231,9 +219,6 @@ func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
 	}
-	if len(controller.observations) != 2 || !controller.observations[0].SkippedOwnZone || controller.observations[1].Outcome.Zone != "remote.catofes." {
-		t.Fatalf("observations = %#v", controller.observations)
-	}
 	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
 	if !ok {
 		t.Fatal("snapshot completion was not queued")
@@ -256,18 +241,18 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	}
 	adapters := []struct {
 		name string
-		new  func() (GossipActionController, *memoryGossipController)
+		new  func() (GossipSender, *memoryGossipController)
 	}{
 		{
 			name: "linux",
-			new: func() (GossipActionController, *memoryGossipController) {
+			new: func() (GossipSender, *memoryGossipController) {
 				controller := &memoryLinuxGossipController{}
 				return controller, &controller.memoryGossipController
 			},
 		},
 		{
 			name: "windows",
-			new: func() (GossipActionController, *memoryGossipController) {
+			new: func() (GossipSender, *memoryGossipController) {
 				controller := &memoryWindowsGossipController{}
 				return controller, &controller.memoryGossipController
 			},

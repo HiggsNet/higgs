@@ -6,24 +6,47 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-type gossipSessionEffects interface {
-	GossipActionController
-	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
-	ObserveGossipCatalogPage(string, *corestate.CatalogPage)
-	ObserveGossipChunkRepair(string)
+// GossipIO is the remaining platform datagram boundary. Runtime owns protocol
+// state, scheduling, persistence, logging and observability; implementations
+// only prepare ephemeral ingress routing and send encoded gossip messages.
+type GossipIO interface {
+	GossipSender
+	GossipDatagramBudget() int
+	PrepareGossipInbound(context.Context, *gossip.Packet, time.Time) error
 }
 
-// GossipHostEffects is the temporary effect set used while
-// Runtime consumes its own gossip queue. ObserveGossipInbound may record the
-// accepted source address or other platform observability, but it must not
-// advance the protocol engine or reinterpret inbound actions.
-type GossipHostEffects interface {
-	gossipSessionEffects
-	gossipPacketEffects
-	ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error
+// StartGossipSession creates and queues one common gossip pull session. It is
+// also the only announce-hint suppression/defer boundary.
+func (runtime *Runtime) StartGossipSession(peerID, reason string) error {
+	if runtime == nil {
+		return ErrRuntimeStopped
+	}
+	if peerID == "" {
+		return nil
+	}
+	now := runtime.schedulerForRead().clock.Now()
+	if runtime.Gossip.HasActiveSession(peerID) {
+		runtime.Gossip.DeferHint(peerID)
+		runtime.observeSyncHint(peerID, reason, "session_active", false, now)
+		runtime.logGossip("debug", "announce_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
+		return nil
+	}
+	summary := runtime.GossipCatalogSummary()
+	if summary == nil {
+		return nil
+	}
+	session := runtime.Gossip.NewSession(peerID)
+	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
+		runtime.Gossip.RemoveSession(peerID)
+		runtime.logGossip("warn", "event_dropped", peerID, "session", err, map[string]any{"reason": "sync_events_full"})
+		return err
+	}
+	runtime.observeSyncHint(peerID, reason, "", true, now)
+	runtime.observeActivePull(peerID, "hint_queued", session, now)
+	runtime.logGossip("debug", "hinted_sync_started", peerID, "session", nil, map[string]any{"reason": reason})
+	return nil
 }
 
 var (
@@ -49,27 +72,26 @@ type GossipEventResult struct {
 // platform composition only observes session changes needed during migration.
 type GossipHostEventResult struct {
 	Handled bool
-	Event   gossip.SyncEvent
 	Session GossipEventResult
 }
 
 // HandleGossipHostEvent is the only switch from Runtime queue events to the
 // gossip inbound planner or session FSM. Packet, timer and object-pull
 // completion producers therefore share one consumer on every platform.
-func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipHostEffects) (GossipHostEventResult, error) {
+func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipIO) (GossipHostEventResult, error) {
 	var out GossipHostEventResult
 	if runtime == nil {
 		return out, ErrRuntimeStopped
 	}
 	if controller == nil {
-		return out, ErrGossipControllerRequired
+		return out, ErrGossipIORequired
 	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
 		if received.Packet == nil {
 			return out, nil
 		}
-		if err := controller.ObserveGossipInbound(ctx, received.Packet, now); err != nil {
+		if err := controller.PrepareGossipInbound(ctx, received.Packet, now); err != nil {
 			runtime.logGossipPacketFailure(received.Packet, err)
 			return out, err
 		}
@@ -84,7 +106,6 @@ func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Eve
 		return out, nil
 	}
 	out.Handled = true
-	out.Event = event
 	result, err := runtime.handleGossipSessionEvent(ctx, event, now, controller)
 	out.Session = result
 	return out, err
@@ -104,13 +125,13 @@ func (runtime *Runtime) logGossipPacketFailure(packet *gossip.Packet, err error)
 // to ordered HostRuntime effects. Platform code may enrich an event before
 // calling it and observe the detached result afterwards, but cannot implement
 // a second Engine-to-action loop.
-func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller gossipSessionEffects) (GossipEventResult, error) {
+func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller GossipSender) (GossipEventResult, error) {
 	var out GossipEventResult
 	if runtime == nil {
 		return out, ErrRuntimeStopped
 	}
 	if controller == nil {
-		return out, ErrGossipControllerRequired
+		return out, ErrGossipIORequired
 	}
 	peerID := gossip.SyncEventPeerID(event)
 	if peerID == "" {
@@ -136,19 +157,19 @@ func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event goss
 			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
 			return out, nil
 		}
-		controller.ObserveGossipChunkRepair(peerID)
+		runtime.observeChunkRepair(peerID, false, 0, now)
 		return out, nil
 	}
 	switch typed := event.(type) {
 	case *gossip.PongReceivedEvent:
 		if typed.Pong != nil && typed.Pong.Summary != nil {
-			controller.ObserveGossipCatalogSummary(peerID, typed.Pong.Summary)
+			runtime.observeCatalogSummary(peerID, typed.Pong.Summary, now)
 		}
 	case *gossip.CatalogSummaryReceivedEvent:
-		controller.ObserveGossipCatalogSummary(peerID, typed.Summary)
+		runtime.observeCatalogSummary(peerID, typed.Summary, now)
 	case *gossip.CatalogPageReceivedEvent:
 		typed.LocalEntries, typed.Page = FilterGossipCatalogPage(runtime.GossipDiscoveryInput(nil), peerID, typed.Page, now)
-		controller.ObserveGossipCatalogPage(peerID, typed.Page)
+		runtime.observeCatalogPage(peerID, typed.Page, now)
 	}
 	engineResult := runtime.Gossip.HandleEvent(event, now)
 	execution := runtime.ExecuteGossipActions(ctx, session, engineResult.Actions, controller)
@@ -163,6 +184,7 @@ func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event goss
 		NetworkChanged: execution.NetworkChanged,
 		ProtocolErr:    engineResult.Err,
 	}
+	runtime.observeActivePull(peerID, gossip.SyncEventName(event), session, now)
 	if out.ProtocolErr != nil {
 		runtime.logGossip("warn", "session_event_error", peerID, "session", out.ProtocolErr, nil)
 	}

@@ -182,8 +182,8 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.
 	if d == nil || session == nil || len(actions) == 0 {
 		return false
 	}
-	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, &daemonGossipActionController{
-		daemon: d, now: d.Sync.now(), limits: syncLimits(d.Sync.Config),
+	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, &daemonGossipIO{
+		daemon: d,
 	})
 	return result.NetworkChanged
 }

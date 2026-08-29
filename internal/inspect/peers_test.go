@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -212,8 +212,8 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 			LastRelaySuppression:  "relay_throttled",
 			LastRelaySuppressedAt: now.Add(-time.Minute).Unix(),
 			ActivePullState:       "object_pulling",
-			DatagramStats:         &photonstate.PeerDatagramStats{TooLargeDropped: 2},
-			ObjectPullStats:       &photonstate.PeerObjectPullStats{Attempts: 3},
+			DatagramStats:         &observability.PeerDatagramStats{TooLargeDropped: 2},
+			ObjectPullStats:       &observability.PeerObjectPullStats{Attempts: 3},
 		},
 		Now: now,
 	})
@@ -247,7 +247,7 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("sync flow timestamps = %+v", flow)
 	}
 
-	datagram := BuildPeerDatagramStats(&photonstate.PeerDatagramStats{
+	datagram := BuildPeerDatagramStats(&observability.PeerDatagramStats{
 		LastCatalogUnix:  now.Unix(),
 		LastTooLargeUnix: now.Add(-time.Minute).Unix(),
 	})
@@ -255,7 +255,7 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 		t.Fatalf("datagram timestamps = %+v", datagram)
 	}
 
-	objectPull := BuildPeerObjectPullStats(&photonstate.PeerObjectPullStats{
+	objectPull := BuildPeerObjectPullStats(&observability.PeerObjectPullStats{
 		LastUnix: now.Unix(),
 	})
 	if objectPull.Last != "2023-11-14T22:13:20Z" {

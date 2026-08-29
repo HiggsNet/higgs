@@ -7,7 +7,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/internal/observability"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 

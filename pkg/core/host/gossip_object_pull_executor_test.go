@@ -29,8 +29,6 @@ func TestGossipObjectPullExecutorResolvesValidatesAndObserves(t *testing.T) {
 	now := time.Unix(1000, 0)
 	snapshot := &corestate.ZoneSnapshot{Zone: "node-a."}
 	client := &memoryObjectPullClient{response: &gossip.ObjectPullResponse{OK: true, Snapshot: snapshot}}
-	var attempted bool
-	var diagnostic GossipObjectPullDiagnostics
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
 		Now:    func() time.Time { return now },
@@ -40,10 +38,6 @@ func TestGossipObjectPullExecutorResolvesValidatesAndObserves(t *testing.T) {
 				Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("192.0.2.10"), Port: 33434}},
 			}
 		},
-		ObserveAttempt: func(peerID string, path zone.ZonePath, at time.Time) {
-			attempted = peerID == "peer-a" && path == "node-a." && at.Equal(now)
-		},
-		ObserveResult: func(result GossipObjectPullDiagnostics) { diagnostic = result },
 	})
 	completion := executor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
 	if completion.Err != nil || completion.Snapshot != snapshot {
@@ -52,8 +46,8 @@ func TestGossipObjectPullExecutorResolvesValidatesAndObserves(t *testing.T) {
 	if client.addr != "192.0.2.10:33434" || client.request == nil || client.request.Zone != "node-a." {
 		t.Fatalf("client exchange = addr %q request %#v", client.addr, client.request)
 	}
-	if !attempted || diagnostic.Err != nil || diagnostic.Bytes == 0 {
-		t.Fatalf("attempted=%t diagnostic=%#v", attempted, diagnostic)
+	if completion.Bytes == 0 || completion.Addr != client.addr || completion.Unreachable {
+		t.Fatalf("completion diagnostics = %#v", completion)
 	}
 }
 

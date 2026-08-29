@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -103,8 +103,8 @@ type PeerRuntimeView struct {
 	LastResponderUnix     int64                                     `json:"last_responder_unix,omitempty"`
 	LastResponderKind     string                                    `json:"last_responder_kind,omitempty"`
 	LastResponderZone     string                                    `json:"last_responder_zone,omitempty"`
-	DatagramStats         *photonstate.PeerDatagramStats            `json:"datagram_stats,omitempty"`
-	ObjectPullStats       *photonstate.PeerObjectPullStats          `json:"object_pull_stats,omitempty"`
+	DatagramStats         *observability.PeerDatagramStats          `json:"datagram_stats,omitempty"`
+	ObjectPullStats       *observability.PeerObjectPullStats        `json:"object_pull_stats,omitempty"`
 	RejectedDigests       map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 
@@ -395,21 +395,21 @@ func BuildPeerSyncFlowFromObservability(state observability.PeerDiagnostics) Pee
 	}
 }
 
-func BuildPeerDatagramStats(stats *photonstate.PeerDatagramStats) PeerDatagramStatsView {
+func BuildPeerDatagramStats(stats *observability.PeerDatagramStats) PeerDatagramStatsView {
 	if stats == nil {
 		return PeerDatagramStatsView{}
 	}
 	return buildPeerDatagramStatsView(*stats)
 }
 
-func BuildPeerObjectPullStats(stats *photonstate.PeerObjectPullStats) PeerObjectPullStatsView {
+func BuildPeerObjectPullStats(stats *observability.PeerObjectPullStats) PeerObjectPullStatsView {
 	if stats == nil {
 		return PeerObjectPullStatsView{}
 	}
 	return buildPeerObjectPullStatsView(*stats)
 }
 
-func buildPeerDatagramStatsView(input photonstate.PeerDatagramStats) PeerDatagramStatsView {
+func buildPeerDatagramStatsView(input observability.PeerDatagramStats) PeerDatagramStatsView {
 	return PeerDatagramStatsView{
 		TooLargeDropped:           input.TooLargeDropped,
 		DigestOnlyAnnounces:       input.DigestOnlyAnnounces,
@@ -433,7 +433,7 @@ func buildPeerDatagramStatsView(input photonstate.PeerDatagramStats) PeerDatagra
 	}
 }
 
-func buildPeerObjectPullStatsView(input photonstate.PeerObjectPullStats) PeerObjectPullStatsView {
+func buildPeerObjectPullStatsView(input observability.PeerObjectPullStats) PeerObjectPullStatsView {
 	return PeerObjectPullStatsView{
 		Attempts:               input.Attempts,
 		Successes:              input.Successes,

@@ -13,11 +13,14 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 )
 
 const (
-	DefaultEventBuffer   = 64
-	GossipTimerNamespace = "gossip"
+	DefaultEventBuffer            = 64
+	GossipTimerNamespace          = "gossip"
+	DefaultPeerObservabilityLimit = 2048
+	DefaultPeerObservabilityTTL   = 24 * time.Hour
 )
 
 var (
@@ -59,10 +62,11 @@ type Completion struct {
 func (Completion) isHostEvent() {}
 
 // Runtime owns the common gossip engine, bounded event queue and scheduler.
-// Platform composition roots inject I/O and controllers around this object;
+// Platform composition roots inject datagram I/O around this object;
 // they do not create a second protocol queue or timer manager.
 type Runtime struct {
-	Gossip *gossip.Engine
+	Gossip        *gossip.Engine
+	Observability *observability.PeerObservabilityStore
 
 	gossipState  GossipStateStore
 	gossipConfig GossipRuntimeConfig
@@ -79,6 +83,7 @@ type Runtime struct {
 	objectPullServerListener net.Listener
 	objectPullServerWG       sync.WaitGroup
 	gossipChunks             *gossip.ChunkAssemblyStore
+	gossipSentChunks         *gossip.SentChunkCache
 	datagramReceiver         DatagramReceiver
 	datagramCancel           context.CancelFunc
 	datagramWG               sync.WaitGroup
@@ -90,11 +95,13 @@ func NewRuntime(clock Clock, eventBuffer int, gossipState GossipStateStore, goss
 		eventBuffer = DefaultEventBuffer
 	}
 	runtime := &Runtime{
-		Gossip:       gossip.NewEngine(),
-		gossipState:  gossipState,
-		gossipConfig: gossipConfig,
-		events:       make(chan Event, eventBuffer),
-		gossipChunks: gossip.NewChunkAssemblyStore(),
+		Gossip:           gossip.NewEngine(),
+		Observability:    observability.NewPeerObservabilityStore(DefaultPeerObservabilityLimit, DefaultPeerObservabilityTTL),
+		gossipState:      gossipState,
+		gossipConfig:     gossipConfig,
+		events:           make(chan Event, eventBuffer),
+		gossipChunks:     gossip.NewChunkAssemblyStore(),
+		gossipSentChunks: gossip.NewSentChunkCache(),
 	}
 	runtime.scheduler = NewScheduler(clock, runtime.events)
 	return runtime

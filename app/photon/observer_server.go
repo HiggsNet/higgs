@@ -13,9 +13,9 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -247,14 +247,14 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 }
 
 func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
-	if d == nil || d.PeerObservability == nil {
+	if d == nil || d.hostRuntime == nil || d.hostRuntime.Observability == nil {
 		return nil
 	}
 	now := time.Now()
 	if d.Sync != nil {
 		now = d.Sync.now()
 	}
-	return d.PeerObservability.Snapshots(now)
+	return d.hostRuntime.Observability.Snapshots(now)
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {

@@ -155,7 +155,7 @@ func (node *memoryHostNode) handleEvent(event corehost.Event) error {
 	if errors.Is(err, corehost.ErrGossipSessionNotFound) {
 		return nil
 	}
-	if err == nil && hostResult.Event != nil && hostResult.Session.Done {
+	if err == nil && hostResult.Session.PeerID != "" && hostResult.Session.Done {
 		select {
 		case node.completed <- hostResult.Session.PeerID:
 		default:
@@ -164,7 +164,7 @@ func (node *memoryHostNode) handleEvent(event corehost.Event) error {
 	return err
 }
 
-func (node *memoryHostNode) ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error {
+func (node *memoryHostNode) PrepareGossipInbound(context.Context, *gossip.Packet, time.Time) error {
 	return nil
 }
 
@@ -248,23 +248,6 @@ func (client memoryObjectPullClient) Exchange(_ context.Context, _ string, reque
 }
 
 func (node *memoryHostNode) GossipDatagramBudget() int { return node.transport.MaxMessageBytes() }
-
-func (*memoryHostNode) ObserveGossipCatalogSummary(string, *corestate.CatalogSummary) {}
-func (*memoryHostNode) ObserveGossipCatalogPage(string, *corestate.CatalogPage)       {}
-func (*memoryHostNode) ObserveGossipCatalogReject(string, string, error)              {}
-func (*memoryHostNode) ObserveGossipChunkRepair(string)                               {}
-
-func (*memoryHostNode) ObserveGossipSummaryMatch(string)                       {}
-func (*memoryHostNode) HandleGossipAnnounceHint(context.Context, string) error { return nil }
-func (*memoryHostNode) RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error {
-	return nil
-}
-func (*memoryHostNode) ObserveGossipObjectChunk(corehost.GossipObjectChunkResult) {}
-func (*memoryHostNode) HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error {
-	return nil
-}
-
-func (*memoryHostNode) ObserveGossipSnapshot(corehost.GossipSnapshotObservation) {}
 
 func (node *memoryHostNode) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	return node.transport.Send(outbound.PeerID, outbound.Message)

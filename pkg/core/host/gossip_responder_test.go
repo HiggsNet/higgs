@@ -18,7 +18,7 @@ func TestRuntimeBuildsFetchAndObjectPullResponsesFromBoundStore(t *testing.T) {
 	runtime := NewRuntime(NewClock(func() time.Time { return now }), DefaultEventBuffer, store, GossipRuntimeConfig{PeerID: "local.catofes."})
 	defer runtime.Stop()
 
-	fetch := runtime.GossipFetchZoneResponse(path, gossip.DefaultDatagramBudget, now)
+	fetch := runtime.gossipFetchZoneResponse(path, gossip.DefaultDatagramBudget, now)
 	if !fetch.Found || fetch.Snapshot == nil || fetch.Snapshot.Zone != path || len(fetch.Plan.Announces) != 1 {
 		t.Fatalf("fetch response = %#v", fetch)
 	}
@@ -26,7 +26,7 @@ func TestRuntimeBuildsFetchAndObjectPullResponsesFromBoundStore(t *testing.T) {
 	if pull == nil || !pull.OK || pull.Snapshot == nil || pull.Snapshot.Zone != path {
 		t.Fatalf("object pull response = %#v", pull)
 	}
-	if missing := runtime.GossipFetchZoneResponse("missing.catofes.", gossip.DefaultDatagramBudget, now); missing.Found || missing.Snapshot != nil || len(missing.Plan.Announces) != 0 {
+	if missing := runtime.gossipFetchZoneResponse("missing.catofes.", gossip.DefaultDatagramBudget, now); missing.Found || missing.Snapshot != nil || len(missing.Plan.Announces) != 0 {
 		t.Fatalf("missing fetch response = %#v", missing)
 	}
 }

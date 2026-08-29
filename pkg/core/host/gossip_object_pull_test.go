@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -19,6 +21,35 @@ func (client *blockingObjectPullClient) Exchange(ctx context.Context, _ string, 
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
+	now := time.Unix(100, 0)
+	runtime := NewRuntime(newFakeClock(now), 4, nil, GossipRuntimeConfig{})
+	defer runtime.Stop()
+	client := &memoryObjectPullClient{response: &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: "a.catofes."}}}
+	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
+		Client: client,
+		Now:    func() time.Time { return now },
+		Discovery: func() GossipDiscoveryInput {
+			return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
+		},
+	})
+	if err := runtime.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runtime.Events():
+	case <-time.After(time.Second):
+		t.Fatal("object-pull completion was not delivered")
+	}
+	diagnostics, ok := runtime.Observability.Snapshot("peer-a", now)
+	if !ok || diagnostics.ObjectPullStats == nil || diagnostics.ObjectPullStats.Attempts != 1 || diagnostics.ObjectPullStats.Successes != 1 || diagnostics.ObjectPullStats.LastBytes == 0 {
+		t.Fatalf("object-pull diagnostics = %#v", diagnostics)
+	}
 }
 
 func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) {

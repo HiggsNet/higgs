@@ -7,9 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -158,8 +156,6 @@ type linkSkipState = photonstate.LinkSkipState
 
 type syncPeerState = photonstate.PeerRuntimeState
 type observedGraceAddrState = photonstate.PeerObservedGraceAddrState
-type datagramStats = photonstate.PeerDatagramStats
-type objectPullStats = photonstate.PeerObjectPullStats
 type rejectedDigestState = photonstate.PeerRejectedDigest
 
 // peerLifecycleCleanupState is a local, persisted suppression marker. It is
@@ -526,41 +522,6 @@ func globalRootHash(digests []corestate.ZoneDigest) []byte {
 		parts = append(parts, []byte(digest.Zone), digest.RootHash)
 	}
 	return photoncrypto.Hash(parts...)
-}
-
-func recordSyncActivePull(store *observability.PeerObservabilityStore, peerID, event string, session *gossip.SyncSession, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if session != nil {
-			snapshot.ActivePullState = string(session.State)
-		} else {
-			snapshot.ActivePullState = ""
-		}
-		snapshot.ActivePullLastEvent = event
-		snapshot.ActivePullUpdatedUnix = now.Unix()
-	})
-}
-
-func recordSyncHint(store *observability.PeerObservabilityStore, peerID, reason, suppression string, accepted bool, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if accepted {
-			snapshot.HintAccepted++
-			snapshot.LastHintSuppression = ""
-		} else {
-			snapshot.HintSuppressed++
-			snapshot.LastHintSuppression = suppression
-		}
-		snapshot.LastHintUnix = now.Unix()
-		snapshot.LastHintReason = reason
-	})
-}
-
-func recordReadOnlyResponder(store *observability.PeerObservabilityStore, peerID, kind string, zoneName zone.ZonePath, now time.Time) {
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		snapshot.ReadOnlyResponder++
-		snapshot.LastResponderUnix = now.Unix()
-		snapshot.LastResponderKind = kind
-		snapshot.LastResponderZone = string(zoneName)
-	})
 }
 
 func minInt(a, b int) int {

@@ -6,24 +6,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func newTestObserverServer() *observerServer {
-	peerObservability := observability.NewPeerObservabilityStore(32, time.Hour)
 	state := newTestStateFile()
+	store := newTestDaemonStateStore(state)
 	d := &DaemonService{
-		PeerObservability: peerObservability,
-		StateStore:        newTestDaemonStateStore(state),
+		StateStore: store,
 		Sync: &SyncRuntime{
-			Config:        &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
-			App:           &Runtime{Config: &appConfig{}},
-			Observability: peerObservability,
+			Config: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
+			App:    &Runtime{Config: &appConfig{}},
 		},
 	}
+	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
 	return newObserverServer(d, cfg)

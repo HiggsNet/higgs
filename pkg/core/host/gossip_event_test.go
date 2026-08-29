@@ -11,20 +11,6 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-type observingGossipSessionEffects struct {
-	memoryGossipController
-	summaries int
-	pages     int
-}
-
-func (controller *observingGossipSessionEffects) ObserveGossipCatalogSummary(string, *corestate.CatalogSummary) {
-	controller.summaries++
-}
-
-func (controller *observingGossipSessionEffects) ObserveGossipCatalogPage(string, *corestate.CatalogPage) {
-	controller.pages++
-}
-
 func TestRuntimeHandleGossipSessionEventOwnsEngineToActionBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	controller := &memoryGossipController{}
@@ -55,7 +41,7 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !packetResult.Handled || packetResult.Event != nil || len(controller.outbound) != 1 {
+	if !packetResult.Handled || packetResult.Session.PeerID != "" || len(controller.outbound) != 1 {
 		t.Fatalf("packet result = %#v, outbound = %#v", packetResult, controller.outbound)
 	}
 
@@ -68,7 +54,7 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := timerResult.Event.(*gossip.RoundTimeoutEvent); !timerResult.Handled || !ok {
+	if !timerResult.Handled || timerResult.Session.PeerID != "peer-a" {
 		t.Fatalf("timer result = %#v", timerResult)
 	}
 
@@ -78,7 +64,7 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !completionResult.Handled || completionResult.Event != completion {
+	if !completionResult.Handled || completionResult.Session.PeerID != "peer-b" {
 		t.Fatalf("completion result = %#v", completionResult)
 	}
 }
@@ -119,7 +105,7 @@ func TestRuntimeHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
 	defer runtime.Stop()
 	session := runtime.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCatalogDiffing
-	controller := &observingGossipSessionEffects{}
+	controller := &memoryGossipController{}
 	event := &gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{Entries: []corestate.ZoneDigest{
 		{Zone: "local.catofes.", RootHash: []byte("local")},
 		{Zone: "remote.catofes.", RootHash: []byte("remote")},
@@ -127,8 +113,8 @@ func TestRuntimeHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
 	if _, err := runtime.handleGossipSessionEvent(context.Background(), event, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
-	if controller.pages != 1 || len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
-		t.Fatalf("pages=%d event=%#v", controller.pages, event)
+	if len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
+		t.Fatalf("event=%#v", event)
 	}
 }
 

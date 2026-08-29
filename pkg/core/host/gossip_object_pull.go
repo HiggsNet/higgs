@@ -24,10 +24,13 @@ var (
 // object-pull controller. Runtime owns its conversion to an FSM event and the
 // queue backpressure contract.
 type GossipObjectPullCompletion struct {
-	PeerID   string
-	Zone     zone.ZonePath
-	Snapshot *corestate.ZoneSnapshot
-	Err      error
+	PeerID      string
+	Zone        zone.ZonePath
+	Addr        string
+	Bytes       int
+	Unreachable bool
+	Snapshot    *corestate.ZoneSnapshot
+	Err         error
 }
 
 // StartGossipObjectPullWorkers starts Runtime's only object-pull worker group.
@@ -109,6 +112,9 @@ func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-ch
 		case <-ctx.Done():
 			return
 		case action := <-jobs:
+			now := runtime.schedulerForRead().clock.Now()
+			runtime.observeObjectPullAttempt(action.PeerID, action.Zone, now)
+			runtime.logGossip("debug", "worker_start", action.PeerID, GossipPhaseObjectPull, nil, map[string]any{"zone": action.Zone})
 			completion := executor.PullGossipObject(ctx, action)
 			if completion.PeerID == "" {
 				completion.PeerID = action.PeerID
@@ -116,6 +122,10 @@ func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-ch
 			if !completion.Zone.Valid() {
 				completion.Zone = action.Zone
 			}
+			runtime.observeObjectPullResult(completion, runtime.schedulerForRead().clock.Now())
+			runtime.logGossip("debug", "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
+				"zone": completion.Zone, "bytes": completion.Bytes, "ok": completion.Err == nil,
+			})
 			event := GossipEvent{Value: &gossip.ObjectPullResultEvent{
 				PeerID: completion.PeerID, Zone: completion.Zone,
 				Snapshot: completion.Snapshot, Err: completion.Err,

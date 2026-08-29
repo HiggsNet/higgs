@@ -170,7 +170,7 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 		return false
 	}
 	for _, peerID := range removed {
-		d.PeerObservability.Delete(peerID)
+		d.hostRuntime.Observability.Delete(peerID)
 	}
 	d.logInfo("peer_lifecycle", "cleanup_applied", map[string]any{"peers": removed})
 	return true

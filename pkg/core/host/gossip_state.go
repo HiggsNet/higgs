@@ -60,16 +60,6 @@ func (runtime *Runtime) reportGossipIssue(issue GossipExecutionIssue) {
 	runtime.logGossip("warn", event, issue.PeerID, issue.Phase, issue.Err, nil)
 }
 
-// GossipSnapshotObservation is detached diagnostic output from the common
-// remote-state transaction. It cannot alter commit ordering or protocol state.
-type GossipSnapshotObservation struct {
-	PeerID         string
-	ManagedZone    zone.ZonePath
-	Action         gossip.ApplySnapshotAction
-	Outcome        corestate.RemoteApplyOutcome
-	SkippedOwnZone bool
-}
-
 func (runtime *Runtime) gossipStateView() GossipStateView {
 	if runtime == nil || runtime.gossipState == nil {
 		return GossipStateView{}
@@ -101,7 +91,6 @@ func (runtime *Runtime) applyGossipSnapshots(
 	peerID string,
 	actions []gossip.ApplySnapshotAction,
 	view GossipStateView,
-	controller GossipActionController,
 ) (GossipSnapshotApplyResult, error) {
 	if runtime == nil || runtime.gossipState == nil {
 		return GossipSnapshotApplyResult{}, errors.New("gossip state store is not configured")
@@ -114,7 +103,7 @@ func (runtime *Runtime) applyGossipSnapshots(
 			continue
 		}
 		if action.Snapshot.Zone == managedZone {
-			controller.ObserveGossipSnapshot(GossipSnapshotObservation{PeerID: peerID, ManagedZone: managedZone, Action: action, SkippedOwnZone: true})
+			runtime.logGossip("debug", "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 			continue
 		}
 		limits := runtime.gossipConfig.Limits
@@ -143,10 +132,33 @@ func (runtime *Runtime) applyGossipSnapshots(
 		} else {
 			outcome.Err = errors.New("snapshot apply produced no outcome")
 		}
-		controller.ObserveGossipSnapshot(GossipSnapshotObservation{PeerID: peerID, ManagedZone: managedZone, Action: action, Outcome: outcome})
+		runtime.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
 		if action.ReportResult {
 			_ = runtime.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 		}
 	}
 	return GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}, nil
+}
+
+func (runtime *Runtime) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
+	if outcome.Err != nil {
+		runtime.logGossip("warn", "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
+		return
+	}
+	if outcome.ManagedZoneAdopted {
+		runtime.logGossip("info", "auto_join_adopted", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+	}
+	if outcome.AuthorityRefreshed {
+		runtime.logGossip("info", "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+	}
+	if outcome.Result == nil || (!outcome.Result.NetworkChanged && !outcome.ManagedZoneAdopted && !outcome.AuthorityRefreshed) {
+		return
+	}
+	via := action.Via
+	if via == "" {
+		via = "event_loop"
+	}
+	runtime.logGossip("info", "zone_applied", peerID, GossipPhaseApply, nil, map[string]any{
+		"zone": action.Snapshot.Zone, "records": outcome.Result.Records, "delegations": outcome.Result.Delegation, "via": via,
+	})
 }

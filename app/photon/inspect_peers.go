@@ -4,8 +4,8 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/internal/observability"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 

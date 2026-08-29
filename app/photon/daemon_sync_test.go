@@ -307,7 +307,7 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 	if peerState.LastSyncUnix != now.Unix() {
 		t.Fatalf("LastSyncUnix = %d, want %d", peerState.LastSyncUnix, now.Unix())
 	}
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok || observed.LastHintReason != "ping_summary_match" {
 		t.Fatalf("observed hint = %+v, want ping_summary_match", observed)
 	}
@@ -333,10 +333,8 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: summary},
 	}
-	controller := &daemonGossipActionController{
+	controller := &daemonGossipIO{
 		daemon: service,
-		now:    now,
-		limits: syncLimits(config),
 	}
 	before := service.StateStore.Meta().Revision
 	if _, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller); err != nil {
@@ -357,14 +355,14 @@ func TestDaemonHintedSessionWritesOnlyObservability(t *testing.T) {
 	}, state, config, time.Second)
 
 	before := service.StateStore.Meta().Revision
-	if err := service.startHintedSyncSession("peer-a", "test_hint"); err != nil {
-		t.Fatalf("startHintedSyncSession: %v", err)
+	if err := service.hostRuntime.StartGossipSession("peer-a", "test_hint"); err != nil {
+		t.Fatalf("StartGossipSession: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
 	if after != before {
 		t.Fatalf("state revision = %d, want unchanged %d", after, before)
 	}
-	observed, ok := service.PeerObservability.Snapshot("peer-a", now)
+	observed, ok := service.hostRuntime.Observability.Snapshot("peer-a", now)
 	if !ok || observed.LastHintReason != "test_hint" || observed.ActivePullLastEvent != "hint_queued" {
 		t.Fatalf("peer observability = %+v, want hint and active-pull changes", observed)
 	}
@@ -402,7 +400,7 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	}
 	snapshot, _ := service.StateStore.Snapshot()
 	peerState := snapshot.SyncPeers[peerID]
-	observed, ok := service.PeerObservability.Snapshot(peerID, now)
+	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok || observed.ActivePullLastEvent != "round_timeout" || peerState.FailureCount != 1 || peerState.LastError != "round timeout" {
 		t.Fatalf("peer state/observability = %+v/%+v, want active-pull, backoff, and completion changes", peerState, observed)
 	}

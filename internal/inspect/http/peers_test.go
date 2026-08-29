@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/internal/observability"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 )
 
 func TestPeersResponsePreservesObserverSchema(t *testing.T) {
@@ -26,7 +26,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			LastRelaySuppression:  "relay_fanout_limited",
 			LastRelaySuppressedAt: 910,
 			ObservedSource:        "verified_packet",
-			DatagramStats:         &photonstate.PeerDatagramStats{ChunkFallbacks: 2},
+			DatagramStats:         &observability.PeerDatagramStats{ChunkFallbacks: 2},
 		}),
 		Endpoints: []inspect.PeerEndpointView{{
 			Addr:     "192.0.2.10:33434",
