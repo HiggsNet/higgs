@@ -35,15 +35,10 @@ func objectPullTCPAddr(udpAddr string) string {
 }
 
 func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.hostRuntime == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	view := d.StateStore.common.ReadView()
-	var network *zone.NetworkState
-	if view.State != nil {
-		network = view.State.Network
-	}
-	response := gossip.BuildObjectPullResponse(network, req, time.Now())
+	response := d.hostRuntime.GossipObjectPullResponse(req, d.Sync.now())
 	if req != nil && response != nil && response.OK && response.Snapshot != nil {
 		encoded, _ := gossip.EncodeZoneSnapshotObject(response.Snapshot)
 		d.logDebug("object_pull", "lookup_snapshot", map[string]any{
@@ -55,9 +50,11 @@ func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossi
 
 func newDaemonObjectPullExecutor(d *DaemonService) *corehost.GossipObjectPullExecutor {
 	return corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
-		Client:    photonlinux.GossipObjectPullClient{},
-		Discovery: d.currentGossipDiscoveryInput,
-		Now:       d.Sync.now,
+		Client: photonlinux.GossipObjectPullClient{},
+		Discovery: func() corehost.GossipDiscoveryInput {
+			return d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
+		},
+		Now: d.Sync.now,
 		ObserveAttempt: func(peerID string, path zone.ZonePath, now time.Time) {
 			d.observeObjectPullAttempt(peerID, path, now)
 			d.logDebug("object_pull", "worker_start", map[string]any{"peer_id": peerID, "zone": path.String()})
@@ -109,7 +106,7 @@ func (d *DaemonService) EnableEventLoopSync(clock corehost.Clock) {
 		}
 	}
 	if d.hostRuntime == nil {
-		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore, corehost.GossipRuntimeConfig{PeerID: d.Sync.Config.PeerID, Limits: syncLimits(d.Sync.Config)})
+		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore, gossipHostRuntimeConfig(d.Sync.Config))
 		return
 	}
 	d.hostRuntime.ResetScheduler(clock)
@@ -120,7 +117,7 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 		return nil
 	}
 	now := d.Sync.now()
-	input := d.currentGossipDiscoveryInput()
+	input := d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
 	peers := corehost.GossipOutboundPeers(input, now)
 	if len(peers) == 0 {
 		return nil
@@ -182,7 +179,7 @@ func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *ne
 	if d == nil || d.StateStore == nil || addr == nil || peerID == "" {
 		return false
 	}
-	patch, ok := corehost.PlanVerifiedObservedCheckpoint(d.currentGossipDiscoveryInput(), peerID, addr.String(), now)
+	patch, ok := corehost.PlanVerifiedObservedCheckpoint(d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions()), peerID, addr.String(), now)
 	if !ok {
 		return false
 	}
@@ -216,11 +213,10 @@ func (d *DaemonService) startHintedSyncSession(peerID, reason string) error {
 		return nil
 	}
 	now := d.Sync.now()
-	view := d.StateStore.common.ReadView()
-	if view.State == nil || view.State.Network == nil {
+	summary := d.hostRuntime.GossipCatalogSummary()
+	if summary == nil {
 		return nil
 	}
-	summary := corestate.CatalogSummaryFor(view.State.Network)
 	session := d.hostRuntime.Gossip.NewSession(peerID)
 	if err := d.hostRuntime.PostGossip(&gossip.SyncTimerEvent{
 		PeerID:       peerID,
@@ -247,8 +243,8 @@ func (d *DaemonService) respondFetchZoneTo(peerID string, path zone.ZonePath, re
 		return nil
 	}
 	budget := d.syncDatagramBudget()
-	view := d.StateStore.common.ReadView()
-	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil {
+	response := d.hostRuntime.GossipFetchZoneResponse(path, budget, d.Sync.now())
+	if !response.Found {
 		d.logDebug("sync", "fetch_zone_snapshot_missing", map[string]any{
 			"peer_id": peerID,
 			"zone":    path,
@@ -257,8 +253,7 @@ func (d *DaemonService) respondFetchZoneTo(peerID string, path zone.ZonePath, re
 		})
 		return nil
 	}
-	plan := gossip.PlanSnapshotDatagrams(view.State.Network, []zone.ZonePath{path}, budget, d.Sync.now())
-	return d.respondAnnouncePlanTo(peerID, plan, budget, replyAddr)
+	return d.respondAnnouncePlanTo(peerID, response.Plan, budget, replyAddr)
 }
 
 func (d *DaemonService) respondFetchZoneChunksTo(peerID string, path zone.ZonePath, replyAddr *net.UDPAddr) error {
@@ -266,20 +261,11 @@ func (d *DaemonService) respondFetchZoneChunksTo(peerID string, path zone.ZonePa
 		return nil
 	}
 	now := d.Sync.now()
-	view := d.StateStore.common.ReadView()
-	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil {
+	response := d.hostRuntime.GossipFetchZoneResponse(path, d.syncDatagramBudget(), now)
+	if response.Snapshot == nil {
 		return nil
 	}
-	network := view.State.Network
-	plan := gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, d.syncDatagramBudget(), now)
-	if network.IsZoneRevoked(path, now) {
-		return nil
-	}
-	snapshot, err := corestate.Snapshot(network, path)
-	if err != nil {
-		return nil
-	}
-	diag, err := sendDetachedSnapshotWithDiagnosticsTo(snapshot, plan, d.Sync.Transport, peerID, replyAddr, now, d.Sync.logger())
+	diag, err := sendDetachedSnapshotWithDiagnosticsTo(response.Snapshot, response.Plan, d.Sync.Transport, peerID, replyAddr, now, d.Sync.logger())
 	recordDatagramSendDiagnostics(d.PeerObservability, peerID, diag, d.syncDatagramBudget(), now)
 	return err
 }
@@ -502,10 +488,6 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogSummary(peer
 func (controller *daemonGossipActionController) ObserveGossipCatalogPage(peerID string, page *corestate.CatalogPage) {
 	recordCatalogPage(controller.daemon.PeerObservability, peerID, page, controller.now)
 	recordReadOnlyResponder(controller.daemon.PeerObservability, peerID, "catalog_page", "", controller.now)
-}
-
-func (controller *daemonGossipActionController) FilterGossipCatalogPage(_ context.Context, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	return corehost.FilterGossipCatalogPage(controller.daemon.currentGossipDiscoveryInput(), peerID, page, now)
 }
 
 func (controller *daemonGossipActionController) ObserveGossipChunkRepair(peerID string) {
@@ -793,7 +775,7 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 	}
 	now := d.Sync.now()
 	relayed := 0
-	input := d.currentGossipDiscoveryInput()
+	input := d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
 	summary := corestate.CatalogSummaryFor(input.Network)
 	if summary == nil {
 		return

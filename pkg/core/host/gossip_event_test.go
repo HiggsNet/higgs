@@ -15,7 +15,6 @@ type observingGossipEventController struct {
 	memoryGossipController
 	summaries int
 	pages     int
-	filtered  bool
 }
 
 func (controller *observingGossipEventController) ObserveGossipCatalogSummary(string, *corestate.CatalogSummary) {
@@ -24,11 +23,6 @@ func (controller *observingGossipEventController) ObserveGossipCatalogSummary(st
 
 func (controller *observingGossipEventController) ObserveGossipCatalogPage(string, *corestate.CatalogPage) {
 	controller.pages++
-}
-
-func (controller *observingGossipEventController) FilterGossipCatalogPage(_ context.Context, _ string, page *corestate.CatalogPage, _ time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	controller.filtered = true
-	return []corestate.ZoneDigest{{Zone: "local.catofes."}}, page
 }
 
 func TestRuntimeHandleGossipEventOwnsEngineToActionBridge(t *testing.T) {
@@ -63,7 +57,7 @@ func TestRuntimeHandleGossipEventRejectsMissingPeerOrSession(t *testing.T) {
 }
 
 func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
-	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
 	id := []byte("0123456789abcdef")
@@ -82,17 +76,20 @@ func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 }
 
 func TestRuntimeHandleGossipEventOwnsCatalogEnrichment(t *testing.T) {
-	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedManagedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	session := runtime.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCatalogDiffing
 	controller := &observingGossipEventController{}
-	event := &gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{}}
+	event := &gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{Entries: []corestate.ZoneDigest{
+		{Zone: "local.catofes.", RootHash: []byte("local")},
+		{Zone: "remote.catofes.", RootHash: []byte("remote")},
+	}}}
 	if _, err := runtime.HandleGossipEvent(context.Background(), event, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
-	if !controller.filtered || controller.pages != 1 || len(event.LocalEntries) != 1 || event.LocalEntries[0].Zone != "local.catofes." {
-		t.Fatalf("filtered=%t pages=%d event=%#v", controller.filtered, controller.pages, event)
+	if controller.pages != 1 || len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
+		t.Fatalf("pages=%d event=%#v", controller.pages, event)
 	}
 }
 

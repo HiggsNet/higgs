@@ -8,7 +8,6 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestPlanDaemonDiscoveredPeersSeparatesStateAndTransport(t *testing.T) {
@@ -86,10 +85,22 @@ func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
 
 func testDaemonGossipDiscoveryInput(state *stateFile, config *syncConfigFile) corehost.GossipDiscoveryInput {
 	checkpoint, _ := projectLegacyGossipCheckpoint(state.SyncPeers)
-	return buildGossipDiscoveryInput(corestate.View{State: &corestate.VerifiedState{
-		ManagedZone: state.ManagedZone,
-		Network:     state.Network,
-	}, Gossip: checkpoint}, state.PeerCleanups, config)
+	input := corehost.GossipDiscoveryInput{
+		LocalPeerID:   config.PeerID,
+		ManagedZone:   state.ManagedZone,
+		Network:       state.Network,
+		Bootstrap:     configuredKnownPeers(config),
+		EndpointGrace: config.EndpointGrace,
+		SourceOrder:   append([]string(nil), config.EndpointSourceOrder...),
+		Suppressed:    peerCleanupSuppressions(state.PeerCleanups),
+	}
+	if checkpoint != nil {
+		input.Peers = checkpoint.Peers
+	}
+	for _, peer := range config.Bootstrap {
+		input.BootstrapPeers = append(input.BootstrapPeers, peer.ID)
+	}
+	return input
 }
 
 func TestPlanDaemonDiscoveredPeersNoStateChangeStillRepairsTransport(t *testing.T) {

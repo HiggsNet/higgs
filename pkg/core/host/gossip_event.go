@@ -13,7 +13,6 @@ type GossipEventController interface {
 	GossipActionController
 	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
 	ObserveGossipCatalogPage(string, *corestate.CatalogPage)
-	FilterGossipCatalogPage(context.Context, string, *corestate.CatalogPage, time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage)
 	ObserveGossipChunkRepair(string)
 }
 
@@ -80,7 +79,7 @@ func (runtime *Runtime) HandleGossipEvent(ctx context.Context, event gossip.Sync
 	case *gossip.CatalogSummaryReceivedEvent:
 		controller.ObserveGossipCatalogSummary(peerID, typed.Summary)
 	case *gossip.CatalogPageReceivedEvent:
-		typed.LocalEntries, typed.Page = controller.FilterGossipCatalogPage(ctx, peerID, typed.Page, now)
+		typed.LocalEntries, typed.Page = FilterGossipCatalogPage(runtime.GossipDiscoveryInput(nil), peerID, typed.Page, now)
 		controller.ObserveGossipCatalogPage(peerID, typed.Page)
 	}
 	engineResult := runtime.Gossip.HandleEvent(event, now)

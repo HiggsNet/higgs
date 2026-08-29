@@ -929,16 +929,18 @@ package dependency: app -> host -> gossip -> state -> zone
   - [ ] F0e：在连接 Windows UDP 前完成唯一 HostRuntime 的公共 gossip 执行闭环；保持平台 composition 创建 UDP
     `DatagramIO`、TCP listener/dialer，HostRuntime 独占 receive/accept/worker/event queue 生命周期，gossip 独占 wire
     codec、验证和 FSM。不得把平台 bind 下沉进 HostRuntime，也不得在 Windows 复制 Linux daemon executor。
-    - [ ] F0e1：把 common Store 作为 HostRuntime 的显式真实依赖；先收回 verified/checkpoint read projection 与 remote
+    - [x] F0e1：把 common Store 作为 HostRuntime 的显式真实依赖；先收回 verified/checkpoint read projection 与 remote
       snapshot transaction，逐项缩小 `daemonGossipActionController`，不新增 `photonclient.Runtime`、capability bag 或第二条
       event queue。
       - [x] F0e1a：HostRuntime 构造时显式接收唯一 `GossipStateStore` 和固定的 peer/limits 配置，直接从 Store 生成
         verified catalog view，并在公共 executor 内完成 managed-zone guard、remote batch、apply 后重读和
         `SnapshotAppliedEvent` 回投。Linux 删除 `syncSnapshotApply/applySyncSnapshotBatch` 与 controller 的 state/apply
         capability；Windows memory 双节点也删除等价 state/apply glue，二者都直接使用同一个 Store transaction。
-      - [ ] F0e1b：把 discovery/catalog filter、fetch-zone/chunk responder 仍需的 checkpoint/verified 输入改为 HostRuntime
-        的同一 Store 读取，删除 daemon 中剩余公共 state projection；Transport address book 仍由公共 transport policy
-        更新，平台只创建并注入 socket。
+      - [x] F0e1b：discovery/address book 规划、catalog filter、UDP fetch-zone/chunk fallback 与 TCP object-pull responder
+        已统一从 HostRuntime 绑定的同一 Store 读取；删除 daemon 的 `currentGossipDiscoveryInput/buildGossipDiscoveryInput`
+        公共状态投影和 controller catalog-filter 回调。固定 bootstrap/endpoint policy 在 HostRuntime 构造时注入，Linux
+        只叠加正在 cleanup 的 peer suppression，并继续负责创建 socket、选择 reply address 与记录平台观测；checkpoint
+        先提交后发布 address book 的顺序不变。
     - [ ] F0e2：收回 backoff/completion/checkpoint mutation 与 object-pull completion 的公共执行；同一个 host event 内合并
       checkpoint patch，继续保持 commit-before-publish 和 checkpoint-only 不推进 `VerifiedRevision`。
     - [ ] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action

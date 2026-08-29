@@ -35,6 +35,10 @@ type memoryGossipStateStore struct {
 	appliedAt   time.Time
 }
 
+func (reader *memoryGossipStateStore) UpdatePeerCheckpoints(_ context.Context, _ map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+	return corestate.CommitResult{}, nil
+}
+
 func (reader *memoryGossipStateStore) ApplyRemoteBatch(_ context.Context, _ string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
 	if reader.trace != nil {
 		*reader.trace = append(*reader.trace, "apply")
@@ -111,10 +115,6 @@ func (controller *memoryGossipController) ObserveGossipCatalogSummary(string, *c
 }
 
 func (controller *memoryGossipController) ObserveGossipCatalogPage(string, *corestate.CatalogPage) {}
-
-func (controller *memoryGossipController) FilterGossipCatalogPage(_ context.Context, _ string, page *corestate.CatalogPage, _ time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	return nil, page
-}
 
 func (controller *memoryGossipController) ObserveGossipChunkRepair(string) {}
 

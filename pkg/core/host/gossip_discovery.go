@@ -37,6 +37,66 @@ type GossipDiscoveryInput struct {
 	SourceOrder    []string
 }
 
+// GossipDiscoveryConfig contains the platform-neutral, fixed discovery policy
+// selected by the composition root. Verified network and checkpoint data are
+// always read from Runtime's Store and therefore do not appear here.
+type GossipDiscoveryConfig struct {
+	Bootstrap      map[string]*net.UDPAddr
+	BootstrapPeers []string
+	EndpointGrace  time.Duration
+	SourceOrder    []string
+}
+
+// GossipDiscoveryInput returns one detached discovery view built from the
+// Runtime's committed common Store. suppressed is the only platform-owned
+// overlay: it represents peers whose Linux/Windows resource cleanup is still
+// in progress and is never persisted as gossip protocol state.
+func (runtime *Runtime) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
+	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
+	if runtime == nil {
+		return input
+	}
+	input.LocalPeerID = runtime.gossipConfig.PeerID
+	input.Bootstrap = cloneBootstrapPeers(runtime.gossipConfig.Discovery.Bootstrap)
+	input.BootstrapPeers = append([]string(nil), runtime.gossipConfig.Discovery.BootstrapPeers...)
+	input.EndpointGrace = runtime.gossipConfig.Discovery.EndpointGrace
+	input.SourceOrder = append([]string(nil), runtime.gossipConfig.Discovery.SourceOrder...)
+	if runtime.gossipState == nil {
+		return input
+	}
+	view := runtime.gossipState.ReadView()
+	if view.State != nil {
+		input.ManagedZone = view.State.ManagedZone
+		input.Network = view.State.Network
+	}
+	if view.Gossip != nil {
+		input.Peers = view.Gossip.Peers
+	}
+	return input
+}
+
+func cloneBootstrapPeers(input map[string]*net.UDPAddr) map[string]*net.UDPAddr {
+	out := make(map[string]*net.UDPAddr, len(input))
+	for peerID, addr := range input {
+		if addr == nil {
+			out[peerID] = nil
+			continue
+		}
+		copyAddr := *addr
+		copyAddr.IP = append(net.IP(nil), addr.IP...)
+		out[peerID] = &copyAddr
+	}
+	return out
+}
+
+func cloneSuppressedPeers(input map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(input))
+	for peerID, suppressed := range input {
+		out[peerID] = suppressed
+	}
+	return out
+}
+
 const GossipRelayMinInterval = time.Second
 
 // GossipOutboundPeers returns every peer that common gossip may actively
@@ -123,10 +183,6 @@ type GossipDiscoveryPlan struct {
 	KnownPeerIDs []string
 	Peers        map[string]GossipPeerAddressUpdate
 	Patches      map[string]corestate.PeerCheckpointPatch
-}
-
-type GossipCheckpointWriter interface {
-	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 }
 
 // PlanVerifiedObservedCheckpoint validates the peer against verified state
@@ -235,16 +291,17 @@ func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
 
 // RefreshGossipDiscovery persists checkpoint changes before publishing the
 // rebuilt, loss-tolerant address book to the live transport.
-func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, input GossipDiscoveryInput, now time.Time, writer GossipCheckpointWriter, transport *gossip.Transport) error {
+func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
 	if !runtime.gossipDiscoveryAvailable() {
 		return ErrRuntimeStopped
 	}
+	input := runtime.GossipDiscoveryInput(suppressed)
 	plan := PlanGossipDiscovery(input, now)
 	if len(plan.Patches) > 0 {
-		if writer == nil {
+		if runtime.gossipState == nil {
 			return ErrGossipCheckpointWriterRequired
 		}
-		if _, err := writer.UpdatePeerCheckpoints(ctx, plan.Patches); err != nil {
+		if _, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, plan.Patches); err != nil {
 			return err
 		}
 	}
@@ -254,13 +311,14 @@ func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, input Gossip
 
 // RestoreGossipObservedPath republishes one already-persisted observed path
 // into the loss-tolerant address book after packet/checkpoint processing.
-func (runtime *Runtime) RestoreGossipObservedPath(input GossipDiscoveryInput, peerID string, now time.Time, transport *gossip.Transport) error {
+func (runtime *Runtime) RestoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
 	if !runtime.gossipDiscoveryAvailable() {
 		return ErrRuntimeStopped
 	}
 	if transport == nil || peerID == "" {
 		return nil
 	}
+	input := runtime.GossipDiscoveryInput(suppressed)
 	paths, prefer, ok := discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)

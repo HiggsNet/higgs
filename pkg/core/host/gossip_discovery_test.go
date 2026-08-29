@@ -13,7 +13,16 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-type failingDiscoveryWriter struct{ err error }
+type failingDiscoveryWriter struct {
+	err  error
+	view corestate.View
+}
+
+func (writer failingDiscoveryWriter) ReadView() corestate.View { return writer.view }
+
+func (writer failingDiscoveryWriter) ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error) {
+	return corestate.RemoteBatchResult{}, nil
+}
 
 func (writer failingDiscoveryWriter) UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
 	return corestate.CommitResult{}, writer.err
@@ -31,9 +40,12 @@ func TestRuntimeDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T)
 			ObservedUntilUnix: now.Add(-time.Minute).Unix(),
 		}},
 	}
-	runtime := NewRuntime(nil, 1, nil, GossipRuntimeConfig{})
+	runtime := NewRuntime(nil, 1, failingDiscoveryWriter{err: wantErr, view: corestate.View{
+		State:  &corestate.VerifiedState{Network: input.Network},
+		Gossip: &corestate.GossipCheckpoint{Peers: input.Peers},
+	}}, GossipRuntimeConfig{Discovery: GossipDiscoveryConfig{Bootstrap: input.Bootstrap}})
 	defer runtime.Stop()
-	if err := runtime.RefreshGossipDiscovery(context.Background(), input, now, failingDiscoveryWriter{err: wantErr}, transport); !errors.Is(err, wantErr) {
+	if err := runtime.RefreshGossipDiscovery(context.Background(), nil, now, transport); !errors.Is(err, wantErr) {
 		t.Fatalf("RefreshGossipDiscovery error = %v", err)
 	}
 	if addr := transport.PeerAddr("peer-a"); addr != nil {

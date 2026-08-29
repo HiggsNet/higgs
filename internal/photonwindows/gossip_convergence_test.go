@@ -259,16 +259,6 @@ func (*memoryHostNode) ObserveGossipCatalogPage(string, *corestate.CatalogPage) 
 func (*memoryHostNode) ObserveGossipCatalogReject(string, string, error)              {}
 func (*memoryHostNode) ObserveGossipChunkRepair(string)                               {}
 
-func (node *memoryHostNode) FilterGossipCatalogPage(_ context.Context, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	view := node.store.ReadView()
-	return corehost.FilterGossipCatalogPage(corehost.GossipDiscoveryInput{
-		LocalPeerID: node.transport.PeerID(),
-		ManagedZone: view.State.ManagedZone,
-		Network:     view.State.Network,
-		Peers:       view.Gossip.Peers,
-	}, peerID, page, now)
-}
-
 func (*memoryHostNode) RecordGossipSummaryMatch(context.Context, string) error { return nil }
 func (*memoryHostNode) HandleGossipAnnounceHint(context.Context, string) error { return nil }
 func (*memoryHostNode) RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error {

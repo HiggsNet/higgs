@@ -53,7 +53,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	}
 
 	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
-	peers := corehost.GossipOutboundPeers(service.currentGossipDiscoveryInput(), now)
+	peers := corehost.GossipOutboundPeers(service.hostRuntime.GossipDiscoveryInput(service.currentGossipSuppressions()), now)
 	if len(peers) != 1 || peers[0] != "node-b.catofes." {
 		t.Fatalf("outboundSyncPeers = %v, want node-b.catofes.", peers)
 	}
@@ -67,7 +67,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	}
 
 	now = now.Add(2 * time.Minute)
-	if peers := corehost.GossipOutboundPeers(service.currentGossipDiscoveryInput(), now); len(peers) != 0 {
+	if peers := corehost.GossipOutboundPeers(service.hostRuntime.GossipDiscoveryInput(service.currentGossipSuppressions()), now); len(peers) != 0 {
 		t.Fatalf("outboundSyncPeers after observed expiry = %v, want empty", peers)
 	}
 	service.updateDiscoveredPeers()
@@ -85,7 +85,7 @@ func TestObservedPathPreferenceAndFailureCount(t *testing.T) {
 		ObservedUntilUnix: now.Add(time.Minute).Unix(),
 	}}
 	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
-	input := service.currentGossipDiscoveryInput()
+	input := service.hostRuntime.GossipDiscoveryInput(service.currentGossipSuppressions())
 	if corehost.PlanGossipDiscovery(input, now).Peers["node-b.catofes."].PreferObserved {
 		t.Fatalf("observedPathPreferFirst should prefer direct endpoint before failure")
 	}

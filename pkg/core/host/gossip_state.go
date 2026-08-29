@@ -17,14 +17,16 @@ import (
 type GossipStateStore interface {
 	ReadView() corestate.View
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
+	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 }
 
 // GossipRuntimeConfig contains platform-neutral values fixed when one
 // HostRuntime is constructed. Socket addresses and platform handles do not
 // belong here.
 type GossipRuntimeConfig struct {
-	PeerID string
-	Limits corestate.SyncLimits
+	PeerID    string
+	Limits    corestate.SyncLimits
+	Discovery GossipDiscoveryConfig
 }
 
 // GossipSnapshotObservation is detached diagnostic output from the common
@@ -51,6 +53,16 @@ func (runtime *Runtime) gossipStateView() GossipStateView {
 		Digests:      corestate.ZoneDigests(view.State.Network),
 		SenderPeerID: runtime.gossipConfig.PeerID,
 	}
+}
+
+// GossipCatalogSummary returns the current committed catalog summary without
+// exposing the verified Network back to platform orchestration.
+func (runtime *Runtime) GossipCatalogSummary() *corestate.CatalogSummary {
+	view := runtime.gossipStateView()
+	if !view.Loaded {
+		return nil
+	}
+	return corestate.CatalogSummaryForDigests(view.Digests)
 }
 
 func (runtime *Runtime) applyGossipSnapshots(
