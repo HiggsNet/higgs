@@ -941,8 +941,11 @@ package dependency: app -> host -> gossip -> state -> zone
         公共状态投影和 controller catalog-filter 回调。固定 bootstrap/endpoint policy 在 HostRuntime 构造时注入，Linux
         只叠加正在 cleanup 的 peer suppression，并继续负责创建 socket、选择 reply address 与记录平台观测；checkpoint
         先提交后发布 address book 的顺序不变。
-    - [ ] F0e2：收回 backoff/completion/checkpoint mutation 与 object-pull completion 的公共执行；同一个 host event 内合并
-      checkpoint patch，继续保持 commit-before-publish 和 checkpoint-only 不推进 `VerifiedRevision`。
+    - [x] F0e2：HostRuntime 已直接执行 backoff、session completion、summary-match、认证 observed path、chunk reject 与 relay
+      checkpoint mutation；同一个 FSM event 按 backoff 后 completion 的顺序生成最小字段 patch，并只提交一次 checkpoint
+      transaction，不覆盖 discovery/reject 等无关字段且不推进 `VerifiedRevision`。object-pull worker completion 继续回投唯一
+      HostRuntime queue，并由同一事件路径完成 checkpoint；删除 Linux `syncPeerStateMutationBatch`、controller persistence/backoff
+      capability，以及已经失去语义的 `SaveStateAction/SyncPersistenceScope`。
     - [ ] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action
       dispatch；平台仅保留 socket 构造、日志/metrics hook 和 verified ChangeSet 触发的平台 reconcile。
     - [ ] F0e4：删除 `daemonGossipActionController` 及 Windows memory test 中等价 controller glue；Linux/Windows composition

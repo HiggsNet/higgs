@@ -44,9 +44,8 @@ func (controller *memoryInboundController) ObserveGossipCatalogReject(_ string, 
 	controller.rejects = append(controller.rejects, err)
 }
 
-func (controller *memoryInboundController) RecordGossipSummaryMatch(_ context.Context, peerID string) error {
+func (controller *memoryInboundController) ObserveGossipSummaryMatch(peerID string) {
 	controller.matches = append(controller.matches, peerID)
-	return controller.controllerErr
 }
 
 func (controller *memoryInboundController) HandleGossipAnnounceHint(_ context.Context, peerID string) error {

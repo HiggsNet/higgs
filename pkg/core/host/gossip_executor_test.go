@@ -17,8 +17,6 @@ type memoryGossipController struct {
 	trace        []string
 	issues       []GossipExecutionIssue
 	observations []GossipSnapshotObservation
-	persisted    GossipPersistenceIntent
-	completion   *GossipCompletionIntent
 }
 
 // These adapters intentionally add no behavior: their only purpose is to
@@ -33,10 +31,16 @@ type memoryGossipStateStore struct {
 	applyErr    error
 	batch       []corestate.RemoteSnapshot
 	appliedAt   time.Time
+	updates     []map[string]corestate.PeerCheckpointPatch
+	updateErr   error
 }
 
-func (reader *memoryGossipStateStore) UpdatePeerCheckpoints(_ context.Context, _ map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
-	return corestate.CommitResult{}, nil
+func (reader *memoryGossipStateStore) UpdatePeerCheckpoints(_ context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+	if reader.trace != nil {
+		*reader.trace = append(*reader.trace, "checkpoint")
+	}
+	reader.updates = append(reader.updates, patches)
+	return corestate.CommitResult{Committed: reader.updateErr == nil}, reader.updateErr
 }
 
 func (reader *memoryGossipStateStore) ApplyRemoteBatch(_ context.Context, _ string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
@@ -118,18 +122,6 @@ func (controller *memoryGossipController) ObserveGossipCatalogPage(string, *core
 
 func (controller *memoryGossipController) ObserveGossipChunkRepair(string) {}
 
-func (controller *memoryGossipController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
-	controller.trace = append(controller.trace, "backoff")
-	return nil
-}
-
-func (controller *memoryGossipController) PersistGossip(_ context.Context, intent GossipPersistenceIntent, completion *GossipCompletionIntent) error {
-	controller.trace = append(controller.trace, "persist")
-	controller.persisted = intent
-	controller.completion = completion
-	return nil
-}
-
 func (controller *memoryGossipController) ReportGossipIssue(issue GossipExecutionIssue) {
 	controller.issues = append(controller.issues, issue)
 }
@@ -156,22 +148,22 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: deadline},
 		gossip.RecordBackoffAction{PeerID: "peer-a", Err: errors.New("retry")},
-		gossip.SaveStateAction{Reason: "complete", Persistence: gossip.SyncPersistenceMeta},
 	}
 
 	result := runtime.ExecuteGossipActions(context.Background(), session, actions, controller)
 	if result.Aborted || !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	wantTrace := []string{"read", "apply", "read", "send:ping", "backoff", "persist"}
+	wantTrace := []string{"read", "apply", "read", "send:ping", "read", "checkpoint"}
 	if !slices.Equal(controller.trace, wantTrace) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, wantTrace)
 	}
-	if !controller.persisted.Requested || controller.persisted.Scope != gossip.SyncPersistenceNetwork || controller.persisted.Reason != "complete" {
-		t.Fatalf("persistence = %#v", controller.persisted)
+	if len(state.updates) != 1 {
+		t.Fatalf("checkpoint updates = %#v", state.updates)
 	}
-	if controller.completion == nil || controller.completion.PeerID != "peer-a" || controller.completion.Err != nil {
-		t.Fatalf("completion = %#v", controller.completion)
+	patch := state.updates[0]["peer-a"]
+	if !patch.LastSyncUnix.Set || patch.LastSyncUnix.Value != clock.Now().Unix() || patch.BackoffUntilUnix.Value != 0 || patch.LastFailure.Value != nil {
+		t.Fatalf("terminal checkpoint patch = %#v", patch)
 	}
 	if pull := <-pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
 		t.Fatalf("pull = %#v", pull)
@@ -196,7 +188,6 @@ func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	result := runtime.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.SendPingAction{PeerID: "peer-a"},
-		gossip.SaveStateAction{Reason: "must not persist"},
 	}, controller)
 	if !result.Aborted || result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
@@ -252,13 +243,11 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	actions := []gossip.SyncAction{
 		gossip.SendFetchCatalogPageAction{PeerID: "peer-a", Cursor: "2"},
 		gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a.catofes."},
-		gossip.SaveStateAction{Reason: "metadata", Persistence: gossip.SyncPersistenceMeta},
 	}
 	type outcome struct {
-		trace     []string
-		persisted GossipPersistenceIntent
-		failure   []string
-		issue     GossipExecutionIssue
+		trace   []string
+		failure []string
+		issue   GossipExecutionIssue
 	}
 	adapters := []struct {
 		name string
@@ -295,33 +284,27 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 		failureRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 			gossip.SendPingAction{PeerID: "peer-a"},
-			gossip.SaveStateAction{Reason: "must not persist"},
 		}, failureController)
 		failureRuntime.Stop()
 		if len(failureMemory.issues) != 1 {
 			t.Fatalf("%s issues = %#v, want one", adapter.name, failureMemory.issues)
 		}
 		outcomes = append(outcomes, outcome{
-			trace:     append([]string(nil), memory.trace...),
-			persisted: memory.persisted,
-			failure:   append([]string(nil), failureMemory.trace...),
-			issue:     failureMemory.issues[0],
+			trace:   append([]string(nil), memory.trace...),
+			failure: append([]string(nil), failureMemory.trace...),
+			issue:   failureMemory.issues[0],
 		})
 	}
 	left, right := outcomes[0], outcomes[1]
 	if !slices.Equal(left.trace, right.trace) ||
-		left.persisted != right.persisted ||
 		!slices.Equal(left.failure, right.failure) ||
 		left.issue.Phase != right.issue.Phase ||
 		left.issue.PeerID != right.issue.PeerID ||
 		!errors.Is(left.issue.Err, right.issue.Err) {
 		t.Fatalf("adapter outcomes differ: %#v", outcomes)
 	}
-	if want := []string{"read", "send:fetch_catalog_page", "persist"}; !slices.Equal(outcomes[0].trace, want) {
+	if want := []string{"read", "send:fetch_catalog_page"}; !slices.Equal(outcomes[0].trace, want) {
 		t.Fatalf("trace = %#v, want %#v", outcomes[0].trace, want)
-	}
-	if !outcomes[0].persisted.Requested || outcomes[0].persisted.Scope != gossip.SyncPersistenceMeta || outcomes[0].persisted.Reason != "metadata" {
-		t.Fatalf("persistence = %#v", outcomes[0].persisted)
 	}
 	if want := []string{"read", "apply"}; !slices.Equal(outcomes[0].failure, want) || outcomes[0].issue.Phase != GossipPhaseApply {
 		t.Fatalf("failure outcome = %#v", outcomes[0])

@@ -18,7 +18,7 @@ type GossipInboundController interface {
 	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
 	ObserveGossipCatalogPage(string, *corestate.CatalogPage)
 	ObserveGossipCatalogReject(string, string, error)
-	RecordGossipSummaryMatch(context.Context, string) error
+	ObserveGossipSummaryMatch(string)
 	HandleGossipAnnounceHint(context.Context, string) error
 	RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error
 	HandleGossipObjectChunk(context.Context, *gossip.Message) error
@@ -105,7 +105,11 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {
 		return controller.HandleGossipAnnounceHint(ctx, message.PeerID)
 	}
-	return controller.RecordGossipSummaryMatch(ctx, message.PeerID)
+	if err := runtime.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, nil, runtime.schedulerForRead().clock.Now()); err != nil {
+		return err
+	}
+	controller.ObserveGossipSummaryMatch(message.PeerID)
+	return nil
 }
 
 func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, controller GossipInboundController) {

@@ -170,21 +170,6 @@ type ApplySnapshotAction struct {
 
 func (ApplySnapshotAction) isSyncAction() {}
 
-type SyncPersistenceScope uint8
-
-const (
-	SyncPersistenceUnspecified SyncPersistenceScope = iota
-	SyncPersistenceMeta
-	SyncPersistenceNetwork
-)
-
-type SaveStateAction struct {
-	Reason      string
-	Persistence SyncPersistenceScope
-}
-
-func (SaveStateAction) isSyncAction() {}
-
 type RecordBackoffAction struct {
 	PeerID string
 	Err    error
@@ -333,7 +318,6 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 
 	if len(actions) == 0 {
 		s.State = SyncSessionCompleted
-		actions = append(actions, SaveStateAction{Reason: "sync completed after pong, no differences", Persistence: SyncPersistenceMeta})
 	}
 	return actions, nil
 }
@@ -355,11 +339,11 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.Cat
 	s.remoteCatalogRoot = append([]byte(nil), summary.CatalogRoot...)
 	if len(s.localCatalogRoot) > 0 && bytes.Equal(summary.CatalogRoot, s.localCatalogRoot) {
 		s.State = SyncSessionCompleted
-		return []SyncAction{SaveStateAction{Reason: "sync completed after matching catalog summary", Persistence: SyncPersistenceMeta}}, nil
+		return nil, nil
 	}
 	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, corestate.CatalogRoot(nil)) {
 		s.State = SyncSessionCompleted
-		return []SyncAction{SaveStateAction{Reason: "sync completed after empty catalog summary", Persistence: SyncPersistenceMeta}}, nil
+		return nil, nil
 	}
 	if summary.FirstPage != nil {
 		return s.onCatalogPageReceived(&CatalogPageReceivedEvent{PeerID: peerID, Page: summary.FirstPage}, now)
@@ -381,7 +365,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 		s.lastError = errors.New("catalog page root mismatch")
 		return []SyncAction{
 			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError), Persistence: SyncPersistenceMeta},
 		}, nil
 	}
 	if len(s.remoteCatalogRoot) == 0 {
@@ -409,7 +392,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	}
 	if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
-		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after catalog diff from %s", e.PeerID), Persistence: SyncPersistenceMeta})
 		return actions, nil
 	}
 	s.State = SyncSessionObjectPulling
@@ -424,7 +406,6 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	s.lastError = errors.New("catalog page timeout")
 	return []SyncAction{
 		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: catalog page timeout", e.PeerID), Persistence: SyncPersistenceMeta},
 	}, nil
 }
 
@@ -456,7 +437,7 @@ func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest
 	if s.pendingEmpty() && (s.State == SyncSessionObjectPulling ||
 		s.State == SyncSessionChunkFallback) {
 		s.State = SyncSessionCompleted
-		return []SyncAction{SaveStateAction{Reason: "sync completed after pending zones reconciled with local state", Persistence: SyncPersistenceMeta}}
+		return nil
 	}
 	return nil
 }
@@ -469,7 +450,6 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 	s.lastError = errors.New("round timeout")
 	return []SyncAction{
 		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: round timeout", e.PeerID), Persistence: SyncPersistenceMeta},
 		CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage},
 	}, nil
 }
@@ -518,13 +498,11 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent) ([]SyncAction
 		s.State = SyncSessionObjectPulling
 	} else if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
-		actions = append(actions, SaveStateAction{Reason: fmt.Sprintf("sync completed after object pull from %s", e.PeerID), Persistence: SyncPersistenceMeta})
 	} else {
 		s.State = SyncSessionFailed
 		s.lastError = errors.New("sync has pending zones after object pull without fallback")
 		actions = append(actions,
 			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", e.PeerID, s.lastError), Persistence: SyncPersistenceMeta},
 		)
 	}
 	return actions, nil
@@ -539,7 +517,6 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 		s.lastError = e.Err
 		return []SyncAction{
 			RecordBackoffAction{PeerID: e.PeerID, Err: e.Err},
-			SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: chunk fallback error: %v", e.PeerID, e.Err), Persistence: SyncPersistenceMeta},
 		}, nil
 	}
 	if e.Snapshot != nil {
@@ -582,7 +559,7 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent) ([]SyncAction, 
 	}
 	if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
-		return []SyncAction{SaveStateAction{Reason: fmt.Sprintf("sync completed after snapshot apply from %s", e.PeerID), Persistence: SyncPersistenceMeta}}, nil
+		return nil, nil
 	}
 	return s.failSnapshotApply(e.PeerID, e.Zone, errors.New("sync has pending zones without transport or apply work"), nil)
 }
@@ -601,7 +578,6 @@ func (s *SyncSession) failSnapshotApply(peerID string, path zone.ZonePath, err e
 	delete(s.snapshotApplyPending, path)
 	actions = append(actions,
 		RecordBackoffAction{PeerID: peerID, Err: err},
-		SaveStateAction{Reason: fmt.Sprintf("sync failed for %s: %v", peerID, err), Persistence: SyncPersistenceMeta},
 	)
 	return actions, nil
 }

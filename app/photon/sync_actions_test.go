@@ -101,30 +101,6 @@ func TestHandleSyncEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 }
 
-func TestRecordSyncPeerStateUsesSoleCommittedAuthority(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{}, state, config, defaultDaemonInterval)
-	peerID := "node-b.catofes."
-	beforeRevision := service.StateStore.Meta().Revision
-
-	service.recordSyncPeerState(peerID, "test_local_cow", func(peer *corestate.PeerCheckpoint) {
-		peer.LastSyncUnix = 42
-	})
-
-	// The constructor input is detached from the store and must remain
-	// unchanged; there is no second runtime state to install or synchronize.
-	if state.SyncPeers[peerID].LastSyncUnix != 0 {
-		t.Fatalf("constructor input peer changed to %+v", state.SyncPeers[peerID])
-	}
-	committed, revision := service.StateStore.Snapshot()
-	if revision != beforeRevision {
-		t.Fatalf("verified revision = %d, want unchanged %d", revision, beforeRevision)
-	}
-	if committed.SyncPeers[peerID].LastSyncUnix != 42 {
-		t.Fatalf("committed peer = %+v, want LastSyncUnix 42", committed.SyncPeers[peerID])
-	}
-}
-
 func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(2130, 0)

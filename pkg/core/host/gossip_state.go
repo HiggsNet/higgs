@@ -117,5 +117,5 @@ func (runtime *Runtime) applyGossipSnapshots(
 			_ = runtime.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 		}
 	}
-	return GossipSnapshotApplyResult{StateCommitted: result.Committed, NetworkChanged: result.Changes.NetworkChanged}, nil
+	return GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}, nil
 }

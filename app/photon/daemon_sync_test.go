@@ -483,7 +483,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 		t.Fatal("active announce did not record a follow-up hint")
 	}
 	session.State = gossip.SyncSessionCompleted
-	service.completeSyncSession(session, false)
+	service.completeSyncSessionAfterPeerState(session, false)
 	if service.hostRuntime.Gossip.PendingHint(peerID) {
 		t.Fatal("follow-up hint was not consumed after session completion")
 	}

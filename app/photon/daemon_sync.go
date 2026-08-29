@@ -179,16 +179,12 @@ func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *ne
 	if d == nil || d.StateStore == nil || addr == nil || peerID == "" {
 		return false
 	}
-	patch, ok := corehost.PlanVerifiedObservedCheckpoint(d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions()), peerID, addr.String(), now)
-	if !ok {
-		return false
-	}
-	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, patch)
+	committed, err := d.hostRuntime.RecordGossipObservedPath(context.Background(), peerID, addr.String(), d.currentGossipSuppressions(), now)
 	if err != nil {
 		d.logWarn("sync", "observed_checkpoint_commit_failed", map[string]any{"peer_id": peerID, "error": err})
 		return false
 	}
-	return true
+	return committed
 }
 
 func (d *DaemonService) handleAnnounceHint(peerID string) error {
@@ -306,9 +302,8 @@ func (d *DaemonService) respondAnnouncePlanTo(peerID string, plan gossip.Datagra
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
 	peerID := gossip.SyncEventPeerID(event)
 	eventNow := d.Sync.now()
-	mutations := newSyncPeerStateMutationBatch(peerID)
 	controller := &daemonGossipActionController{
-		daemon: d, mutations: mutations, now: eventNow, limits: syncLimits(d.Sync.Config),
+		daemon: d, now: eventNow, limits: syncLimits(d.Sync.Config),
 	}
 	result, err := d.hostRuntime.HandleGossipEvent(ctx, event, eventNow, controller)
 	if err != nil {
@@ -336,130 +331,9 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 		})
 	}
 	if result.Done {
-		mutations.addCompletion(session, eventNow)
-	}
-	mutations.commit(d)
-	if result.Done {
 		d.completeSyncSessionAfterPeerState(session, session.NetworkChanged())
 	}
 	return result.NetworkChanged
-}
-
-func (d *DaemonService) recordSyncPeerState(peerID, label string, fn func(*corestate.PeerCheckpoint)) bool {
-	return d.recordSyncPeerStateBatch(peerID, label, fn)
-}
-
-func (d *DaemonService) recordSyncPeerStateBatch(peerID, label string, fns ...func(*corestate.PeerCheckpoint)) bool {
-	if d == nil || d.Sync == nil || d.StateStore == nil || len(fns) == 0 {
-		return false
-	}
-	view := d.StateStore.common.ReadView()
-	peer := view.Gossip.Peers[peerID]
-	for _, fn := range fns {
-		if fn != nil {
-			fn(&peer)
-		}
-	}
-	if _, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, fullPeerCheckpointPatch(peer)); err != nil {
-		d.logWarn("sync", "sync_peer_state_commit_failed", map[string]any{
-			"peer_id": peerID,
-			"label":   label,
-			"error":   err,
-		})
-		return false
-	}
-	return true
-}
-
-func fullPeerCheckpointPatch(peer corestate.PeerCheckpoint) corestate.PeerCheckpointPatch {
-	reject := make(map[zone.ZonePath]corestate.RejectedObject, len(peer.RejectedObjects))
-	for path, item := range peer.RejectedObjects {
-		reject[path] = item
-	}
-	return corestate.PeerCheckpointPatch{
-		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastSyncUnix}, LastAttemptUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix},
-		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}, FailureCount: corestate.PatchField[int]{Set: true, Value: peer.FailureCount},
-		LastRelayUnix: corestate.PatchField[int64]{Set: true, Value: peer.LastRelayUnix}, LastRelayRootHex: corestate.PatchField[string]{Set: true, Value: peer.LastRelayCatalogRootHex},
-		DiscoveredEndpoint: corestate.PatchField[string]{Set: true, Value: peer.DiscoveredEndpoint}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true, Value: peer.DiscoveredAtUnix},
-		ObservedEndpoint: corestate.PatchField[string]{Set: true, Value: peer.ObservedEndpoint}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedFirstSeenUnix},
-		ObservedLastUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedLastSeenUnix}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedLastSyncUnix},
-		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: peer.ObservedUntilUnix}, ObservedFailures: corestate.PatchField[int]{Set: true, Value: peer.ObservedFailureCount},
-		ObservedGrace: corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: peer.ObservedGraceEndpoints}, LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}, Reject: reject,
-	}
-}
-
-func recordPeerSyncCheckpoint(peer *corestate.PeerCheckpoint, syncErr error, now time.Time) {
-	if peer == nil {
-		return
-	}
-	peer.LastAttemptUnix = now.Unix()
-	if syncErr != nil {
-		peer.FailureCount++
-		backoff := time.Duration(1<<minInt(peer.FailureCount, 6)) * time.Second
-		peer.BackoffUntilUnix = now.Add(backoff).Unix()
-		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: syncErr.Error(), AtUnix: now.Unix()}
-		return
-	}
-	peer.LastSyncUnix = now.Unix()
-	peer.BackoffUntilUnix = 0
-	peer.FailureCount = 0
-	peer.LastFailure = nil
-	if peer.ObservedEndpoint != "" && peer.ObservedUntilUnix != 0 && now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
-		peer.ObservedLastSyncUnix = now.Unix()
-		peer.ObservedFailureCount = 0
-	}
-}
-
-type syncPeerStateMutation struct {
-	label string
-	apply func(*corestate.PeerCheckpoint)
-}
-
-// syncPeerStateMutationBatch collects the control-state changes caused by one
-// sync event. It preserves mutation order and flushes before persistence, while
-// avoiding a complete state-store transaction for every individual field
-// family.
-type syncPeerStateMutationBatch struct {
-	peerID             string
-	pending            []syncPeerStateMutation
-	completionRecorded bool
-}
-
-func newSyncPeerStateMutationBatch(peerID string) *syncPeerStateMutationBatch {
-	return &syncPeerStateMutationBatch{peerID: peerID}
-}
-
-func (b *syncPeerStateMutationBatch) add(label string, fn func(*corestate.PeerCheckpoint)) {
-	if b == nil || fn == nil {
-		return
-	}
-	b.pending = append(b.pending, syncPeerStateMutation{label: label, apply: fn})
-}
-
-func (b *syncPeerStateMutationBatch) addCompletion(session *gossip.SyncSession, now time.Time) {
-	if b == nil || session == nil || b.completionRecorded {
-		return
-	}
-	lastError := session.LastError()
-	b.add("peer_sync", func(peer *corestate.PeerCheckpoint) {
-		recordPeerSyncCheckpoint(peer, lastError, now)
-	})
-	b.completionRecorded = true
-}
-
-func (b *syncPeerStateMutationBatch) commit(d *DaemonService) {
-	if b == nil || len(b.pending) == 0 || d == nil {
-		return
-	}
-	pending := b.pending
-	b.pending = nil
-	labels := make([]string, 0, len(pending))
-	fns := make([]func(*corestate.PeerCheckpoint), 0, len(pending))
-	for _, mutation := range pending {
-		labels = append(labels, mutation.label)
-		fns = append(fns, mutation.apply)
-	}
-	d.recordSyncPeerStateBatch(b.peerID, strings.Join(labels, ","), fns...)
 }
 
 func snapshotApplyVia(action gossip.ApplySnapshotAction) string {
@@ -471,7 +345,6 @@ func snapshotApplyVia(action gossip.ApplySnapshotAction) string {
 
 type daemonGossipActionController struct {
 	daemon    *DaemonService
-	mutations *syncPeerStateMutationBatch
 	now       time.Time
 	limits    corestate.SyncLimits
 	replyAddr *net.UDPAddr
@@ -506,18 +379,12 @@ func (controller *daemonGossipActionController) ObserveGossipCatalogReject(peerI
 	})
 }
 
-func (controller *daemonGossipActionController) RecordGossipSummaryMatch(_ context.Context, peerID string) error {
+func (controller *daemonGossipActionController) ObserveGossipSummaryMatch(peerID string) {
 	recordSyncHint(controller.daemon.PeerObservability, peerID, "ping_summary_match", "", true, controller.now)
-	controller.daemon.recordSyncPeerStateBatch(peerID, "peer_sync",
-		func(peer *corestate.PeerCheckpoint) {
-			recordPeerSyncCheckpoint(peer, nil, controller.now)
-		},
-	)
 	controller.daemon.logDebug("sync", "ping_summary_shortcut", map[string]any{
 		"peer_id": peerID,
 		"reason":  "catalog_root_match",
 	})
-	return nil
 }
 
 func (controller *daemonGossipActionController) HandleGossipAnnounceHint(_ context.Context, peerID string) error {
@@ -596,36 +463,6 @@ func (controller *daemonGossipActionController) SendGossip(_ context.Context, ou
 		return controller.daemon.sendSyncMessageTo(outbound.PeerID, controller.replyAddr, outbound.Message)
 	}
 	return controller.daemon.sendSyncSessionMessage(outbound.PeerID, outbound.Message)
-}
-
-func (controller *daemonGossipActionController) RecordGossipBackoffs(_ context.Context, backoffs []gossip.RecordBackoffAction) error {
-	for _, backoff := range backoffs {
-		if controller.mutations == nil {
-			controller.daemon.recordSyncPeerState(backoff.PeerID, "peer_backoff", func(peer *corestate.PeerCheckpoint) {
-				recordPeerBackoffCheckpoint(peer, backoff.Err, controller.now)
-			})
-			continue
-		}
-		actionErr := backoff.Err
-		controller.mutations.add("peer_backoff", func(peer *corestate.PeerCheckpoint) {
-			recordPeerBackoffCheckpoint(peer, actionErr, controller.now)
-		})
-	}
-	return nil
-}
-
-func (controller *daemonGossipActionController) PersistGossip(_ context.Context, intent corehost.GossipPersistenceIntent, completion *corehost.GossipCompletionIntent) error {
-	if controller.mutations != nil {
-		if completion != nil && !controller.mutations.completionRecorded {
-			completionErr := completion.Err
-			controller.mutations.add("peer_sync", func(peer *corestate.PeerCheckpoint) {
-				recordPeerSyncCheckpoint(peer, completionErr, controller.now)
-			})
-			controller.mutations.completionRecorded = true
-		}
-		controller.mutations.commit(controller.daemon)
-	}
-	return nil
 }
 
 func (controller *daemonGossipActionController) ReportGossipIssue(issue corehost.GossipExecutionIssue) {
@@ -808,23 +645,12 @@ func (d *DaemonService) relaySyncToPeers(sourcePeerID string) {
 			d.hostRuntime.Gossip.RemoveSession(peerID)
 			continue
 		}
-		if d.recordSyncPeerState(peerID, "relay_success", func(peer *corestate.PeerCheckpoint) {
-			peer.LastRelayUnix = now.Unix()
-			peer.LastRelayCatalogRootHex = catalogRoot
-		}) {
+		committed, err := d.hostRuntime.RecordGossipRelay(context.Background(), peerID, catalogRoot, now)
+		if err != nil {
+			d.logWarn("sync", "relay_checkpoint_commit_failed", map[string]any{"peer_id": peerID, "error": err})
+		}
+		if committed {
 			recordRelaySuccessDiagnostics(d.PeerObservability, peerID, sourcePeerID, now)
 		}
 	}
-}
-
-func recordPeerBackoffCheckpoint(peer *corestate.PeerCheckpoint, err error, now time.Time) {
-	if peer == nil {
-		return
-	}
-	peer.LastAttemptUnix = now.Unix()
-	if err != nil {
-		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: err.Error(), AtUnix: now.Unix()}
-	}
-	backoff := time.Duration(1<<minInt(peer.FailureCount, 6)) * time.Second
-	peer.BackoffUntilUnix = now.Add(backoff).Unix()
 }

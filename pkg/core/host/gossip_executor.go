@@ -15,7 +15,6 @@ const (
 	GossipPhaseSend        = "send"
 	GossipPhaseObjectPull  = "object_pull"
 	GossipPhaseTimer       = "timer"
-	GossipPhaseBackoff     = "backoff"
 	GossipPhasePersistence = "persistence"
 )
 
@@ -30,19 +29,9 @@ type GossipStateView struct {
 	SenderPeerID string
 }
 
-// GossipSnapshotApplyResult reports the two independent consequences of a
-// snapshot batch: committed metadata may require persistence even when no
-// verified network object was accepted.
+// GossipSnapshotApplyResult reports whether the verified network changed.
 type GossipSnapshotApplyResult struct {
-	StateCommitted bool
 	NetworkChanged bool
-}
-
-// GossipCompletionIntent is detached sync metadata emitted with a terminal
-// persistence action.
-type GossipCompletionIntent struct {
-	PeerID string
-	Err    error
 }
 
 // GossipExecutionIssue reports a failed effect without making platform
@@ -59,8 +48,6 @@ type GossipExecutionIssue struct {
 type GossipActionController interface {
 	ObserveGossipSnapshot(GossipSnapshotObservation)
 	SendGossip(context.Context, gossip.OutboundMessage) error
-	RecordGossipBackoffs(context.Context, []gossip.RecordBackoffAction) error
-	PersistGossip(context.Context, GossipPersistenceIntent, *GossipCompletionIntent) error
 	ReportGossipIssue(GossipExecutionIssue)
 }
 
@@ -143,39 +130,12 @@ func (runtime *Runtime) ExecuteGossipActions(
 			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
 		}
 	}
-	if len(plan.Backoffs) > 0 {
-		if err := controller.RecordGossipBackoffs(ctx, plan.Backoffs); err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseBackoff, PeerID: plan.Backoffs[0].PeerID, Err: err})
+	if err := runtime.commitGossipEventCheckpoint(ctx, session, plan.Backoffs, runtime.schedulerForRead().clock.Now()); err != nil {
+		peerID := ""
+		if session != nil {
+			peerID = session.PeerID
 		}
-	}
-
-	intent := plan.Persistence
-	if applyResult.StateCommitted {
-		if !intent.Requested {
-			intent.Requested = true
-			intent.Scope = gossip.SyncPersistenceMeta
-			intent.Reason = "snapshot_batch"
-		}
-	}
-	if result.NetworkChanged {
-		intent.Requested = true
-		intent.Scope = gossip.SyncPersistenceNetwork
-		if intent.Reason == "" {
-			intent.Reason = "snapshot_batch"
-		}
-	}
-	if intent.Requested {
-		var completion *GossipCompletionIntent
-		if session != nil && session.Done() {
-			completion = &GossipCompletionIntent{PeerID: session.PeerID, Err: session.LastError()}
-		}
-		if err := controller.PersistGossip(ctx, intent, completion); err != nil {
-			peerID := ""
-			if session != nil {
-				peerID = session.PeerID
-			}
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
-		}
+		controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
 	}
 	return result
 }

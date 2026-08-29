@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 	"time"
 
@@ -39,36 +38,6 @@ func TestRecordRelaySuccessDiagnostics(t *testing.T) {
 	}
 	if diagnostics.LastRelaySuppression != "" || diagnostics.LastRelaySuppressedAt != 0 {
 		t.Fatalf("relay suppression was not cleared: %#v", diagnostics)
-	}
-}
-
-func TestRecordPeerSyncBackoffAndRecovery(t *testing.T) {
-	peer := corestate.PeerCheckpoint{}
-	now := time.Unix(100, 0)
-
-	recordPeerSyncCheckpoint(&peer, errors.New("dial failed"), now)
-	if peer.FailureCount != 1 {
-		t.Fatalf("FailureCount after failure = %d, want 1", peer.FailureCount)
-	}
-	if peer.LastFailure == nil || peer.LastFailure.Message != "dial failed" {
-		t.Fatalf("LastFailure = %#v, want dial failed", peer.LastFailure)
-	}
-	if peer.BackoffUntilUnix == 0 {
-		t.Fatalf("BackoffUntilUnix was not set")
-	}
-
-	recordPeerSyncCheckpoint(&peer, nil, now.Add(time.Minute))
-	if peer.FailureCount != 0 || peer.LastFailure != nil || peer.BackoffUntilUnix != 0 {
-		t.Fatalf("peer did not recover cleanly: %#v", peer)
-	}
-	if peer.LastSyncUnix == 0 {
-		t.Fatalf("LastSyncUnix was not set on recovery")
-	}
-
-	lastSuccess := peer.LastSyncUnix
-	recordPeerSyncCheckpoint(&peer, errors.New("sync receive timed out"), now.Add(2*time.Minute))
-	if peer.LastSyncUnix != lastSuccess {
-		t.Fatalf("LastSyncUnix after later failure = %d, want previous %d", peer.LastSyncUnix, lastSuccess)
 	}
 }
 

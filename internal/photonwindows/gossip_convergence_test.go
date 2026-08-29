@@ -259,7 +259,7 @@ func (*memoryHostNode) ObserveGossipCatalogPage(string, *corestate.CatalogPage) 
 func (*memoryHostNode) ObserveGossipCatalogReject(string, string, error)              {}
 func (*memoryHostNode) ObserveGossipChunkRepair(string)                               {}
 
-func (*memoryHostNode) RecordGossipSummaryMatch(context.Context, string) error { return nil }
+func (*memoryHostNode) ObserveGossipSummaryMatch(string)                       {}
 func (*memoryHostNode) HandleGossipAnnounceHint(context.Context, string) error { return nil }
 func (*memoryHostNode) RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error {
 	return nil
@@ -275,12 +275,6 @@ func (node *memoryHostNode) SendGossip(_ context.Context, outbound gossip.Outbou
 	return node.transport.Send(outbound.PeerID, outbound.Message)
 }
 
-func (*memoryHostNode) RecordGossipBackoffs(context.Context, []gossip.RecordBackoffAction) error {
-	return nil
-}
-func (*memoryHostNode) PersistGossip(context.Context, corehost.GossipPersistenceIntent, *corehost.GossipCompletionIntent) error {
-	return nil
-}
 func (node *memoryHostNode) ReportGossipIssue(issue corehost.GossipExecutionIssue) {
 	node.recordError(issue.Err)
 }

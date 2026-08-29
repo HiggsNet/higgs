@@ -38,18 +38,4 @@ func TestPlanGossipActionsClassifiesInStableOrder(t *testing.T) {
 	if len(plan.Backoffs) != 1 || plan.Backoffs[0].Err != errA {
 		t.Fatalf("backoffs = %#v", plan.Backoffs)
 	}
-	if plan.Persistence.Requested {
-		t.Fatalf("unexpected persistence = %#v", plan.Persistence)
-	}
-}
-
-func TestPlanGossipActionsCoalescesPersistence(t *testing.T) {
-	plan := PlanGossipActions([]gossip.SyncAction{
-		gossip.SaveStateAction{Reason: "metadata", Persistence: gossip.SyncPersistenceMeta},
-		gossip.SaveStateAction{Reason: "legacy-unspecified"},
-		gossip.SaveStateAction{Reason: "last-metadata", Persistence: gossip.SyncPersistenceMeta},
-	})
-	if !plan.Persistence.Requested || plan.Persistence.Scope != gossip.SyncPersistenceNetwork || plan.Persistence.Reason != "last-metadata" {
-		t.Fatalf("persistence = %#v, want requested/network/last-metadata", plan.Persistence)
-	}
 }

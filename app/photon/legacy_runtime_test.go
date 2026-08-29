@@ -108,17 +108,6 @@ func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays [
 	})
 }
 
-func (d *DaemonService) completeSyncSession(session *gossip.SyncSession, changed bool) {
-	if session == nil {
-		return
-	}
-	peerID := session.PeerID
-	d.recordSyncPeerState(peerID, "peer_sync", func(peer *corestate.PeerCheckpoint) {
-		recordPeerSyncCheckpoint(peer, session.LastError(), d.Sync.now())
-	})
-	d.completeSyncSessionAfterPeerState(session, changed)
-}
-
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
 	matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec)
 	return matches

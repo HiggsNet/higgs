@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -102,29 +101,4 @@ func TestObservedPathPreferenceAndFailureCount(t *testing.T) {
 		t.Fatalf("observedPathPreferFirst should prefer observed path over private discovered endpoint")
 	}
 
-	peer.ObservedFailureCount = 1
-	recordPeerSyncCheckpoint(&peer, nil, now)
-	if got := peer.ObservedFailureCount; got != 0 {
-		t.Fatalf("ObservedFailureCount after success = %d, want 0", got)
-	}
-}
-
-func TestRecordPeerSyncAtUsesInjectedTime(t *testing.T) {
-	peer := corestate.PeerCheckpoint{}
-	now := time.Unix(1000, 0)
-
-	recordPeerSyncCheckpoint(&peer, errors.New("dial failed"), now)
-
-	if peer.LastAttemptUnix != now.Unix() {
-		t.Fatalf("LastAttemptUnix = %d, want %d", peer.LastAttemptUnix, now.Unix())
-	}
-	if peer.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
-		t.Fatalf("BackoffUntilUnix = %d, want %d", peer.BackoffUntilUnix, now.Add(2*time.Second).Unix())
-	}
-
-	recoveredAt := now.Add(time.Minute)
-	recordPeerSyncCheckpoint(&peer, nil, recoveredAt)
-	if peer.LastSyncUnix != recoveredAt.Unix() {
-		t.Fatalf("LastSyncUnix = %d, want %d", peer.LastSyncUnix, recoveredAt.Unix())
-	}
 }

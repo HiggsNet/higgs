@@ -56,10 +56,7 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 	if s.State != SyncSessionCompleted {
 		t.Fatalf("expected state completed, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SaveStateAction"})
-	if save := actions[0].(SaveStateAction); save.Persistence != SyncPersistenceMeta {
-		t.Fatalf("save persistence = %v, want metadata-only", save.Persistence)
-	}
+	assertActionTypes(t, actions, nil)
 }
 
 func TestSyncSessionPongWithMissingZones(t *testing.T) {
@@ -224,7 +221,7 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	if s.State != SyncSessionFailed {
 		t.Fatalf("expected state failed, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction"})
+	assertActionTypes(t, actions, []string{"RecordBackoffAction"})
 }
 
 func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
@@ -329,7 +326,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	if s.State != SyncSessionCompleted {
 		t.Fatalf("expected state completed after apply acknowledgements, got %s", s.State)
 	}
-	assertActionTypes(t, ack2, []string{"SaveStateAction"})
+	assertActionTypes(t, ack2, nil)
 }
 
 func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
@@ -407,7 +404,7 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	if s.State != SyncSessionCompleted {
 		t.Fatalf("expected state completed after apply acknowledgement, got %s", s.State)
 	}
-	assertActionTypes(t, ack, []string{"SaveStateAction"})
+	assertActionTypes(t, ack, nil)
 }
 
 func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
@@ -473,7 +470,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	if s.State != SyncSessionCompleted {
 		t.Fatalf("expected state completed after chunk apply acknowledgement, got %s", s.State)
 	}
-	assertActionTypes(t, ack, []string{"SaveStateAction"})
+	assertActionTypes(t, ack, nil)
 }
 
 func TestSyncSessionSnapshotAppliedCompletesAfterValidatedMerge(t *testing.T) {
@@ -493,7 +490,7 @@ func TestSyncSessionSnapshotAppliedCompletesAfterValidatedMerge(t *testing.T) {
 	if s.State != SyncSessionCompleted {
 		t.Fatalf("state = %s, want completed", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SaveStateAction"})
+	assertActionTypes(t, actions, nil)
 }
 
 func TestSyncSessionRoundTimeout(t *testing.T) {
@@ -508,7 +505,7 @@ func TestSyncSessionRoundTimeout(t *testing.T) {
 	if s.State != SyncSessionFailed {
 		t.Fatalf("expected state failed, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction", "SaveStateAction", "CancelTimerAction"})
+	assertActionTypes(t, actions, []string{"RecordBackoffAction", "CancelTimerAction"})
 }
 
 func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
@@ -575,8 +572,6 @@ func actionType(a SyncAction) string {
 		return "StartObjectPullAction"
 	case ApplySnapshotAction:
 		return "ApplySnapshotAction"
-	case SaveStateAction:
-		return "SaveStateAction"
 	case RecordBackoffAction:
 		return "RecordBackoffAction"
 	case StartTimerAction:

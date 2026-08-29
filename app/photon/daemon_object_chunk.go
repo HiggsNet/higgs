@@ -10,7 +10,6 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // handleObjectChunkFrom keeps UDP assembly and transport repair outside the
@@ -62,20 +61,10 @@ func (d *DaemonService) handleObjectChunkFrom(message *gossip.Message, replyAddr
 }
 
 func (d *DaemonService) recordObjectChunkRejectedDigest(peerID string, chunk *gossip.ObjectChunk, applyErr error, now time.Time) {
-	if d == nil || d.StateStore == nil || peerID == "" || chunk == nil || chunk.Object != gossip.ObjectPullZone ||
-		!chunk.Zone.Valid() || len(chunk.RootHash) == 0 {
+	if d == nil || d.hostRuntime == nil {
 		return
 	}
-	reason := gossip.RejectReason(applyErr)
-	if reason == "" {
-		reason = "verify_failed"
-	}
-	_, err := d.StateStore.UpdatePeerCheckpoint(context.Background(), peerID, corestate.PeerCheckpointPatch{
-		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
-			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
-			UpdatedUnix: now.Unix(), UntilUnix: now.Add(corestate.RejectedObjectTTL).Unix(),
-		}},
-	})
+	err := d.hostRuntime.RecordGossipRejectedObject(context.Background(), peerID, chunk, applyErr, now)
 	if err != nil {
 		d.logWarn("sync", "chunk_reject_state_commit_failed", map[string]any{
 			"peer_id": peerID,

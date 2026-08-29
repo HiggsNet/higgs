@@ -2,15 +2,6 @@ package host
 
 import "github.com/HiggsNet/photon/pkg/core/gossip"
 
-// GossipPersistenceIntent is the coalesced persistence request for one
-// protocol event. Network scope dominates metadata scope; the last reason is
-// retained for diagnostics.
-type GossipPersistenceIntent struct {
-	Requested bool
-	Scope     gossip.SyncPersistenceScope
-	Reason    string
-}
-
 // GossipActionPlan classifies one ordered FSM action list into the execution
 // phases shared by every host. Entries within each phase retain source order.
 type GossipActionPlan struct {
@@ -19,7 +10,6 @@ type GossipActionPlan struct {
 	ObjectPulls []gossip.StartObjectPullAction
 	Timers      []gossip.SyncAction
 	Backoffs    []gossip.RecordBackoffAction
-	Persistence GossipPersistenceIntent
 }
 
 // PlanGossipActions is the single common phase-classification switch. Platform
@@ -41,16 +31,6 @@ func PlanGossipActions(actions []gossip.SyncAction) GossipActionPlan {
 			plan.Timers = append(plan.Timers, action)
 		case gossip.RecordBackoffAction:
 			plan.Backoffs = append(plan.Backoffs, typed)
-		case gossip.SaveStateAction:
-			plan.Persistence.Requested = true
-			scope := typed.Persistence
-			if scope == gossip.SyncPersistenceUnspecified {
-				scope = gossip.SyncPersistenceNetwork
-			}
-			if scope > plan.Persistence.Scope {
-				plan.Persistence.Scope = scope
-			}
-			plan.Persistence.Reason = typed.Reason
 		}
 	}
 	return plan
