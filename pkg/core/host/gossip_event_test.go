@@ -44,6 +44,45 @@ func TestRuntimeHandleGossipEventOwnsEngineToActionBridge(t *testing.T) {
 	}
 }
 
+func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	runtime := NewRuntime(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer runtime.Stop()
+	controller := &memoryInboundController{budget: gossip.DefaultDatagramBudget}
+
+	packet := &gossip.Packet{Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{}}}
+	packetResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now(), controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !packetResult.Handled || packetResult.Packet != packet || packetResult.Event != nil || len(controller.outbound) != 1 {
+		t.Fatalf("packet result = %#v, outbound = %#v", packetResult, controller.outbound)
+	}
+
+	runtime.Gossip.NewSession("peer-a")
+	if _, err := runtime.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: clock.Now().Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Second)
+	timerResult, err := runtime.HandleGossipHostEvent(context.Background(), <-runtime.Events(), clock.Now(), controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := timerResult.Event.(*gossip.RoundTimeoutEvent); !timerResult.Handled || !ok {
+		t.Fatalf("timer result = %#v", timerResult)
+	}
+
+	runtime.Gossip.NewSession("peer-b")
+	completion := &gossip.ObjectPullResultEvent{PeerID: "peer-b", Zone: "remote.catofes.", Err: errors.New("pull failed")}
+	completionResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now(), controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completionResult.Handled || completionResult.Event != completion {
+		t.Fatalf("completion result = %#v", completionResult)
+	}
+}
+
 func TestRuntimeHandleGossipEventRejectsMissingPeerOrSession(t *testing.T) {
 	runtime := NewRuntime(nil, 1, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()

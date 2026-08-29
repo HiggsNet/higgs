@@ -948,6 +948,19 @@ package dependency: app -> host -> gossip -> state -> zone
       capability，以及已经失去语义的 `SaveStateAction/SyncPersistenceScope`。
     - [ ] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action
       dispatch；平台仅保留 socket 构造、日志/metrics hook 和 verified ChangeSet 触发的平台 reconcile。
+      - [x] F0e3a：新增唯一 `HandleGossipHostEvent` 消费入口，packet 直接进入 inbound planner，gossip timer 与
+        object-pull completion 统一进入 session FSM。daemon、`sync serve`、`sync once` 和 Windows memory 双节点均已删除
+        自己的 packet/event type switch；旧 `daemonEventPacket` 及其单次转发也已删除。平台只读取 detached result 做日志、
+        observability 和后续 reconcile，不再决定公共事件走哪条协议路径。
+      - [ ] F0e3b：把 announce hint、fetch-zone/chunk responder 和 chunk/NACK 的剩余公共执行从
+        `daemonGossipActionController` 收进 HostRuntime；reply address 作为本次 ingress 的临时发送上下文，不持久化也不交给
+        平台重新解释协议 action。object chunk assembly、repair schedule、snapshot decode/root check、reject checkpoint 与 completion
+        回投已经整体迁入 HostRuntime，`daemon_object_chunk.go` 已删除；下一刀迁 sent-chunk cache/NACK repair、fetch-zone responder
+        和 announce hint。完成后 controller 只剩 transport send、日志/metrics hook 与 ChangeSet 通知。
+        gossip effect failure、event drop、session protocol error 与状态转换日志已先收回 HostRuntime；composition 仅在构造时
+        注入统一 logger，不再通过 `ReportGossipIssue` 逐事件接收并重新解释日志。下一步同时把当前公开的
+        `ExecuteGossipInbound`/`HandleGossipEvent` 两段改成 HostRuntime 内部 packet dispatch/session FSM dispatch，删除容易误解为
+        两套 event loop 的 `InboundController/EventController` 边界。
     - [ ] F0e4：删除 `daemonGossipActionController` 及 Windows memory test 中等价 controller glue；Linux/Windows composition
       均直接构造同一个 HostRuntime + Store + Transport。通过 host/state/gossip race、Linux `make check`/smoke 与 Windows
       amd64 compile guard 后才开始真实 Windows UDP adapter。

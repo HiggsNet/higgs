@@ -541,11 +541,11 @@ func TestDaemonHandleObjectChunkCommitsThroughStateStore(t *testing.T) {
 		},
 	}
 	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
-		if err := service.handleObjectChunkFrom(&gossip.Message{
+		if err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
 			Type:        gossip.MessageObjectChunk,
 			PeerID:      peerID,
 			ObjectChunk: chunk,
-		}, nil, corestate.DefaultSyncLimits()); err != nil {
+		}}, context.Background()); err != nil {
 			t.Fatalf("handleObjectChunk: %v", err)
 		}
 	}
@@ -556,9 +556,7 @@ drainEvents:
 		}
 		select {
 		case hostEvent := <-service.hostRuntime.Events():
-			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
-				service.handleSyncEvent(context.Background(), event)
-			}
+			_, _ = service.handleHostRuntimeGossipEvent(context.Background(), hostEvent)
 		default:
 			break drainEvents
 		}
@@ -621,7 +619,8 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 			Data:       []byte("invalid object"),
 		},
 	}
-	err := service.handleObjectChunkFrom(message, nil, corestate.DefaultSyncLimits())
+	result, err := service.hostRuntime.HandleGossipObjectChunk(context.Background(), message, now)
+	(&daemonGossipActionController{daemon: service, now: now}).ObserveGossipObjectChunk(result)
 	if err == nil {
 		t.Fatal("handleObjectChunk accepted invalid object hash")
 	}

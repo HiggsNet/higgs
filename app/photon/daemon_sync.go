@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -156,23 +155,17 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	return nil
 }
 
-func (d *DaemonService) handlePacketEventSyncSession(packet *gossip.Packet, ctx context.Context) error {
-	if packet != nil && packet.Message != nil && d != nil && d.Sync != nil {
-		msg := packet.Message
-		now := d.Sync.now()
-		d.rememberSyncIngressRoute(msg.PeerID, packet.Addr, now)
-		if d.recordVerifiedObservedCheckpoint(msg.PeerID, packet.Addr, now) {
-			recordObservedSource(d.PeerObservability, msg.PeerID, msg.Type, now)
-		}
-		d.seedObservedPeerPath(msg.PeerID)
+func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
+	if packet == nil || packet.Message == nil {
+		return errors.New("packet event is nil")
 	}
 	controller := &daemonGossipActionController{
-		daemon:    d,
-		now:       d.Sync.now(),
-		limits:    syncLimits(d.Sync.Config),
-		replyAddr: packet.Addr,
+		daemon: d,
+		now:    d.Sync.now(),
+		limits: syncLimits(d.Sync.Config),
 	}
-	return d.hostRuntime.ExecuteGossipInbound(ctx, d.hostRuntime.Gossip.PlanInbound(packet), controller)
+	_, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, controller.now, controller)
+	return err
 }
 
 func (d *DaemonService) recordVerifiedObservedCheckpoint(peerID string, addr *net.UDPAddr, now time.Time) bool {
@@ -300,36 +293,33 @@ func (d *DaemonService) respondAnnouncePlanTo(peerID string, plan gossip.Datagra
 }
 
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
-	peerID := gossip.SyncEventPeerID(event)
 	eventNow := d.Sync.now()
 	controller := &daemonGossipActionController{
 		daemon: d, now: eventNow, limits: syncLimits(d.Sync.Config),
 	}
 	result, err := d.hostRuntime.HandleGossipEvent(ctx, event, eventNow, controller)
 	if err != nil {
-		d.logDebug("sync", "event_dropped", map[string]any{"peer_id": peerID, "error": err})
 		return false
 	}
-	session := d.hostRuntime.Gossip.Session(peerID)
-	if result.ProtocolErr != nil {
-		d.logWarn("sync", "session_event_error", map[string]any{
-			"peer_id": peerID,
-			"error":   result.ProtocolErr,
-		})
+	return d.observeSyncEventResult(event, result, eventNow)
+}
+
+func (d *DaemonService) handleHostRuntimeGossipEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
+	now := d.Sync.now()
+	controller := &daemonGossipActionController{daemon: d, now: now, limits: syncLimits(d.Sync.Config)}
+	result, err := d.hostRuntime.HandleGossipHostEvent(ctx, hostEvent, now, controller)
+	if result.Event != nil && err == nil {
+		d.observeSyncEventResult(result.Event, result.Session, now)
 	}
+	return result, err
+}
+
+func (d *DaemonService) observeSyncEventResult(event gossip.SyncEvent, result corehost.GossipEventResult, eventNow time.Time) bool {
+	peerID := result.PeerID
+	session := d.hostRuntime.Gossip.Session(peerID)
 	eventName := gossip.SyncEventName(event)
 	activeSession := &gossip.SyncSession{State: session.State}
 	recordSyncActivePull(d.PeerObservability, peerID, eventName, activeSession, eventNow)
-	if result.NewState != result.OldState {
-		d.logDebug("sync", "session_state_changed", map[string]any{
-			"peer_id":   peerID,
-			"event":     fmt.Sprintf("%T", event),
-			"old_state": result.OldState,
-			"new_state": result.NewState,
-			"pending":   result.Pending,
-			"inflight":  result.Inflight,
-		})
-	}
 	if result.Done {
 		d.completeSyncSessionAfterPeerState(session, session.NetworkChanged())
 	}
@@ -348,6 +338,22 @@ type daemonGossipActionController struct {
 	now       time.Time
 	limits    corestate.SyncLimits
 	replyAddr *net.UDPAddr
+}
+
+func (controller *daemonGossipActionController) ObserveGossipInbound(_ context.Context, packet *gossip.Packet, now time.Time) error {
+	controller.now = now
+	controller.replyAddr = nil
+	if packet == nil || packet.Message == nil {
+		return nil
+	}
+	controller.replyAddr = packet.Addr
+	msg := packet.Message
+	controller.daemon.rememberSyncIngressRoute(msg.PeerID, packet.Addr, now)
+	if controller.daemon.recordVerifiedObservedCheckpoint(msg.PeerID, packet.Addr, now) {
+		recordObservedSource(controller.daemon.PeerObservability, msg.PeerID, msg.Type, now)
+	}
+	controller.daemon.seedObservedPeerPath(msg.PeerID)
+	return nil
 }
 
 func (controller *daemonGossipActionController) GossipDatagramBudget() int {
@@ -403,8 +409,17 @@ func (controller *daemonGossipActionController) RespondGossipFetchZone(_ context
 	return controller.daemon.respondFetchZoneTo(peerID, request.Zone, controller.replyAddr)
 }
 
-func (controller *daemonGossipActionController) HandleGossipObjectChunk(_ context.Context, message *gossip.Message) error {
-	return controller.daemon.handleObjectChunkFrom(message, controller.replyAddr, controller.limits)
+func (controller *daemonGossipActionController) ObserveGossipObjectChunk(result corehost.GossipObjectChunkResult) {
+	if result.CheckpointErr != nil {
+		controller.daemon.logWarn("sync", "chunk_reject_state_commit_failed", map[string]any{
+			"peer_id": result.PeerID,
+			"zone":    result.Zone,
+			"error":   result.CheckpointErr,
+		})
+	}
+	if result.ChunkFallback {
+		recordDatagramChunkFallback(controller.daemon.PeerObservability, result.PeerID, controller.now)
+	}
 }
 
 func (controller *daemonGossipActionController) HandleGossipObjectChunkNACK(_ context.Context, message *gossip.Message) error {
@@ -463,25 +478,6 @@ func (controller *daemonGossipActionController) SendGossip(_ context.Context, ou
 		return controller.daemon.sendSyncMessageTo(outbound.PeerID, controller.replyAddr, outbound.Message)
 	}
 	return controller.daemon.sendSyncSessionMessage(outbound.PeerID, outbound.Message)
-}
-
-func (controller *daemonGossipActionController) ReportGossipIssue(issue corehost.GossipExecutionIssue) {
-	event := "gossip_effect_failed"
-	switch issue.Phase {
-	case corehost.GossipPhaseApply:
-		event = "snapshot_batch_commit_failed"
-	case corehost.GossipPhaseInbound:
-		event = "event_dropped"
-	case corehost.GossipPhaseTimer:
-		event = "timer_action_failed"
-	case corehost.GossipPhasePersistence:
-		event = "save_failed"
-	}
-	controller.daemon.logWarn("sync", event, map[string]any{
-		"peer_id": issue.PeerID,
-		"phase":   issue.Phase,
-		"error":   issue.Err,
-	})
 }
 
 func (d *DaemonService) syncDatagramBudget() int {

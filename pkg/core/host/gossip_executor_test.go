@@ -19,6 +19,15 @@ type memoryGossipController struct {
 	observations []GossipSnapshotObservation
 }
 
+func gossipConfigCapturingIssues(config GossipRuntimeConfig, issues *[]GossipExecutionIssue) GossipRuntimeConfig {
+	config.Log = func(event GossipRuntimeLog) {
+		if event.Err != nil {
+			*issues = append(*issues, GossipExecutionIssue{Phase: event.Phase, PeerID: event.PeerID, Err: event.Err})
+		}
+	}
+	return config
+}
+
 // These adapters intentionally add no behavior: their only purpose is to
 // prove that platform composition selects capabilities, not an executor.
 type memoryLinuxGossipController struct{ memoryGossipController }
@@ -122,10 +131,6 @@ func (controller *memoryGossipController) ObserveGossipCatalogPage(string, *core
 
 func (controller *memoryGossipController) ObserveGossipChunkRepair(string) {}
 
-func (controller *memoryGossipController) ReportGossipIssue(issue GossipExecutionIssue) {
-	controller.issues = append(controller.issues, issue)
-}
-
 func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	controller := &memoryGossipController{}
@@ -182,7 +187,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	applyErr := errors.New("commit failed")
 	controller := &memoryGossipController{}
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
 	defer runtime.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionObjectPulling}
 	result := runtime.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
@@ -280,7 +285,7 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 		runtime.Stop()
 
 		failureController, failureMemory := adapter.new()
-		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &failureMemory.issues))
 		failureRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 			gossip.SendPingAction{PeerID: "peer-a"},

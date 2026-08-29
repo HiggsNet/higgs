@@ -21,9 +21,8 @@ type GossipInboundController interface {
 	ObserveGossipSummaryMatch(string)
 	HandleGossipAnnounceHint(context.Context, string) error
 	RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error
-	HandleGossipObjectChunk(context.Context, *gossip.Message) error
+	ObserveGossipObjectChunk(GossipObjectChunkResult)
 	HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error
-	ReportGossipIssue(GossipExecutionIssue)
 }
 
 // ExecuteGossipInbound executes the ordered decisions produced by
@@ -49,7 +48,7 @@ func (runtime *Runtime) ExecuteGossipInbound(ctx context.Context, actions []goss
 			if err == nil {
 				continue
 			}
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseInbound, PeerID: message.PeerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseInbound, PeerID: message.PeerID, Err: err})
 			// An active PING must still receive its responder messages even if
 			// its summary event encountered queue backpressure.
 			if message.Type == gossip.MessagePing {
@@ -71,7 +70,9 @@ func (runtime *Runtime) ExecuteGossipInbound(ctx context.Context, actions []goss
 				return err
 			}
 		case gossip.InboundHandleObjectChunk:
-			if err := controller.HandleGossipObjectChunk(ctx, message); err != nil {
+			result, err := runtime.HandleGossipObjectChunk(ctx, message, runtime.schedulerForRead().clock.Now())
+			controller.ObserveGossipObjectChunk(result)
+			if err != nil {
 				return err
 			}
 		case gossip.InboundHandleObjectChunkNACK:
@@ -96,7 +97,7 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 	controller.ObserveGossipCatalogSummary(message.PeerID, summary)
 	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
 		if err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: response}); err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
 		}
 	}
 	if action.ActiveSession || message.Ping.Summary == nil {
@@ -134,6 +135,6 @@ func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *g
 			CatalogPage: page,
 		},
 	}); err != nil {
-		controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
+		runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
 	}
 }

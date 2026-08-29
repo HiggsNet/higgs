@@ -119,10 +119,10 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing/firewall 周期 deadline 已进入 HostRuntime Scheduler；剩余公共循环进 `pkg/core/host`，Unix control 和 Linux controller 下沉，最终只留 composition root |
 | `daemon_common_intent.go` | control DTO 到公共 intent 的转换 | typed control command 落地后删除，不保留永久 adapter |
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
-| `daemon_object_chunk.go` | chunk/NACK transport 与 checkpoint/观测 adapter | assembly 已由每个 host Runtime 独占；repair deadline/缺失索引在 gossip，timer/action 已进 host Scheduler |
+| `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 HostRuntime；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
 | `daemon_state_store.go` | E1 唯一 writer 协调器和聚合读视图 | owner/排序进入 host；Linux persistence 进入 capability；聚合 view 消失后删除 |
-| `daemon_sync.go` | Linux gossip event 预处理、snapshot capability、checkpoint、发送、relay、session 收尾 | 已退出完整 `stateFile` 读取，catalog/action/managed-zone/observed checkpoint 直接走 common Store/HostRuntime；继续迁走剩余 capability，FSM 保持在 `pkg/core/gossip` |
+| `daemon_sync.go` | Linux gossip ingress 观测、发送日志和 session 收尾 | packet、gossip timer、object-pull completion 的类型判断和协议分发已统一进入 `HostRuntime.HandleGossipHostEvent`，旧 `daemonEventPacket` 已删除；继续迁走 announce/fetch-zone/chunk/NACK 公共执行，最终只留 transport/observability/reconcile hook |
 
 ### 3.2 DB、debug 和 diagnostics
 
@@ -199,7 +199,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `state_clone.go` | aggregate 和 Linux runtime clone | 各 owner 自己 clone；aggregate clone 随 stateFile 删除 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
-| `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | 启动 peer/endpoint/observed 恢复已统一进入 HostRuntime discovery，`openTransport` 不再读取 `stateFile`；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |
+| `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | daemon、`sync serve`、`sync once` 已共用 HostRuntime 的 event consumer，启动 peer/endpoint/observed 恢复也统一走 HostRuntime discovery；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |
 | `verify.go` | chain 验证 CLI | 验证留 crypto/state；CLI 进 photoncli |
 | `version.go` | build info | `internal/buildinfo` 供 Linux/Windows 复用 |
 | `zone.go` | zone/record 列表 CLI | Store read API + inspect/text + photoncli |

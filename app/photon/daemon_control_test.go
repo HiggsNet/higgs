@@ -455,16 +455,15 @@ func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 
 	state.Lock()
-	done := make(chan daemonEventResult, 1)
+	done := make(chan error, 1)
 	go func() {
-		result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: context.Background()})
-		done <- result
+		done <- service.processPacketEvent(packet, context.Background())
 	}()
 
 	select {
-	case result := <-done:
-		if result.Error != nil {
-			t.Fatalf("packet event error: %v", result.Error)
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("packet event error: %v", err)
 		}
 	case <-time.After(time.Second):
 		state.Unlock()

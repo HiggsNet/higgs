@@ -25,6 +25,14 @@ type memoryInboundController struct {
 	controllerErr error
 }
 
+func (controller *memoryInboundController) ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error {
+	return nil
+}
+
+func (controller *memoryInboundController) ObserveGossipSnapshot(GossipSnapshotObservation) {}
+
+func (controller *memoryInboundController) ObserveGossipChunkRepair(string) {}
+
 func (controller *memoryInboundController) GossipDatagramBudget() int { return controller.budget }
 
 func (controller *memoryInboundController) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
@@ -58,18 +66,13 @@ func (controller *memoryInboundController) RespondGossipFetchZone(_ context.Cont
 	return controller.controllerErr
 }
 
-func (controller *memoryInboundController) HandleGossipObjectChunk(context.Context, *gossip.Message) error {
+func (controller *memoryInboundController) ObserveGossipObjectChunk(GossipObjectChunkResult) {
 	controller.chunks++
-	return controller.controllerErr
 }
 
 func (controller *memoryInboundController) HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error {
 	controller.nacks++
 	return controller.controllerErr
-}
-
-func (controller *memoryInboundController) ReportGossipIssue(issue GossipExecutionIssue) {
-	controller.issues = append(controller.issues, issue)
 }
 
 func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
@@ -116,13 +119,13 @@ func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
 }
 
 func TestRuntimeExecuteGossipInboundRespondsToActivePingWhenQueueFull(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	controller := &memoryInboundController{}
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
 	defer runtime.Stop()
 	runtime.Gossip.NewSession("peer-a")
 	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
 		t.Fatalf("fill queue: %v", err)
 	}
-	controller := &memoryInboundController{}
 	packet := &gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: "peer-a",

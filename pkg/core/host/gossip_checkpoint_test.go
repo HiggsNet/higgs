@@ -58,9 +58,9 @@ func TestRuntimeReportsCheckpointCommitFailure(t *testing.T) {
 		views:     []corestate.View{loadedGossipState(), loadedGossipState()},
 		updateErr: wantErr,
 	}
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, state, GossipRuntimeConfig{})
-	defer runtime.Stop()
 	controller := &memoryGossipController{}
+	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, state, gossipConfigCapturingIssues(GossipRuntimeConfig{}, &controller.issues))
+	defer runtime.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
 
 	result := runtime.ExecuteGossipActions(context.Background(), session, nil, controller)

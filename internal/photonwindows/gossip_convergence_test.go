@@ -151,25 +151,20 @@ func (node *memoryHostNode) run() {
 }
 
 func (node *memoryHostNode) handleEvent(event corehost.Event) error {
-	if received, ok := event.(corehost.GossipPacketReceived); ok {
-		if received.Packet == nil {
-			return nil
-		}
-		return node.runtime.ExecuteGossipInbound(node.ctx, node.runtime.Gossip.PlanInbound(received.Packet), node)
+	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now(), node)
+	if errors.Is(err, corehost.ErrGossipSessionNotFound) {
+		return nil
 	}
-	if syncEvent, ok := node.runtime.GossipEventFor(event); ok {
-		result, err := node.runtime.HandleGossipEvent(node.ctx, syncEvent, time.Now(), node)
-		if errors.Is(err, corehost.ErrGossipSessionNotFound) {
-			return nil
+	if err == nil && hostResult.Event != nil && hostResult.Session.Done {
+		select {
+		case node.completed <- hostResult.Session.PeerID:
+		default:
 		}
-		if err == nil && result.Done {
-			select {
-			case node.completed <- result.PeerID:
-			default:
-			}
-		}
-		return err
 	}
+	return err
+}
+
+func (node *memoryHostNode) ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error {
 	return nil
 }
 
@@ -264,7 +259,7 @@ func (*memoryHostNode) HandleGossipAnnounceHint(context.Context, string) error {
 func (*memoryHostNode) RespondGossipFetchZone(context.Context, string, *gossip.FetchZone) error {
 	return nil
 }
-func (*memoryHostNode) HandleGossipObjectChunk(context.Context, *gossip.Message) error { return nil }
+func (*memoryHostNode) ObserveGossipObjectChunk(corehost.GossipObjectChunkResult) {}
 func (*memoryHostNode) HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error {
 	return nil
 }
@@ -273,10 +268,6 @@ func (*memoryHostNode) ObserveGossipSnapshot(corehost.GossipSnapshotObservation)
 
 func (node *memoryHostNode) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	return node.transport.Send(outbound.PeerID, outbound.Message)
-}
-
-func (node *memoryHostNode) ReportGossipIssue(issue corehost.GossipExecutionIssue) {
-	node.recordError(issue.Err)
 }
 
 type windowsGossipFixture struct {

@@ -27,6 +27,37 @@ type GossipRuntimeConfig struct {
 	PeerID    string
 	Limits    corestate.SyncLimits
 	Discovery GossipDiscoveryConfig
+	Log       func(GossipRuntimeLog)
+}
+
+type GossipRuntimeLog struct {
+	Level  string
+	Event  string
+	PeerID string
+	Phase  string
+	Err    error
+	Fields map[string]any
+}
+
+func (runtime *Runtime) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
+	if runtime != nil && runtime.gossipConfig.Log != nil {
+		runtime.gossipConfig.Log(GossipRuntimeLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
+	}
+}
+
+func (runtime *Runtime) reportGossipIssue(issue GossipExecutionIssue) {
+	event := "gossip_effect_failed"
+	switch issue.Phase {
+	case GossipPhaseApply:
+		event = "snapshot_batch_commit_failed"
+	case GossipPhaseInbound:
+		event = "event_dropped"
+	case GossipPhaseTimer:
+		event = "timer_action_failed"
+	case GossipPhasePersistence:
+		event = "save_failed"
+	}
+	runtime.logGossip("warn", event, issue.PeerID, issue.Phase, issue.Err, nil)
 }
 
 // GossipSnapshotObservation is detached diagnostic output from the common

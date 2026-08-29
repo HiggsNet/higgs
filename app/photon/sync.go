@@ -20,7 +20,6 @@ import (
 	"github.com/HiggsNet/photon/internal/observability"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -272,20 +271,15 @@ func syncServe(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case hostEvent := <-service.hostRuntime.Events():
-			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
-				packet := received.Packet
-				if err := service.processPacketEvent(packet, ctx); err != nil {
-					logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-						"peer_id": packet.Message.PeerID,
-						"type":    packet.Message.Type,
-						"reason":  gossip.RejectReason(err),
-						"error":   err,
-					}, err))
-				}
-				continue
-			}
-			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
-				service.handleSyncEvent(ctx, event)
+			result, err := service.handleHostRuntimeGossipEvent(ctx, hostEvent)
+			if err != nil && result.Packet != nil {
+				packet := result.Packet
+				logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
+					"peer_id": packet.Message.PeerID,
+					"type":    packet.Message.Type,
+					"reason":  gossip.RejectReason(err),
+					"error":   err,
+				}, err))
 			}
 		}
 	}
@@ -364,17 +358,9 @@ func syncOnce(peerID string) error {
 			if quietTimer != nil {
 				quietTimer.Stop()
 			}
-			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
-				packet := received.Packet
-				responderQuietUntil = time.Time{}
-				if err := service.processPacketEvent(packet, ctx); err != nil {
-					return err
-				}
-				continue
-			}
 			responderQuietUntil = time.Time{}
-			if event, ok := service.hostRuntime.GossipEventFor(hostEvent); ok {
-				service.handleSyncEvent(ctx, event)
+			if _, err := service.handleHostRuntimeGossipEvent(ctx, hostEvent); err != nil {
+				return err
 			}
 		case <-quiet:
 			return nil

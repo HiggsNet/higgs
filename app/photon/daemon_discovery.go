@@ -56,11 +56,39 @@ func gossipHostRuntimeConfig(config *syncConfigFile) corehost.GossipRuntimeConfi
 	return corehost.GossipRuntimeConfig{
 		PeerID: config.PeerID,
 		Limits: syncLimits(config),
+		Log:    gossipRuntimeLogger(newAppLogger(config)),
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(config),
 			BootstrapPeers: bootstrapPeers,
 			EndpointGrace:  config.EndpointGrace,
 			SourceOrder:    append([]string(nil), config.EndpointSourceOrder...),
 		},
+	}
+}
+
+func gossipRuntimeLogger(logger *appLogger) func(corehost.GossipRuntimeLog) {
+	return func(event corehost.GossipRuntimeLog) {
+		if logger == nil {
+			return
+		}
+		fields := make(map[string]any, len(event.Fields)+3)
+		for key, value := range event.Fields {
+			fields[key] = value
+		}
+		if event.PeerID != "" {
+			fields["peer_id"] = event.PeerID
+		}
+		if event.Phase != "" {
+			fields["phase"] = event.Phase
+		}
+		if event.Err != nil {
+			fields["error"] = event.Err
+		}
+		switch event.Level {
+		case "warn":
+			logger.Warn("sync", event.Event, fields)
+		default:
+			logger.Debug("sync", event.Event, fields)
+		}
 	}
 }

@@ -127,8 +127,8 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	service.Sync.Transport = transportA
-	if err := service.handlePacketEventSyncSession(packet, context.Background()); err != nil {
-		t.Fatalf("handlePacketEventSyncSession: %v", err)
+	if err := service.processPacketEvent(packet, context.Background()); err != nil {
+		t.Fatalf("processPacketEvent: %v", err)
 	}
 
 	if err := transportB.SetReadDeadline(time.Now().Add(time.Second)); err != nil {

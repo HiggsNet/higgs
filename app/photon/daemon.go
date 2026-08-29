@@ -97,7 +97,6 @@ const (
 	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
 	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
 	daemonEventJoinAccept            daemonEventType = "join_accept"
-	daemonEventPacket                daemonEventType = "packet"
 	daemonEventSyncTimer             daemonEventType = "timer_sync"
 	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
@@ -125,7 +124,6 @@ type daemonEvent struct {
 	Key         string
 	Apply       bool
 	Orphans     bool
-	Packet      *gossip.Packet
 	VICIEvent   ipsec.VICIEvent
 	ForceSync   bool
 	EndpointACL *endpointACL
@@ -500,21 +498,15 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				}
 				continue
 			}
-			if received, ok := hostEvent.(corehost.GossipPacketReceived); ok && received.Packet != nil {
-				packet := received.Packet
-				result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventPacket, Packet: packet, Context: ctx})
-				if result.Error != nil {
-					d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-						"peer_id": packet.Message.PeerID,
-						"type":    packet.Message.Type,
-						"error":   result.Error,
-						"reason":  gossip.RejectReason(result.Error),
-					}, result.Error))
-				}
-				continue
-			}
-			if event, ok := d.hostRuntime.GossipEventFor(hostEvent); ok {
-				d.handleSyncEvent(ctx, event)
+			gossipResult, err := d.handleHostRuntimeGossipEvent(ctx, hostEvent)
+			if err != nil && gossipResult.Packet != nil {
+				packet := gossipResult.Packet
+				d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
+					"peer_id": packet.Message.PeerID,
+					"type":    packet.Message.Type,
+					"error":   err,
+					"reason":  gossip.RejectReason(err),
+				}, err))
 			}
 		}
 	}
@@ -1176,9 +1168,6 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 }
 
 func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
-	if event.Type == daemonEventPacket {
-		return daemonEventResult{Error: d.processPacketEvent(event.Packet, controlContext(event.Context))}, false, false
-	}
 	switch event.Type {
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
@@ -1560,13 +1549,6 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 		d.notifyStateChanged()
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
-}
-
-func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
-	if packet == nil || packet.Message == nil {
-		return errors.New("packet event is nil")
-	}
-	return d.handlePacketEventSyncSession(packet, ctx)
 }
 
 func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {

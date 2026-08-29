@@ -16,6 +16,16 @@ type GossipEventController interface {
 	ObserveGossipChunkRepair(string)
 }
 
+// GossipHostEventController is the single platform hook set used while
+// Runtime consumes its own gossip queue. ObserveGossipInbound may record the
+// accepted source address or other platform observability, but it must not
+// advance the protocol engine or reinterpret inbound actions.
+type GossipHostEventController interface {
+	GossipEventController
+	GossipInboundController
+	ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error
+}
+
 var (
 	ErrGossipEventPeerRequired = errors.New("gossip event peer is required")
 	ErrGossipSessionNotFound   = errors.New("gossip session not found")
@@ -34,6 +44,49 @@ type GossipEventResult struct {
 	ProtocolErr    error
 }
 
+// GossipHostEventResult describes the common gossip work performed for one
+// Runtime event. Platform composition uses the detached packet/event fields
+// only for logging and platform reconciliation after common processing.
+type GossipHostEventResult struct {
+	Handled bool
+	Packet  *gossip.Packet
+	Event   gossip.SyncEvent
+	Session GossipEventResult
+}
+
+// HandleGossipHostEvent is the only switch from Runtime queue events to the
+// gossip inbound planner or session FSM. Packet, timer and object-pull
+// completion producers therefore share one consumer on every platform.
+func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipHostEventController) (GossipHostEventResult, error) {
+	var out GossipHostEventResult
+	if runtime == nil {
+		return out, ErrRuntimeStopped
+	}
+	if controller == nil {
+		return out, ErrGossipControllerRequired
+	}
+	if received, ok := hostEvent.(GossipPacketReceived); ok {
+		out.Handled = true
+		out.Packet = received.Packet
+		if received.Packet == nil {
+			return out, nil
+		}
+		if err := controller.ObserveGossipInbound(ctx, received.Packet, now); err != nil {
+			return out, err
+		}
+		return out, runtime.ExecuteGossipInbound(ctx, runtime.Gossip.PlanInbound(received.Packet), controller)
+	}
+	event, ok := runtime.GossipEventFor(hostEvent)
+	if !ok {
+		return out, nil
+	}
+	out.Handled = true
+	out.Event = event
+	result, err := runtime.HandleGossipEvent(ctx, event, now, controller)
+	out.Session = result
+	return out, err
+}
+
 // HandleGossipEvent is the single common bridge from Engine/FSM advancement
 // to ordered HostRuntime effects. Platform code may enrich an event before
 // calling it and observe the detached result afterwards, but cannot implement
@@ -48,10 +101,12 @@ func (runtime *Runtime) HandleGossipEvent(ctx context.Context, event gossip.Sync
 	}
 	peerID := gossip.SyncEventPeerID(event)
 	if peerID == "" {
+		runtime.logGossip("debug", "event_dropped", "", "session", ErrGossipEventPeerRequired, nil)
 		return out, ErrGossipEventPeerRequired
 	}
 	session := runtime.Gossip.Session(peerID)
 	if session == nil {
+		runtime.logGossip("debug", "event_dropped", peerID, "session", ErrGossipSessionNotFound, nil)
 		return out, ErrGossipSessionNotFound
 	}
 	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
@@ -65,7 +120,7 @@ func (runtime *Runtime) HandleGossipEvent(ctx context.Context, event gossip.Sync
 		}
 		err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunkNACK, ObjectChunkNACK: nack}})
 		if err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
 			return out, nil
 		}
 		controller.ObserveGossipChunkRepair(peerID)
@@ -94,6 +149,15 @@ func (runtime *Runtime) HandleGossipEvent(ctx context.Context, event gossip.Sync
 		Done:           session.Done(),
 		NetworkChanged: execution.NetworkChanged,
 		ProtocolErr:    engineResult.Err,
+	}
+	if out.ProtocolErr != nil {
+		runtime.logGossip("warn", "session_event_error", peerID, "session", out.ProtocolErr, nil)
+	}
+	if out.NewState != out.OldState {
+		runtime.logGossip("debug", "session_state_changed", peerID, "session", nil, map[string]any{
+			"event": gossip.SyncEventName(event), "old_state": out.OldState, "new_state": out.NewState,
+			"pending": out.Pending, "inflight": out.Inflight,
+		})
 	}
 	return out, nil
 }

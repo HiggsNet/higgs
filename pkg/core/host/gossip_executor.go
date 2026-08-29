@@ -48,7 +48,6 @@ type GossipExecutionIssue struct {
 type GossipActionController interface {
 	ObserveGossipSnapshot(GossipSnapshotObservation)
 	SendGossip(context.Context, gossip.OutboundMessage) error
-	ReportGossipIssue(GossipExecutionIssue)
 }
 
 // GossipExecutionResult is the common executor outcome consumed by the host
@@ -70,9 +69,6 @@ func (runtime *Runtime) ExecuteGossipActions(
 ) GossipExecutionResult {
 	var result GossipExecutionResult
 	if runtime == nil || controller == nil {
-		if controller != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, Err: ErrRuntimeStopped})
-		}
 		result.Aborted = true
 		return result
 	}
@@ -94,7 +90,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 		var err error
 		applyResult, err = runtime.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view, controller)
 		if err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			result.Aborted = true
 			return result
 		}
@@ -102,7 +98,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 		if result.NetworkChanged {
 			view = runtime.gossipStateView()
 			if !view.Loaded {
-				controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
+				runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
 				result.Aborted = true
 				return result
 			}
@@ -116,18 +112,18 @@ func (runtime *Runtime) ExecuteGossipActions(
 
 	for _, outbound := range plan.Outbound {
 		if err := controller.SendGossip(ctx, outbound); err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: outbound.PeerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: outbound.PeerID, Err: err})
 		}
 	}
 	for _, pull := range plan.ObjectPulls {
 		if err := runtime.SubmitGossipObjectPull(pull); err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
 			_ = runtime.PostGossip(&gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}
 	}
 	for _, timer := range plan.Timers {
 		if _, err := runtime.ApplyGossipTimerAction(timer); err != nil {
-			controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
+			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
 		}
 	}
 	if err := runtime.commitGossipEventCheckpoint(ctx, session, plan.Backoffs, runtime.schedulerForRead().clock.Now()); err != nil {
@@ -135,7 +131,7 @@ func (runtime *Runtime) ExecuteGossipActions(
 		if session != nil {
 			peerID = session.PeerID
 		}
-		controller.ReportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
+		runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
 	}
 	return result
 }
