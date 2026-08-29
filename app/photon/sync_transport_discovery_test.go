@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -226,14 +227,10 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 		limits: syncLimits(config),
 	}
 	state.Lock()
-	err = service.hostRuntime.ExecuteGossipInbound(
-		context.Background(),
-		service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
-		controller,
-	)
+	_, err = service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, service.Sync.now(), controller)
 	state.Unlock()
 	if err != nil {
-		t.Fatalf("ExecuteGossipInbound: %v", err)
+		t.Fatalf("HandleGossipHostEvent: %v", err)
 	}
 
 	deadline := time.Now().Add(time.Second)

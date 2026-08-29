@@ -13,9 +13,8 @@ func RoutePacket(packet *Packet, sessions map[string]*SyncSession) SyncEvent {
 	return &UnsolicitedPacketEvent{Packet: packet}
 }
 
-// PacketEvent is delivered when a packet matches an active sync session.
-// SyncSession does not consume this event directly; a platform executor
-// translates the message into the appropriate protocol event or response.
+// PacketEvent identifies a packet matched to an active sync session. The
+// HostRuntime packet dispatcher translates it into a protocol event/response.
 type PacketEvent struct {
 	Session *SyncSession
 	Packet  *Packet
@@ -23,9 +22,8 @@ type PacketEvent struct {
 
 func (*PacketEvent) SyncEventMarker() {}
 
-// UnsolicitedPacketEvent is delivered when no active session matches. The
-// platform executor may service read-only requests or use announcements as a
-// hint to start a session.
+// UnsolicitedPacketEvent identifies a packet without an active session. The
+// HostRuntime may service read-only requests or use announcements as a hint.
 type UnsolicitedPacketEvent struct {
 	Packet *Packet
 }

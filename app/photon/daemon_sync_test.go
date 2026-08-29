@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
@@ -252,7 +253,7 @@ func TestDaemonEventLoopAnnounceIsHint(t *testing.T) {
 	if got := service.hostRuntime.PendingEventCount(); got != 1 {
 		t.Fatalf("announce hint queued %d events, want one sync timer", got)
 	}
-	ev, ok := service.hostRuntime.GossipEventFor(<-service.hostRuntime.Events())
+	ev, ok := service.hostRuntime.GossipSessionEventFor(<-service.hostRuntime.Events())
 	if !ok {
 		t.Fatal("announce hint did not produce a gossip event")
 	}
@@ -338,12 +339,8 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		limits: syncLimits(config),
 	}
 	before := service.StateStore.Meta().Revision
-	if err := service.hostRuntime.ExecuteGossipInbound(
-		context.Background(),
-		service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
-		controller,
-	); err != nil {
-		t.Fatalf("ExecuteGossipInbound: %v", err)
+	if _, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller); err != nil {
+		t.Fatalf("HandleGossipHostEvent: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
 	if after != before {
@@ -490,7 +487,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 	if got := service.hostRuntime.PendingEventCount(); got != 1 {
 		t.Fatalf("follow-up hint queued %d sync events, want one", got)
 	}
-	ev, ok := service.hostRuntime.GossipEventFor(<-service.hostRuntime.Events())
+	ev, ok := service.hostRuntime.GossipSessionEventFor(<-service.hostRuntime.Events())
 	if !ok {
 		t.Fatal("follow-up hint did not produce a gossip event")
 	}

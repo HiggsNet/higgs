@@ -40,7 +40,8 @@ const (
 	kRoundMultiplier              = 5
 )
 
-// SyncEvent is an event delivered to a SyncSession by the daemon event loop.
+// SyncEvent advances one per-peer SyncSession. HostRuntime owns delivery;
+// platform composition does not dispatch these concrete event types.
 type SyncEvent interface {
 	SyncEventMarker()
 }

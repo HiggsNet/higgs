@@ -173,7 +173,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	if pull := <-pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
 		t.Fatalf("pull = %#v", pull)
 	}
-	if event, ok := runtime.GossipEventFor(<-runtime.Events()); !ok {
+	if event, ok := runtime.GossipSessionEventFor(<-runtime.Events()); !ok {
 		t.Fatal("object-pull completion was not queued")
 	} else if _, ok := event.(*gossip.ObjectPullResultEvent); !ok {
 		t.Fatalf("event = %T, want *gossip.ObjectPullResultEvent", event)
@@ -234,7 +234,7 @@ func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 	if len(controller.observations) != 2 || !controller.observations[0].SkippedOwnZone || controller.observations[1].Outcome.Zone != "remote.catofes." {
 		t.Fatalf("observations = %#v", controller.observations)
 	}
-	event, ok := runtime.GossipEventFor(<-runtime.Events())
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
 	if !ok {
 		t.Fatal("snapshot completion was not queued")
 	}

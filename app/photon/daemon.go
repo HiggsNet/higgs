@@ -21,7 +21,6 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -498,16 +497,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				}
 				continue
 			}
-			gossipResult, err := d.handleHostRuntimeGossipEvent(ctx, hostEvent)
-			if err != nil && gossipResult.Packet != nil {
-				packet := gossipResult.Packet
-				d.logWarn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-					"peer_id": packet.Message.PeerID,
-					"type":    packet.Message.Type,
-					"error":   err,
-					"reason":  gossip.RejectReason(err),
-				}, err))
-			}
+			_, _ = d.handleHostRuntimeGossipEvent(ctx, hostEvent)
 		}
 	}
 }

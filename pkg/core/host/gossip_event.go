@@ -9,20 +9,20 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-type GossipEventController interface {
+type gossipSessionEffects interface {
 	GossipActionController
 	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
 	ObserveGossipCatalogPage(string, *corestate.CatalogPage)
 	ObserveGossipChunkRepair(string)
 }
 
-// GossipHostEventController is the single platform hook set used while
+// GossipHostEffects is the temporary effect set used while
 // Runtime consumes its own gossip queue. ObserveGossipInbound may record the
 // accepted source address or other platform observability, but it must not
 // advance the protocol engine or reinterpret inbound actions.
-type GossipHostEventController interface {
-	GossipEventController
-	GossipInboundController
+type GossipHostEffects interface {
+	gossipSessionEffects
+	gossipPacketEffects
 	ObserveGossipInbound(context.Context, *gossip.Packet, time.Time) error
 }
 
@@ -45,11 +45,10 @@ type GossipEventResult struct {
 }
 
 // GossipHostEventResult describes the common gossip work performed for one
-// Runtime event. Platform composition uses the detached packet/event fields
-// only for logging and platform reconciliation after common processing.
+// Runtime event. It does not expose the received packet or logging outcome;
+// platform composition only observes session changes needed during migration.
 type GossipHostEventResult struct {
 	Handled bool
-	Packet  *gossip.Packet
 	Event   gossip.SyncEvent
 	Session GossipEventResult
 }
@@ -57,7 +56,7 @@ type GossipHostEventResult struct {
 // HandleGossipHostEvent is the only switch from Runtime queue events to the
 // gossip inbound planner or session FSM. Packet, timer and object-pull
 // completion producers therefore share one consumer on every platform.
-func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipHostEventController) (GossipHostEventResult, error) {
+func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipHostEffects) (GossipHostEventResult, error) {
 	var out GossipHostEventResult
 	if runtime == nil {
 		return out, ErrRuntimeStopped
@@ -67,31 +66,45 @@ func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Eve
 	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
-		out.Packet = received.Packet
 		if received.Packet == nil {
 			return out, nil
 		}
 		if err := controller.ObserveGossipInbound(ctx, received.Packet, now); err != nil {
+			runtime.logGossipPacketFailure(received.Packet, err)
 			return out, err
 		}
-		return out, runtime.ExecuteGossipInbound(ctx, runtime.Gossip.PlanInbound(received.Packet), controller)
+		err := runtime.executeGossipPacketActions(ctx, runtime.Gossip.PlanInbound(received.Packet), controller)
+		if err != nil {
+			runtime.logGossipPacketFailure(received.Packet, err)
+		}
+		return out, err
 	}
-	event, ok := runtime.GossipEventFor(hostEvent)
+	event, ok := runtime.GossipSessionEventFor(hostEvent)
 	if !ok {
 		return out, nil
 	}
 	out.Handled = true
 	out.Event = event
-	result, err := runtime.HandleGossipEvent(ctx, event, now, controller)
+	result, err := runtime.handleGossipSessionEvent(ctx, event, now, controller)
 	out.Session = result
 	return out, err
 }
 
-// HandleGossipEvent is the single common bridge from Engine/FSM advancement
+func (runtime *Runtime) logGossipPacketFailure(packet *gossip.Packet, err error) {
+	peerID := ""
+	fields := map[string]any{"reason": gossip.RejectReason(err)}
+	if packet != nil && packet.Message != nil {
+		peerID = packet.Message.PeerID
+		fields["type"] = packet.Message.Type
+	}
+	runtime.logGossip("warn", "packet_failed", peerID, "packet", err, fields)
+}
+
+// handleGossipSessionEvent is the internal bridge from Engine/FSM advancement
 // to ordered HostRuntime effects. Platform code may enrich an event before
 // calling it and observe the detached result afterwards, but cannot implement
 // a second Engine-to-action loop.
-func (runtime *Runtime) HandleGossipEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller GossipEventController) (GossipEventResult, error) {
+func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller gossipSessionEffects) (GossipEventResult, error) {
 	var out GossipEventResult
 	if runtime == nil {
 		return out, ErrRuntimeStopped

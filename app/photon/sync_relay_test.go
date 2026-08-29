@@ -51,7 +51,7 @@ func TestRelaySyncQueuesCompactCatalogSummary(t *testing.T) {
 
 	select {
 	case hostEvent := <-service.hostRuntime.Events():
-		event, _ := service.hostRuntime.GossipEventFor(hostEvent)
+		event, _ := service.hostRuntime.GossipSessionEventFor(hostEvent)
 		timer, ok := event.(*gossip.SyncTimerEvent)
 		if !ok {
 			t.Fatalf("relay event = %T, want *SyncTimerEvent", event)

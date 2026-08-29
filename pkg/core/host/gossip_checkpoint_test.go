@@ -33,7 +33,7 @@ func TestRuntimeCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testi
 	session.State = gossip.SyncSessionSummarySent
 	controller := &memoryGossipController{}
 
-	result, err := runtime.HandleGossipEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
+	result, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
 	if err != nil || !result.Done || result.NewState != gossip.SyncSessionFailed {
 		t.Fatalf("result/error = %#v/%v", result, err)
 	}

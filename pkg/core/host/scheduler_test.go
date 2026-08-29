@@ -252,7 +252,7 @@ func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 	if err := runtime.PostGossip(external); !errors.Is(err, ErrEventQueueFull) {
 		t.Fatalf("full queue error = %v", err)
 	}
-	if event, ok := runtime.GossipEventFor(<-runtime.Events()); !ok || event != external {
+	if event, ok := runtime.GossipSessionEventFor(<-runtime.Events()); !ok || event != external {
 		t.Fatalf("external event = %T ok=%v", event, ok)
 	}
 	deadline := clock.Now().Add(time.Second)
@@ -260,7 +260,7 @@ func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 		t.Fatalf("timer action handled=%v err=%v", handled, err)
 	}
 	clock.Advance(time.Second)
-	event, ok := runtime.GossipEventFor(<-runtime.Events())
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
 	if !ok {
 		t.Fatal("timer fire was not accepted")
 	}

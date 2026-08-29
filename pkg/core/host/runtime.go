@@ -162,10 +162,10 @@ func (runtime *Runtime) PostCompletion(ctx context.Context, completion Completio
 	}
 }
 
-// GossipEventFor consumes a host event that belongs to gossip. Timer
+// GossipSessionEventFor converts a host event into one session-FSM event. Timer
 // generations are accepted here, at the single-writer boundary, so a queued
 // timeout made stale by cancel/replace cannot advance a session.
-func (runtime *Runtime) GossipEventFor(event Event) (gossip.SyncEvent, bool) {
+func (runtime *Runtime) GossipSessionEventFor(event Event) (gossip.SyncEvent, bool) {
 	if runtime == nil || event == nil {
 		return nil, false
 	}

@@ -297,11 +297,11 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	controller := &daemonGossipActionController{
 		daemon: d, now: eventNow, limits: syncLimits(d.Sync.Config),
 	}
-	result, err := d.hostRuntime.HandleGossipEvent(ctx, event, eventNow, controller)
+	hostResult, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, controller)
 	if err != nil {
 		return false
 	}
-	return d.observeSyncEventResult(event, result, eventNow)
+	return d.observeSyncEventResult(event, hostResult.Session, eventNow)
 }
 
 func (d *DaemonService) handleHostRuntimeGossipEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {

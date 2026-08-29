@@ -961,6 +961,10 @@ package dependency: app -> host -> gossip -> state -> zone
         注入统一 logger，不再通过 `ReportGossipIssue` 逐事件接收并重新解释日志。下一步同时把当前公开的
         `ExecuteGossipInbound`/`HandleGossipEvent` 两段改成 HostRuntime 内部 packet dispatch/session FSM dispatch，删除容易误解为
         两套 event loop 的 `InboundController/EventController` 边界。
+        该 API 收口已开始：`ExecuteGossipInbound` 已变为私有 `executeGossipPacketActions`，`HandleGossipEvent` 已变为私有
+        `handleGossipSessionEvent`，平台生产代码与 app 测试均只进入 `HandleGossipHostEvent`；两个公开 controller 已折叠为一个
+        临时 `GossipHostEffects`，内部接口按 packet effects/session effects 命名，待剩余 effect 收回后整体删除。packet failure
+        也已由 HostRuntime 记录，`GossipHostEventResult` 不再暴露原始 packet 给 daemon/`sync serve` 二次解释和输出日志。
     - [ ] F0e4：删除 `daemonGossipActionController` 及 Windows memory test 中等价 controller glue；Linux/Windows composition
       均直接构造同一个 HostRuntime + Store + Transport。通过 host/state/gossip race、Linux `make check`/smoke 与 Windows
       amd64 compile guard 后才开始真实 Windows UDP adapter。

@@ -9,10 +9,10 @@ import (
 
 const GossipPhaseInbound = "inbound"
 
-// GossipInboundController extends the common state/send capabilities with the
+// gossipPacketEffects contains the remaining effects needed while dispatching
 // remaining host effects required by verified inbound packets. Ping and
 // catalog response protocol logic stays in this package and pkg/core/gossip.
-type GossipInboundController interface {
+type gossipPacketEffects interface {
 	GossipDatagramBudget() int
 	SendGossip(context.Context, gossip.OutboundMessage) error
 	ObserveGossipCatalogSummary(string, *corestate.CatalogSummary)
@@ -25,9 +25,9 @@ type GossipInboundController interface {
 	HandleGossipObjectChunkNACK(context.Context, *gossip.Message) error
 }
 
-// ExecuteGossipInbound executes the ordered decisions produced by
+// executeGossipPacketActions executes the ordered decisions produced by
 // gossip.PlanInboundPacket. Platforms no longer switch on InboundActionKind.
-func (runtime *Runtime) ExecuteGossipInbound(ctx context.Context, actions []gossip.InboundAction, controller GossipInboundController) error {
+func (runtime *Runtime) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, controller gossipPacketEffects) error {
 	if runtime == nil {
 		return ErrRuntimeStopped
 	}
@@ -84,7 +84,7 @@ func (runtime *Runtime) ExecuteGossipInbound(ctx context.Context, actions []goss
 	return nil
 }
 
-func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.InboundAction, controller GossipInboundController) error {
+func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.InboundAction, controller gossipPacketEffects) error {
 	message := action.Message
 	if message == nil || message.Ping == nil {
 		return nil
@@ -113,7 +113,7 @@ func (runtime *Runtime) respondGossipPing(ctx context.Context, action gossip.Inb
 	return nil
 }
 
-func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, controller GossipInboundController) {
+func (runtime *Runtime) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, controller gossipPacketEffects) {
 	if message == nil || message.FetchCatalogPage == nil {
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -128,18 +129,15 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 			now:    now,
 			limits: syncLimits(config),
 		}
-		done <- service.hostRuntime.ExecuteGossipInbound(
-			context.Background(),
-			service.hostRuntime.Gossip.PlanInbound(&gossip.Packet{Message: message}),
-			controller,
-		)
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
 			unlock()
-			t.Fatalf("ExecuteGossipInbound: %v", err)
+			t.Fatalf("HandleGossipHostEvent: %v", err)
 		}
 	case <-time.After(time.Second):
 		unlock()
@@ -359,7 +357,7 @@ func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
 	}
 	select {
 	case hostEvent := <-service.hostRuntime.Events():
-		event, _ := service.hostRuntime.GossipEventFor(hostEvent)
+		event, _ := service.hostRuntime.GossipSessionEventFor(hostEvent)
 		applied, ok := event.(*SnapshotAppliedEvent)
 		if !ok || applied.Err == nil {
 			t.Fatalf("apply completion = %#v, want SnapshotAppliedEvent error", event)
@@ -409,7 +407,7 @@ func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalStat
 	}
 	select {
 	case hostEvent := <-service.hostRuntime.Events():
-		event, _ := service.hostRuntime.GossipEventFor(hostEvent)
+		event, _ := service.hostRuntime.GossipSessionEventFor(hostEvent)
 		applied, ok := event.(*SnapshotAppliedEvent)
 		if !ok || applied.Err != nil {
 			t.Fatalf("apply completion = %#v, want successful merge acknowledgement", event)

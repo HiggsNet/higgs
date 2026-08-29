@@ -36,7 +36,7 @@ func TestRuntimeHandleGossipObjectChunkCompletesIntoCommonEventQueue(t *testing.
 			t.Fatalf("final result = %#v", result)
 		}
 	}
-	event, ok := runtime.GossipEventFor(<-runtime.Events())
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
 	completed, completedOK := event.(*gossip.ObjectChunkEvent)
 	if !ok || !completedOK || completed.Snapshot == nil || completed.Snapshot.Zone != snapshot.Zone {
 		t.Fatalf("completion event = %#v", event)
@@ -61,7 +61,7 @@ func TestRuntimeHandleGossipObjectChunkRejectsAndCheckpointsInvalidObject(t *tes
 	if len(store.updates) != 1 || store.updates[0]["peer-a"].Reject == nil {
 		t.Fatalf("checkpoint updates = %#v", store.updates)
 	}
-	event, ok := runtime.GossipEventFor(<-runtime.Events())
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
 	rejected, rejectedOK := event.(*gossip.ObjectChunkEvent)
 	if !ok || !rejectedOK || !errors.Is(rejected.Err, err) {
 		t.Fatalf("rejection event = %#v", event)

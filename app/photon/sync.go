@@ -271,16 +271,7 @@ func syncServe(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case hostEvent := <-service.hostRuntime.Events():
-			result, err := service.handleHostRuntimeGossipEvent(ctx, hostEvent)
-			if err != nil && result.Packet != nil {
-				packet := result.Packet
-				logger.Warn("gossip", "packet_failed", addGossipErrorFields(map[string]any{
-					"peer_id": packet.Message.PeerID,
-					"type":    packet.Message.Type,
-					"reason":  gossip.RejectReason(err),
-					"error":   err,
-				}, err))
-			}
+			_, _ = service.handleHostRuntimeGossipEvent(ctx, hostEvent)
 		}
 	}
 }

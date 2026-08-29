@@ -75,7 +75,7 @@ func (controller *memoryInboundController) HandleGossipObjectChunkNACK(context.C
 	return controller.controllerErr
 }
 
-func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
+func TestRuntimeExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T) {
 	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	controller := &memoryInboundController{}
@@ -85,8 +85,8 @@ func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 1}},
 	}}
 	actions := runtime.Gossip.PlanInbound(packet)
-	if err := runtime.ExecuteGossipInbound(context.Background(), actions, controller); err != nil {
-		t.Fatalf("ExecuteGossipInbound: %v", err)
+	if err := runtime.executeGossipPacketActions(context.Background(), actions, controller); err != nil {
+		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) != 2 || controller.outbound[0].Message.Type != gossip.MessagePong || controller.outbound[1].Message.Type != gossip.MessageFetchCatalogPage {
 		t.Fatalf("outbound = %#v, want PONG then FETCH_CATALOG_PAGE", controller.outbound)
@@ -96,7 +96,7 @@ func TestRuntimeExecuteGossipInboundPlansPingResponsesAndHint(t *testing.T) {
 	}
 }
 
-func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
+func TestRuntimeExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T) {
 	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("a.catofes.", "b.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
 	controller := &memoryInboundController{
@@ -107,8 +107,8 @@ func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
 		PeerID:           "peer-a",
 		FetchCatalogPage: &gossip.FetchCatalogPage{},
 	}}
-	if err := runtime.ExecuteGossipInbound(context.Background(), runtime.Gossip.PlanInbound(packet), controller); err != nil {
-		t.Fatalf("ExecuteGossipInbound: %v", err)
+	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(packet), controller); err != nil {
+		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.pages) != 1 || len(controller.outbound) != 1 || controller.outbound[0].Message.CatalogPage != controller.pages[0] {
 		t.Fatalf("pages/outbound = %#v/%#v", controller.pages, controller.outbound)
@@ -118,7 +118,7 @@ func TestRuntimeExecuteGossipInboundBuildsBoundedCatalogPage(t *testing.T) {
 	}
 }
 
-func TestRuntimeExecuteGossipInboundRespondsToActivePingWhenQueueFull(t *testing.T) {
+func TestRuntimeExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull(t *testing.T) {
 	controller := &memoryInboundController{}
 	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
 	defer runtime.Stop()
@@ -131,8 +131,8 @@ func TestRuntimeExecuteGossipInboundRespondsToActivePingWhenQueueFull(t *testing
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote")}},
 	}}
-	if err := runtime.ExecuteGossipInbound(context.Background(), runtime.Gossip.PlanInbound(packet), controller); err != nil {
-		t.Fatalf("ExecuteGossipInbound: %v", err)
+	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(packet), controller); err != nil {
+		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) == 0 || controller.outbound[0].Message.Type != gossip.MessagePong {
 		t.Fatalf("outbound = %#v, want responder PONG", controller.outbound)
