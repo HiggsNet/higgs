@@ -90,7 +90,7 @@ func TestDaemonRecordPutUsesStateStoreWhileConstructorInputLocked(t *testing.T) 
 	if version != 1 {
 		t.Fatalf("version = %d, want 1", version)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if got := snapshot.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
 		t.Fatal("committed snapshot missing locked record")
 	}
@@ -149,7 +149,7 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForConstructorInputLock(t *testing.T
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if got := snapshot.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
 		t.Fatal("committed snapshot missing event-loop record")
 	}
@@ -191,7 +191,7 @@ func TestDaemonEndpointTimerUsesStateStoreWhileConstructorInputLocked(t *testing
 	}
 	unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if got := snapshot.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
 		t.Fatal("committed snapshot missing endpoint record")
 	}
@@ -309,7 +309,7 @@ func TestDaemonIPsecPortRotateUsesStateStoreWhileConstructorInputLocked(t *testi
 	if result == nil || result.CurrentGeneration == 0 {
 		t.Fatalf("rotate result = %#v", result)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.IPsecPortRecord == nil || snapshot.IPsecPortRecord.Generation != result.CurrentGeneration {
 		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", snapshot.IPsecPortRecord, result.CurrentGeneration)
 	}
@@ -558,7 +558,7 @@ func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing
 	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
 		t.Fatalf("delegate issue result = %#v", result)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if got := snapshot.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		t.Fatal("committed snapshot missing catofes delegation")
 	}
@@ -749,7 +749,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if state.Admission != nil {
 		t.Fatal("prepareStartupState mutated the detached constructor input")
 	}
-	committed, rev := service.StateStore.Snapshot()
+	committed, rev := snapshotTestDaemonState(service.StateStore)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
 	}

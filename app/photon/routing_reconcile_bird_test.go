@@ -431,7 +431,7 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
 	}
 	service := &DaemonService{StateStore: newTestDaemonStateStore(initial)}
-	workspace, rev := service.StateStore.Snapshot()
+	workspace, rev := snapshotTestDaemonState(service.StateStore)
 	baseBird := cloneBirdInstances(workspace.BirdInstances)
 	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
 	workspace.RoutingReconcile.LastRunUnix = 20

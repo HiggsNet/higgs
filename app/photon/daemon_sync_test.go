@@ -302,7 +302,7 @@ func TestDaemonUnsolicitedPingSummaryMatchSkipsSession(t *testing.T) {
 		t.Fatalf("expected no sync events, got %d", got)
 	}
 
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	peerState := snapshot.SyncPeers[peerID]
 	if peerState.LastSyncUnix != now.Unix() {
 		t.Fatalf("LastSyncUnix = %d, want %d", peerState.LastSyncUnix, now.Unix())
@@ -396,7 +396,7 @@ func TestDaemonSyncEventBatchesActiveBackoffAndCompletion(t *testing.T) {
 	if after != before {
 		t.Fatalf("verified revision = %d, want checkpoint update to keep %d", after, before)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	peerState := snapshot.SyncPeers[peerID]
 	observed, ok := service.hostRuntime.Observability.Snapshot(peerID, now)
 	if !ok || observed.ActivePullLastEvent != "round_timeout" || peerState.FailureCount != 1 || peerState.LastError != "round timeout" {

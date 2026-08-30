@@ -250,7 +250,7 @@ func TestExecuteSyncActionsAppliesSnapshotThroughStateStore(t *testing.T) {
 		t.Fatal("executeSyncActions changed = false, want true")
 	}
 
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if got := committed.Network.Zones["node-b.catofes."].Records["remote-record"]; got == nil {
 		t.Fatal("committed snapshot missing applied record")
 	}
@@ -292,7 +292,7 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
 		t.Fatalf("verified revision = %d, want unchanged %d", revision, beforeRevision)
 	}
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if afterRoot := corestate.ZoneRoot(committed.Network.Zones["node-b.catofes."]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("no-op snapshot changed zone root: before=%x after=%x", beforeRoot, afterRoot)
 	}
@@ -348,7 +348,7 @@ func TestExecuteSyncActionsRejectsSnapshotOutsideAdvertisedRoot(t *testing.T) {
 	if changed {
 		t.Fatal("root-mismatched snapshot changed Network")
 	}
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if afterRoot := corestate.ZoneRoot(committed.Network.Zones[snapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("root-mismatched snapshot changed zone: before=%x after=%x", beforeRoot, afterRoot)
 	}
@@ -396,7 +396,7 @@ func TestExecuteSyncActionsAcceptsAdvertisedSnapshotWhenMergeKeepsNewerLocalStat
 	if changed {
 		t.Fatal("stale snapshot changed Network")
 	}
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if afterRoot := corestate.ZoneRoot(committed.Network.Zones[staleSnapshot.Zone]); !bytes.Equal(afterRoot, beforeRoot) {
 		t.Fatalf("non-converging snapshot changed local root: before=%x after=%x", beforeRoot, afterRoot)
 	}
@@ -564,7 +564,7 @@ drainEvents:
 	if targetState.Network.Zones["catofes."] != nil {
 		t.Fatal("daemon object chunk mutated the detached constructor input")
 	}
-	committed, rev := service.StateStore.Snapshot()
+	committed, rev := snapshotTestDaemonState(service.StateStore)
 	if rev <= beforeRev {
 		t.Fatalf("state revision = %d, want object apply after %d", rev, beforeRev)
 	}
@@ -632,7 +632,7 @@ func TestDaemonHandleObjectChunkRejectUsesPeerCOW(t *testing.T) {
 	if len(state.SyncPeers[peerID].RejectedDigests) != 0 {
 		t.Fatal("chunk rejection mutated the old live peer state")
 	}
-	committed, rev := service.StateStore.Snapshot()
+	committed, rev := snapshotTestDaemonState(service.StateStore)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want rejected checkpoint to keep %d", rev, beforeRev)
 	}

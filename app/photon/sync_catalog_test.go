@@ -71,7 +71,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 		t.Fatal("root grant snapshot was not committed")
 	}
 
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	managedState := committed.Network.Zones[managed]
 	if managedState.Authority.Epoch != 2 {
 		t.Fatalf("managed authority epoch = %d, want 2", managedState.Authority.Epoch)
@@ -121,7 +121,7 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 		t.Fatal("snapshot execution aborted")
 	}
 
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if got := committed.Network.Zones[managed].Authority.Epoch; got != 1 {
 		t.Fatalf("managed authority epoch = %d, want rollback to 1", got)
 	}
@@ -152,7 +152,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 		t.Fatal("prepareStartupState did not refresh cached managed authority")
 	}
 
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	if got := committed.Network.Zones[managed].Authority.Epoch; got != 2 {
 		t.Fatalf("managed authority epoch = %d, want 2", got)
 	}

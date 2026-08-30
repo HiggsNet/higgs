@@ -471,7 +471,7 @@ func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 	}
 	state.Unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	peerState := snapshot.SyncPeers["node-b.catofes."]
 	if peerState.ObservedAddr != "198.51.100.9:33434" {
 		t.Fatalf("observed addr = %q, want packet source", peerState.ObservedAddr)

@@ -297,9 +297,7 @@ func (s *DaemonStateStore) commitPeerCleanupsIfRevision(revision uint64, cleanup
 	})
 }
 
-// refreshMeta records publication metadata after either owner changes. The
-// aggregate stateFile is intentionally not cached; legacy consumers compose a
-// detached snapshot only when they request one.
+// refreshMeta records publication metadata after either owner changes.
 func (s *DaemonStateStore) refreshMeta() {
 	if s == nil || s.common == nil {
 		return
@@ -315,17 +313,8 @@ func (s *DaemonStateStore) refreshMeta() {
 	}
 }
 
-func (s *DaemonStateStore) Snapshot() (*stateFile, uint64) {
-	common, runtime := s.readCommonAndRuntime()
-	if common.State == nil {
-		return nil, 0
-	}
-	return composeLinuxStateView(common, runtime), uint64(common.Revision)
-}
-
 // readCommonAndRuntime returns detached snapshots of the two actual state
-// owners at one serialized revision. It deliberately does not construct the
-// temporary aggregate stateFile compatibility view.
+// owners at one serialized revision.
 func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntimeState) {
 	if s == nil || s.common == nil {
 		return corestate.View{}, nil

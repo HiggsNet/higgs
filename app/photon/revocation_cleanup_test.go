@@ -441,7 +441,7 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 	}
 	state.Unlock()
 
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if got := snapshot.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
 		t.Fatalf("committed discovered addr = %q, want cleared", got)
 	}

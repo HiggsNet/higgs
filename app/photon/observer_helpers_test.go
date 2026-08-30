@@ -32,7 +32,7 @@ func updateTestObserverState(srv *observerServer, fn func(*stateFile)) {
 	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
 		return
 	}
-	state, _ := srv.daemon.StateStore.Snapshot()
+	state, _ := snapshotTestDaemonState(srv.daemon.StateStore)
 	fn(state)
 	replaceTestDaemonState(srv.daemon.StateStore, state)
 }

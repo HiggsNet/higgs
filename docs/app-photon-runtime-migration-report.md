@@ -121,7 +121,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 HostRuntime；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
-| `daemon_state_store.go` | Linux runtime 持久化顺序、临时聚合测试视图和少量 mutation coordinator | HostRuntime 已直接持有 common Store，remote/checkpoint/read forwarding 已删除；剩余 Linux commit 迁入 platform owner，聚合 Snapshot fixture 改完后删除该文件 |
+| `daemon_state_store.go` | Linux runtime 持久化顺序和少量 mutation coordinator | HostRuntime 已直接持有 common Store，remote/checkpoint/read forwarding 与生产 Snapshot API 已删除；剩余 Linux commit 迁入 platform owner 后删除该文件 |
 | `daemon_sync.go` | HostRuntime 终态结果到 Linux reconcile 的接线 | gossip packet/session FSM、发送、observed checkpoint、relay、日志和 observability 已在 HostRuntime 闭环；daemon 不再提供 gossip I/O/controller adapter |
 
 ### 3.2 DB、debug 和 diagnostics

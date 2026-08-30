@@ -42,7 +42,7 @@ func (d *DaemonService) currentState() *stateFile {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	state, _ := d.StateStore.Snapshot()
+	state, _ := snapshotTestDaemonState(d.StateStore)
 	return state
 }
 

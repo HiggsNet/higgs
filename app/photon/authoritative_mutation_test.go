@@ -40,7 +40,7 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 		t.Fatalf("revision changed on rejection: before=%d after=%d", beforeRevision, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("rejected assignment entered committed state")
 	}
@@ -208,7 +208,7 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 		t.Fatalf("dry-run revision changed: before=%d after=%d", before, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.2.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("dry-run record entered committed state")
 	}
@@ -306,7 +306,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 		t.Fatalf("ipam_mutate response = %+v", response)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.8.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.Network.Zones[managed].Records[key] == nil {
 		t.Fatal("typed control mutation did not enter committed state")
 	}

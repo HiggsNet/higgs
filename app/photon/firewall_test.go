@@ -919,7 +919,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	snapshot, rev := service.StateStore.Snapshot()
+	snapshot, rev := snapshotTestDaemonState(service.StateStore)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
@@ -967,7 +967,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.FirewallReconcile == nil || snapshot.FirewallReconcile.Instances["photontesth2"] == nil {
 		t.Fatalf("firewall reconcile state missing after recover: %+v", snapshot.FirewallReconcile)
 	}

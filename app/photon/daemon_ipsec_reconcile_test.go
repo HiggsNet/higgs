@@ -376,7 +376,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	snapshot, rev := service.StateStore.Snapshot()
+	snapshot, rev := snapshotTestDaemonState(service.StateStore)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}

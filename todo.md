@@ -991,6 +991,9 @@ package dependency: app -> host -> gossip -> state -> zone
         expected-revision intent commit；gossip 若在两步之间推进 verified revision，旧平台计划 fail closed 并交给下一轮 reconcile。
       - [ ] F0e5b：迁走剩余 production `stateFile` 输入并批量改写依赖 `DaemonStateStore.Snapshot()` 的测试 fixture，随后删除
         aggregate Snapshot/clone、legacy alias 和没有多调用方价值的 runtime commit wrapper；同步更新 runtime migration report。
+        - [x] 49 处测试读取已改为 test-only `snapshotTestDaemonState`，生产 `DaemonStateStore.Snapshot()` 已删除；测试需要的
+          aggregate shape 不再迫使生产类型暴露 Snapshot API。
+        - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

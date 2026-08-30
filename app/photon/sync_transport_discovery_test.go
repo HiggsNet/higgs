@@ -47,7 +47,7 @@ func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncCo
 	service := newTestDaemonService(rt, state, config, time.Second)
 	setTestGossipTransport(t, service, transport)
 	service.updateDiscoveredPeers()
-	committed, _ := service.StateStore.Snapshot()
+	committed, _ := snapshotTestDaemonState(service.StateStore)
 	state.Network = committed.Network
 	state.SyncPeers = committed.SyncPeers
 }

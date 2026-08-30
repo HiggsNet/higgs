@@ -219,6 +219,14 @@ func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {
 	return store
 }
 
+func snapshotTestDaemonState(store *DaemonStateStore) (*stateFile, uint64) {
+	common, runtime := store.readCommonAndRuntime()
+	if common.State == nil {
+		return nil, 0
+	}
+	return composeLinuxStateView(common, runtime), uint64(common.Revision)
+}
+
 func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheckpoint {
 	out := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint, len(peers))}
 	for peerID, peer := range peers {
@@ -246,7 +254,7 @@ func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
 	if store == nil || fn == nil {
 		return
 	}
-	state, _ := store.Snapshot()
+	state, _ := snapshotTestDaemonState(store)
 	fn(state)
 }
 
@@ -254,12 +262,12 @@ func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (ui
 	if store == nil {
 		return 0, false, fmt.Errorf("store is nil")
 	}
-	_, revision := store.Snapshot()
+	_, revision := snapshotTestDaemonState(store)
 	return store.commitRuntimeIfRevision(revision, fn)
 }
 
 func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64, error) {
-	state, _ := store.Snapshot()
+	state, _ := snapshotTestDaemonState(store)
 	if state == nil {
 		return 0, fmt.Errorf("state is nil")
 	}

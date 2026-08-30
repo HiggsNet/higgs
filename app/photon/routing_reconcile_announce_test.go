@@ -19,7 +19,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if len(snapshot.Network.Zones["node-a.catofes."].Records) != 0 {
 		t.Fatalf("expected no announcements when disabled, got %d", len(snapshot.Network.Zones["node-a.catofes."].Records))
 	}
@@ -38,7 +38,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
@@ -68,7 +68,7 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected withdrawal record for %s", key)
@@ -99,7 +99,7 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
@@ -125,7 +125,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("192.168.0.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	if snapshot.Network.Zones["node-a.catofes."].Records[key] != nil {
 		t.Fatalf("expected no announcement for invalid assignment")
 	}
@@ -153,7 +153,7 @@ func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	rec := snapshot.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement from local AllAssignments entry")
@@ -181,7 +181,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	snapshot, _ := service.StateStore.Snapshot()
+	snapshot, _ := snapshotTestDaemonState(service.StateStore)
 	for _, prefix := range []string{"10.0.1.0/24", "10.0.2.0/24"} {
 		key, _ := routing.NormalizeRouteAnnouncementKey(prefix)
 		ann, err := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[key])
@@ -199,7 +199,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
 	}
-	snapshot, _ = service.StateStore.Snapshot()
+	snapshot, _ = snapshotTestDaemonState(service.StateStore)
 	edgeKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.2.0/24")
 	edgeAnn, _ := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[edgeKey])
 	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[serviceKey])
@@ -214,7 +214,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
 	}
-	snapshot, _ = service.StateStore.Snapshot()
+	snapshot, _ = snapshotTestDaemonState(service.StateStore)
 	localKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.1.0/24")
 	localAnn, _ := routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[localKey])
 	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(snapshot.Network.Zones["node-a.catofes."].Records[serviceKey])
