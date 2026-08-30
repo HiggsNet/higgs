@@ -183,7 +183,7 @@ func TestAdmissionStatePersistsAcrossReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if !autoJoinPending(state) {
+	if !autoJoinPendingVerified(verifiedStateForTest(state)) {
 		t.Fatalf("state should start pending")
 	}
 

@@ -47,8 +47,8 @@ func TestLoadStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if state.ManagedZone != "node-b.catofes." || !autoJoinPending(state) {
-		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPending(state))
+	if state.ManagedZone != "node-b.catofes." || !autoJoinPendingVerified(verifiedStateForTest(state)) {
+		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPendingVerified(verifiedStateForTest(state)))
 	}
 	if !equalPublicKey(state.ZonePrivateKey.Public().(ed25519.PublicKey), pub) {
 		t.Fatalf("ZonePrivateKey public mismatch")

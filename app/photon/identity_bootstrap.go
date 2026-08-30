@@ -186,15 +186,6 @@ func writeJoinRequestFromConfig(outPath string) error {
 	return nil
 }
 
-func autoJoinPending(state *stateFile) bool {
-	if state == nil {
-		return false
-	}
-	return autoJoinPendingVerified(&corestate.VerifiedState{
-		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-	})
-}
-
 func autoJoinPendingVerified(state *corestate.VerifiedState) bool {
 	if state == nil || state.Network == nil || state.ManagedZone == "" || state.ManagedZone == zone.RootZone {
 		return false

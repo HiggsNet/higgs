@@ -184,9 +184,9 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
-| `record.go` | record CLI、旧 direct 签名和查询 | mutation 只调 state intent；查询进 inspect；CLI 进 photoncli；本地签名 helper 删除 |
+| `record.go` | record CLI 和查询 | mutation 只调 state intent；旧 aggregate 本地签名 helper 已移到 test-only fixture；查询进 inspect，CLI 进 photoncli |
 | `recovery.go` | export/import/pull/purge 和 Linux cleanup | export/import/pull/purge 已通过唯一 BoltStore、common Store typed API 与 Linux runtime candidate 完成，不再读写旧 Network；继续把平台 cleanup 交 controller，CLI 进 photoncli |
-| `revocation_cleanup.go` | impact、peer cache cleanup、purge plan | verified/checkpoint purge 留 state；平台 cleanup 变成 host action；view 进 inspect |
+| `revocation_cleanup.go` | impact、typed peer cleanup policy、purge plan | 未接线的旧 aggregate peer-cache mutator 已删除；verified/checkpoint purge 留 state，平台 cleanup 变成 host action，view 进 inspect |
 | `root.go` | root public key CLI | Store read API + photoncli |
 | `route.go` | route CLI、旧 direct mutation、报告 | mutation进 state intent；授权计算留 routing；报告进 inspect；CLI 进 photoncli |
 | `routing_config.go` | netns/BIRD/Babel/upstream config | `internal/photonlinux/routing/config` |

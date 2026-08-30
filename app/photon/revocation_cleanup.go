@@ -117,51 +117,8 @@ func isConfiguredBootstrapPeerWithConfig(config *syncConfigFile, peerID string) 
 	return false
 }
 
-// CleanupRevokedPeerCache removes or marks revoked peer entries from the local
-// SyncPeers cache. This implements Phase 6.5.5: revoked zones must not continue
-// to appear as discovered peers, maintain observed paths, or participate in
-// object pull candidates.
-//
-// Cleanup actions:
-//   - Clear discovered_addr / discovered_at for revoked peers
-//   - Clear observed_addr / observed grace addrs for revoked peers
-//   - Clear datagram / object-pull stats (they are no longer relevant)
-//   - Keep the SyncPeer entry itself with a Revoked marker so that debug output
-//     can show configured_but_revoked; the entry is cleaned via normal
-//     offline cleanup policy after a retention window.
-func CleanupRevokedPeerCache(state *stateFile, revokedZones map[zone.ZonePath]bool) {
-	if state == nil || len(revokedZones) == 0 {
-		return
-	}
-	for peerID, ps := range state.SyncPeers {
-		zp := zone.ZonePath(peerID)
-		if !revokedZones[zp] {
-			continue
-		}
-		// Clear runtime-relevant fields but keep the entry for diagnostics.
-		ps.DiscoveredAddr = ""
-		ps.DiscoveredAtUnix = 0
-		ps.ObservedAddr = ""
-		ps.ObservedFirstSeenUnix = 0
-		ps.ObservedLastSeenUnix = 0
-		ps.ObservedLastSyncUnix = 0
-		ps.ObservedUntilUnix = 0
-		ps.ObservedFailureCount = 0
-		ps.ObservedGraceAddrs = nil
-		// Drop diagnostics left by older state files. Current daemon diagnostics
-		// live in PeerObservability and are removed by the daemon cleanup path.
-		// Clear backoff so it doesn't interfere with future diagnostics.
-		ps.BackoffUntilUnix = 0
-		ps.FailureCount = 0
-		ps.LastError = "zone revoked"
-		state.SyncPeers[peerID] = ps
-	}
-}
-
-// peerNeedsRevocationCleanup reports whether CleanupRevokedPeerCache would
-// change the runtime-owned fields of one peer. Keeping this comparison next to
-// the mutator prevents the daemon fast path from drifting away from the
-// deny-first cleanup semantics.
+// peerNeedsRevocationCleanup reports whether the typed checkpoint cleanup
+// would change the runtime-owned fields of one peer.
 func peerNeedsRevocationCleanup(peer syncPeerState) bool {
 	return peer.DiscoveredAddr != "" ||
 		peer.DiscoveredAtUnix != 0 ||
@@ -175,16 +132,6 @@ func peerNeedsRevocationCleanup(peer syncPeerState) bool {
 		peer.BackoffUntilUnix != 0 ||
 		peer.FailureCount != 0 ||
 		peer.LastError != "zone revoked"
-}
-
-// CollectAllRevokedZones returns all zones that are currently revoked,
-// including descendants. This expands on collectRevokedPeerZones by scanning
-// all zones in the active state, not just those with LinkInstances/SyncPeers.
-func CollectAllRevokedZones(state *stateFile, now time.Time) map[zone.ZonePath]bool {
-	if state == nil || state.Network == nil {
-		return make(map[zone.ZonePath]bool)
-	}
-	return collectAllRevokedZones(state.Network, now)
 }
 
 func collectAllRevokedZones(network *zone.NetworkState, now time.Time) map[zone.ZonePath]bool {

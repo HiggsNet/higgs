@@ -22,7 +22,7 @@ import (
 func TestCollectAllRevokedZonesEmpty(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
-	revoked := CollectAllRevokedZones(state, now)
+	revoked := collectAllRevokedZones(state.Network, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected no revoked zones, got %d: %v", len(revoked), revoked)
 	}
@@ -45,7 +45,7 @@ func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	revoked := CollectAllRevokedZones(state, now)
+	revoked := collectAllRevokedZones(state.Network, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. to be revoked, got %v", revoked)
 	}
@@ -183,71 +183,6 @@ func TestComputeRevocationImpactNilState(t *testing.T) {
 
 // TestCleanupRevokedPeerCache verifies that runtime-relevant fields are cleared
 // for revoked peers while keeping the entry for diagnostics.
-func TestCleanupRevokedPeerCache(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	now := time.Unix(4140, 0)
-
-	// Set up sync peer with addresses and observed paths.
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {
-			DiscoveredAddr:       "192.0.2.1:33434",
-			DiscoveredAtUnix:     now.Add(-1 * time.Hour).Unix(),
-			ObservedAddr:         "192.0.2.1:33434",
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
-			ObservedGraceAddrs: []observedGraceAddrState{
-				{Addr: "192.0.2.2:33434", UntilUnix: now.Add(10 * time.Minute).Unix()},
-			},
-			BackoffUntilUnix: now.Add(30 * time.Second).Unix(),
-			FailureCount:     3,
-			LastError:        "timeout",
-		},
-		"node-a.catofes.": {
-			DiscoveredAddr: "192.0.2.10:33434",
-		},
-	}
-
-	revoked := map[zone.ZonePath]bool{"node-b.catofes.": true}
-	CleanupRevokedPeerCache(state, revoked)
-
-	// node-b should have cleared fields.
-	peerB := state.SyncPeers["node-b.catofes."]
-	if peerB.DiscoveredAddr != "" {
-		t.Fatalf("discovered addr not cleared: %s", peerB.DiscoveredAddr)
-	}
-	if peerB.ObservedAddr != "" {
-		t.Fatalf("observed addr not cleared: %s", peerB.ObservedAddr)
-	}
-	if peerB.ObservedLastSeenUnix != 0 {
-		t.Fatalf("observed last seen not cleared: %d", peerB.ObservedLastSeenUnix)
-	}
-	if peerB.ObservedGraceAddrs != nil {
-		t.Fatalf("observed grace addrs not cleared: %+v", peerB.ObservedGraceAddrs)
-	}
-	if peerB.BackoffUntilUnix != 0 {
-		t.Fatalf("backoff not cleared: %d", peerB.BackoffUntilUnix)
-	}
-	if peerB.FailureCount != 0 {
-		t.Fatalf("failure count not cleared: %d", peerB.FailureCount)
-	}
-	if peerB.LastError != "zone revoked" {
-		t.Fatalf("last error = %q, want 'zone revoked'", peerB.LastError)
-	}
-
-	// node-a should be untouched.
-	peerA := state.SyncPeers["node-a.catofes."]
-	if peerA.DiscoveredAddr != "192.0.2.10:33434" {
-		t.Fatalf("non-revoked peer discovered addr changed: %s", peerA.DiscoveredAddr)
-	}
-}
-
-// TestCleanupRevokedPeerCacheEmpty verifies no panic on empty/nil input.
-func TestCleanupRevokedPeerCacheEmpty(t *testing.T) {
-	CleanupRevokedPeerCache(nil, nil)
-	state := &stateFile{SyncPeers: map[string]syncPeerState{}}
-	CleanupRevokedPeerCache(state, nil)
-}
-
 // TestUpdateRevocationLayerStatus verifies layer status updates.
 func TestUpdateRevocationLayerStatus(t *testing.T) {
 	impact := inspect.RevocationImpact{

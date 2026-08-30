@@ -997,6 +997,9 @@ package dependency: app -> host -> gossip -> state -> zone
           无调用方的 `stateFile` RLock/WithLock convenience API 已删除。
         - [x] 删除只做 nil guard 和单次转发的 `daemon_runtime_commit.go`；routing/IPsec/firewall/cleanup 调用方直接进入
           `DaemonStateStore` 当前的 typed runtime commit，后续随 Linux runtime owner 一起下沉。
+        - [x] 删除 production 中只被测试调用的 aggregate helper：`autoJoinPending(stateFile)`、旧 `CleanupRevokedPeerCache`、
+          `CollectAllRevokedZones(stateFile)` 和 record signing helper；测试直接使用 verified/network typed helper，签名 fixture 移入
+          test-only helper。实际 revoked checkpoint 清理由在线 typed owner 路径及其测试覆盖。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
