@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -45,12 +46,18 @@ func initRootStateInRuntime(rt *Runtime) (ed25519.PublicKey, error) {
 	}
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
-	state := &stateFile{
-		ManagedZone:    zone.RootZone,
-		RootPrivateKey: rootPriv,
-		Network:        ns,
+	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		return nil, err
 	}
-	if err := rt.SaveState(state); err != nil {
+	defer store.Close()
+	candidate := &corestate.CommitCandidate{Verified: &corestate.VerifiedState{
+		ManagedZone:          zone.RootZone,
+		Network:              ns,
+		TrustedRootPublicKey: append(ed25519.PublicKey(nil), rootPub...),
+		RootPrivateKey:       append(ed25519.PrivateKey(nil), rootPriv...),
+	}}
+	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
 		return nil, err
 	}
 	return rootPub, nil

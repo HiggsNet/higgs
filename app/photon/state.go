@@ -205,10 +205,6 @@ func (rt *Runtime) LoadState() (*stateFile, error) {
 	return loadStateAtWithConfig(rt.StatePath, rt.Config)
 }
 
-func (rt *Runtime) SaveState(state *stateFile) error {
-	return saveStateAt(rt.StatePath, state)
-}
-
 func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 	if config == nil {
 		config = defaultAppConfig()

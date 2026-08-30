@@ -246,6 +246,10 @@ func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
 	}), nil
 }
 
+func (rt *Runtime) SaveState(state *stateFile) error {
+	return saveStateAt(rt.StatePath, state)
+}
+
 func cloneStateFile(s *stateFile) *stateFile {
 	if s == nil {
 		return nil
