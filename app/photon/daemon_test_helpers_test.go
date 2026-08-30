@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
-	"errors"
 	"fmt"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -14,7 +13,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
-	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -28,45 +26,6 @@ import (
 )
 
 type birdClient = photonlinux.BirdClient
-
-type testGossipDatagram struct {
-	addr *net.UDPAddr
-}
-
-func (*testGossipDatagram) ReadDatagram([]byte) (int, *net.UDPAddr, error) {
-	return 0, nil, net.ErrClosed
-}
-func (*testGossipDatagram) WriteDatagram(payload []byte, _ *net.UDPAddr) (int, error) {
-	return len(payload), nil
-}
-func (datagram *testGossipDatagram) LocalAddr() *net.UDPAddr { return datagram.addr }
-func (*testGossipDatagram) SetReadDeadline(time.Time) error  { return nil }
-func (*testGossipDatagram) Close() error                     { return nil }
-
-func bindTestHostGossipTransport(t *testing.T, service *DaemonService, peerIDs ...string) *gossip.Transport {
-	t.Helper()
-	known := make(map[string]*net.UDPAddr, len(peerIDs))
-	for _, peerID := range peerIDs {
-		known[peerID] = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33435}
-	}
-	transport, err := gossip.NewTransport(gossip.Config{
-		PeerID: service.Sync.Config.PeerID, KnownPeers: known,
-		MaxMessageBytes: gossip.DefaultDatagramBudget,
-	}, &testGossipDatagram{addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	setTestGossipTransport(t, service, transport)
-	return transport
-}
-
-func setTestGossipTransport(t *testing.T, service *DaemonService, transport *gossip.Transport) {
-	t.Helper()
-	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
-		t.Fatal(err)
-	}
-	service.Sync.Transport = transport
-}
 
 type testLinuxDrivers struct {
 	ipsec             ipsec.IPsecDriver
@@ -89,32 +48,44 @@ func verifiedStateForTest(state *stateFile) *corestate.VerifiedState {
 	}
 }
 
-func listenTestGossipTransport(listenAddr string, config gossip.Config) (*gossip.Transport, error) {
-	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
-	if err != nil {
-		return nil, err
+func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
+	verified := verifiedStateForTest(state)
+	checkpoint := &corestate.GossipCheckpoint{}
+	if state != nil {
+		checkpoint = testGossipCheckpoint(state.SyncPeers)
 	}
-	transport, err := gossip.NewTransport(config, datagram)
-	if err != nil {
-		_ = datagram.Close()
-		return nil, err
-	}
-	return transport, nil
+	return newTestDaemonServiceFromOwners(rt, verified, checkpoint, linuxRuntimeStateFromLegacy(state), config, interval)
 }
 
-func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
-	store := newTestDaemonStateStore(state)
+// newTestDaemonServiceFromOwners is the normal fixture for tests of current
+// daemon behavior. New tests must construct the common and Linux owners
+// explicitly instead of passing the retired aggregate stateFile shape.
+func newTestDaemonServiceFromOwners(
+	rt *Runtime,
+	verified *corestate.VerifiedState,
+	checkpoint *corestate.GossipCheckpoint,
+	runtime *linuxRuntimeState,
+	config *syncConfigFile,
+	interval time.Duration,
+) *DaemonService {
+	if verified == nil {
+		verified = &corestate.VerifiedState{}
+	}
 	if rt != nil && rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {
-		view := store.common.ReadView()
-		view.State.TrustedRootPublicKey = append(ed25519.PublicKey(nil), rt.Config.TrustedRootPublicKey...)
-		store.common = corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil)
-		store.refreshMeta()
+		copyVerified := *verified
+		copyVerified.TrustedRootPublicKey = append(ed25519.PublicKey(nil), rt.Config.TrustedRootPublicKey...)
+		verified = &copyVerified
+	}
+	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
+	store, err := newDaemonStateStore(common, runtime, nil)
+	if err != nil {
+		panic(err)
 	}
 	service := newDaemonServiceWithStore(rt, store, config, interval)
 	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
-	if state != nil && state.Network != nil {
-		for path := range state.Network.Zones {
-			if path.Valid() && path != state.ManagedZone {
+	if verified.Network != nil {
+		for path := range verified.Network.Zones {
+			if path.Valid() && path != verified.ManagedZone {
 				peerIDs = append(peerIDs, path.String())
 			}
 		}
@@ -226,88 +197,6 @@ func snapshotTestDaemonState(store *DaemonStateStore) (*stateFile, uint64) {
 		return nil, 0
 	}
 	return composeLinuxStateView(common, runtime), uint64(common.Revision)
-}
-
-func loadState() (*stateFile, error) {
-	runtime, err := NewRuntime()
-	if err != nil {
-		return nil, err
-	}
-	return runtime.LoadState()
-}
-
-func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
-	if state == nil {
-		return syncConfigFromAppConfig(rt.Config, nil), nil
-	}
-	return syncConfigFromAppConfig(rt.Config, &corestate.VerifiedState{
-		ManagedZone:        state.ManagedZone,
-		IdentityPrivateKey: append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
-	}), nil
-}
-
-func (rt *Runtime) SaveState(state *stateFile) error {
-	return saveStateAt(rt.StatePath, state)
-}
-
-func saveStateAt(path string, state *stateFile) error {
-	store, err := zone.OpenBoltStore(path, 0o600)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	return store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network)
-}
-
-func stateMetaFromState(state *stateFile) stateMeta {
-	if state == nil {
-		return stateMeta{}
-	}
-	return stateMeta{
-		ManagedZone:       state.ManagedZone,
-		IdentityKeyPath:   state.IdentityKeyPath,
-		RootPrivateKey:    state.RootPrivateKey,
-		ZonePrivateKey:    state.ZonePrivateKey,
-		SyncPeers:         state.SyncPeers,
-		PeerCleanups:      state.PeerCleanups,
-		IPsecTransportKey: state.IPsecTransportKey,
-		IPsecPortRecord:   state.IPsecPortRecord,
-		LinkInstances:     state.LinkInstances,
-		IPsecReconcile:    state.IPsecReconcile,
-		RoutingReconcile:  state.RoutingReconcile,
-		FirewallReconcile: state.FirewallReconcile,
-		EndpointACLs:      state.EndpointACLs,
-		BirdInstances:     state.BirdInstances,
-		Admission:         state.Admission,
-	}
-}
-
-func cloneStateFile(s *stateFile) *stateFile {
-	if s == nil {
-		return nil
-	}
-	out := &stateFile{
-		ManagedZone:       s.ManagedZone,
-		IdentityKeyPath:   s.IdentityKeyPath,
-		RootPrivateKey:    cloneBytes(s.RootPrivateKey),
-		ZonePrivateKey:    cloneBytes(s.ZonePrivateKey),
-		Network:           zone.CloneNetworkState(s.Network),
-		SyncPeers:         cloneSyncPeers(s.SyncPeers),
-		PeerCleanups:      maps.Clone(s.PeerCleanups),
-		IPsecTransportKey: cloneIPsecTransportKeyState(s.IPsecTransportKey),
-		IPsecPortRecord:   cloneIPsecPortRecordState(s.IPsecPortRecord),
-		LinkInstances:     cloneLinkInstances(s.LinkInstances),
-		IPsecReconcile:    cloneIPsecReconcileState(s.IPsecReconcile),
-		RoutingReconcile:  cloneRoutingReconcileState(s.RoutingReconcile),
-		FirewallReconcile: cloneFirewallReconcileState(s.FirewallReconcile),
-		EndpointACLs:      cloneEndpointACLs(s.EndpointACLs),
-		BirdInstances:     cloneBirdInstances(s.BirdInstances),
-		Admission:         cloneAdmissionState(s.Admission),
-	}
-	if out.Network != nil {
-		configureValidation(out.Network)
-	}
-	return out
 }
 
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
@@ -1436,76 +1325,4 @@ func controlViewRequestViaPipe[T any](t *testing.T, service *DaemonService, requ
 	}
 	<-done
 	return response
-}
-
-func receiveWithContext(ctx context.Context, transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		readDeadline := deadline
-		shortDeadline := time.Now().Add(250 * time.Millisecond)
-		if shortDeadline.Before(readDeadline) {
-			readDeadline = shortDeadline
-		}
-		packet, err := receiveWithDeadline(transport, readDeadline)
-		if err == nil {
-			return packet, nil
-		}
-		if time.Now().After(deadline) || !isReceiveTimeout(err) {
-			return nil, err
-		}
-	}
-}
-
-func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*gossip.Packet, error) {
-	if err := transport.SetReadDeadline(deadline); err != nil {
-		return nil, err
-	}
-	for {
-		packet, err := transport.Receive()
-		if err == nil {
-			return packet, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, errors.New("sync receive timed out")
-		}
-		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
-			continue
-		}
-		return nil, err
-	}
-}
-
-func isReceiveTimeout(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
-}
-
-func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transports []*gossip.Transport) {
-	for {
-		processed := false
-		for _, svc := range services {
-			select {
-			case hostEvent := <-svc.hostRuntime.Events():
-				if result, err := svc.handleHostRuntimeGossipEvent(ctx, hostEvent); err == nil && result.Handled {
-					processed = true
-				}
-			default:
-			}
-		}
-		for i, tr := range transports {
-			packet, err := receiveWithContext(ctx, tr, time.Now().Add(10*time.Millisecond))
-			if err == nil {
-				services[i].processPacketEvent(packet, ctx)
-				processed = true
-			}
-		}
-		if !processed {
-			return
-		}
-	}
 }

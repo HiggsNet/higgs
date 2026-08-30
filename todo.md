@@ -1013,6 +1013,10 @@ package dependency: app -> host -> gossip -> state -> zone
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
           production `cloneLinuxRuntimeState` 已改为直接复制 typed runtime，不再绕行
           `runtime -> stateFile -> runtime`；`composeLinuxStateView/applyLinuxRuntimeReadView` 已降为纯测试 fixture。
+        - [ ] 清理测试侧 aggregate 债务：`daemon_test_helpers_test.go` 已膨胀到 1500 行，且普通 daemon 测试仍通过
+          `stateFile` 构造 common/Linux owners。先增加直接接收 `VerifiedState + GossipCheckpoint + linuxRuntimeState` 的
+          typed-owner fixture，并迁移 daemon lifecycle 基础测试；随后按 gossip、reconcile、root-smoke 拆分 helper 与调用方，
+          最终只允许 legacy migration 测试使用 `LoadState/SaveState/cloneStateFile/stateMetaFromState`。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

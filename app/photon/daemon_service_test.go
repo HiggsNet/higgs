@@ -9,11 +9,14 @@ import (
 	"time"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
-	service := newTestDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, 0)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, 0,
+	)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
@@ -34,7 +37,9 @@ func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsUsesDryRunObservation(t *te
 }
 
 func TestDaemonServiceReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
-	service := newTestDaemonService(&Runtime{}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
 	first := newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
@@ -83,8 +88,14 @@ func TestDaemonServiceReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
 }
 
 func TestDaemonServiceStateChangedHook(t *testing.T) {
-	state := &stateFile{ManagedZone: "node-a.catofes."}
-	service := newTestDaemonService(&Runtime{}, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{},
+		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
+		nil,
+		&linuxRuntimeState{},
+		&syncConfigFile{},
+		time.Second,
+	)
 	var called bool
 	service.Hooks.OnStateChanged = func() {
 		called = true

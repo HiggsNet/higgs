@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -12,13 +13,95 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// Older tests deliberately lock the detached constructor input to prove the
+// Older aggregate-fixture tests deliberately lock the detached constructor input to prove the
 // daemon reads its typed owners. Keep that synchronization device in test code
 // instead of forcing the production migration DTO to own a mutex.
 var detachedAggregateTestLock sync.Mutex
 
 func (*stateFile) Lock()   { detachedAggregateTestLock.Lock() }
 func (*stateFile) Unlock() { detachedAggregateTestLock.Unlock() }
+
+func loadState() (*stateFile, error) {
+	runtime, err := NewRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return runtime.LoadState()
+}
+
+func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
+	if state == nil {
+		return syncConfigFromAppConfig(rt.Config, nil), nil
+	}
+	return syncConfigFromAppConfig(rt.Config, &corestate.VerifiedState{
+		ManagedZone:        state.ManagedZone,
+		IdentityPrivateKey: append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
+	}), nil
+}
+
+func (rt *Runtime) SaveState(state *stateFile) error {
+	return saveStateAt(rt.StatePath, state)
+}
+
+func saveStateAt(path string, state *stateFile) error {
+	store, err := zone.OpenBoltStore(path, 0o600)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network)
+}
+
+func stateMetaFromState(state *stateFile) stateMeta {
+	if state == nil {
+		return stateMeta{}
+	}
+	return stateMeta{
+		ManagedZone:       state.ManagedZone,
+		IdentityKeyPath:   state.IdentityKeyPath,
+		RootPrivateKey:    state.RootPrivateKey,
+		ZonePrivateKey:    state.ZonePrivateKey,
+		SyncPeers:         state.SyncPeers,
+		PeerCleanups:      state.PeerCleanups,
+		IPsecTransportKey: state.IPsecTransportKey,
+		IPsecPortRecord:   state.IPsecPortRecord,
+		LinkInstances:     state.LinkInstances,
+		IPsecReconcile:    state.IPsecReconcile,
+		RoutingReconcile:  state.RoutingReconcile,
+		FirewallReconcile: state.FirewallReconcile,
+		EndpointACLs:      state.EndpointACLs,
+		BirdInstances:     state.BirdInstances,
+		Admission:         state.Admission,
+	}
+}
+
+func cloneStateFile(state *stateFile) *stateFile {
+	if state == nil {
+		return nil
+	}
+	out := &stateFile{
+		ManagedZone:       state.ManagedZone,
+		IdentityKeyPath:   state.IdentityKeyPath,
+		RootPrivateKey:    cloneBytes(state.RootPrivateKey),
+		ZonePrivateKey:    cloneBytes(state.ZonePrivateKey),
+		Network:           zone.CloneNetworkState(state.Network),
+		SyncPeers:         cloneSyncPeers(state.SyncPeers),
+		PeerCleanups:      maps.Clone(state.PeerCleanups),
+		IPsecTransportKey: cloneIPsecTransportKeyState(state.IPsecTransportKey),
+		IPsecPortRecord:   cloneIPsecPortRecordState(state.IPsecPortRecord),
+		LinkInstances:     cloneLinkInstances(state.LinkInstances),
+		IPsecReconcile:    cloneIPsecReconcileState(state.IPsecReconcile),
+		RoutingReconcile:  cloneRoutingReconcileState(state.RoutingReconcile),
+		FirewallReconcile: cloneFirewallReconcileState(state.FirewallReconcile),
+		EndpointACLs:      cloneEndpointACLs(state.EndpointACLs),
+		BirdInstances:     cloneBirdInstances(state.BirdInstances),
+		Admission:         cloneAdmissionState(state.Admission),
+	}
+	if out.Network != nil {
+		configureValidation(out.Network)
+	}
+	return out
+}
 
 func composeLinuxStateView(common corestate.View, runtime *linuxRuntimeState) *stateFile {
 	view := &stateFile{
