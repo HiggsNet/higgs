@@ -228,6 +228,24 @@ func snapshotTestDaemonState(store *DaemonStateStore) (*stateFile, uint64) {
 	return composeLinuxStateView(common, runtime), uint64(common.Revision)
 }
 
+func loadState() (*stateFile, error) {
+	runtime, err := NewRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return runtime.LoadState()
+}
+
+func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
+	if state == nil {
+		return syncConfigFromAppConfig(rt.Config, nil), nil
+	}
+	return syncConfigFromAppConfig(rt.Config, &corestate.VerifiedState{
+		ManagedZone:        state.ManagedZone,
+		IdentityPrivateKey: append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
+	}), nil
+}
+
 func cloneStateFile(s *stateFile) *stateFile {
 	if s == nil {
 		return nil

@@ -209,28 +209,6 @@ func (rt *Runtime) SaveState(state *stateFile) error {
 	return saveStateAt(rt.StatePath, state)
 }
 
-func (rt *Runtime) SyncConfig(state *stateFile) (*syncConfigFile, error) {
-	if state == nil {
-		return syncConfigFromAppConfig(rt.Config, nil), nil
-	}
-	return syncConfigFromAppConfig(rt.Config, &corestate.VerifiedState{
-		ManagedZone:        state.ManagedZone,
-		IdentityPrivateKey: append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
-	}), nil
-}
-
-func (rt *Runtime) ConfigureNetworkValidation(ns *zone.NetworkState) {
-	configureValidation(ns)
-}
-
-func loadState() (*stateFile, error) {
-	rt, err := NewRuntime()
-	if err != nil {
-		return nil, err
-	}
-	return rt.LoadState()
-}
-
 func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 	if config == nil {
 		config = defaultAppConfig()
