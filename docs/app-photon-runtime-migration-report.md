@@ -172,7 +172,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 |---|---|---|
 | `keygen.go` | Ed25519 key 文件生成 | `internal/photoncli/keygen`，底层复用 crypto |
 | `link_outputs.go` | Linux link runtime 到 health/routing output | `internal/photonlinux/linkstate` 或 IPsec controller 输出 DTO |
-| `linux_state_view.go` | 公共 view + Linux runtime 合成 stateFile | 迁移期读桥；consumer 改用 typed view 后删除 |
+| `linux_state_view.go` | gossip checkpoint 到旧 peer read model、typed Linux runtime clone | 生产 aggregate 合成桥已删除，clone 直接复制 runtime 字段；剩余 peer read projection 后续归 inspect/host，文件随调用方迁移后删除 |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |

@@ -20,6 +20,43 @@ var detachedAggregateTestLock sync.Mutex
 func (*stateFile) Lock()   { detachedAggregateTestLock.Lock() }
 func (*stateFile) Unlock() { detachedAggregateTestLock.Unlock() }
 
+func composeLinuxStateView(common corestate.View, runtime *linuxRuntimeState) *stateFile {
+	view := &stateFile{
+		Network:   zone.NewNetworkState(),
+		SyncPeers: make(map[string]syncPeerState),
+	}
+	if common.State != nil {
+		view.ManagedZone = common.State.ManagedZone
+		view.RootPrivateKey = append(ed25519.PrivateKey(nil), common.State.RootPrivateKey...)
+		view.ZonePrivateKey = append(ed25519.PrivateKey(nil), common.State.IdentityPrivateKey...)
+		view.Network = zone.CloneNetworkState(common.State.Network)
+		if view.Network == nil {
+			view.Network = zone.NewNetworkState()
+		}
+		configureValidation(view.Network)
+	}
+	view.SyncPeers = syncPeerReadView(common.Gossip)
+	applyLinuxRuntimeReadView(view, runtime)
+	return view
+}
+
+func applyLinuxRuntimeReadView(view *stateFile, runtime *linuxRuntimeState) {
+	if view == nil || runtime == nil {
+		return
+	}
+	view.IdentityKeyPath = runtime.IdentityKeyPath
+	view.PeerCleanups = clonePeerCleanups(runtime.PeerCleanups)
+	view.IPsecTransportKey = cloneIPsecTransportKeyState(runtime.IPsecTransportKey)
+	view.IPsecPortRecord = cloneIPsecPortRecordState(runtime.IPsecPortRecord)
+	view.LinkInstances = cloneLinkInstances(runtime.LinkInstances)
+	view.IPsecReconcile = cloneIPsecReconcileState(runtime.IPsecReconcile)
+	view.RoutingReconcile = cloneRoutingReconcileState(runtime.RoutingReconcile)
+	view.FirewallReconcile = cloneFirewallReconcileState(runtime.FirewallReconcile)
+	view.EndpointACLs = cloneEndpointACLs(runtime.EndpointACLs)
+	view.BirdInstances = cloneBirdInstances(runtime.BirdInstances)
+	view.Admission = cloneAdmissionState(runtime.Admission)
+}
+
 // LoadState remains test-only while older app tests are migrated to typed
 // common/Linux owner fixtures. Production startup never reconstructs this
 // aggregate view.

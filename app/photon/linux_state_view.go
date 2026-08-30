@@ -1,62 +1,28 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
-
-// composeLinuxStateView builds the temporary aggregate consumed by existing
-// Linux read projections and controller planners. Ownership remains split:
-// common owns verified facts and gossip checkpoints, while runtime owns Linux
-// controller/configuration fields. The returned stateFile is detached and
-// must never be persisted as a state root or written back into either owner.
-func composeLinuxStateView(common corestate.View, runtime *linuxRuntimeState) *stateFile {
-	view := &stateFile{
-		Network:   zone.NewNetworkState(),
-		SyncPeers: make(map[string]syncPeerState),
-	}
-	if common.State != nil {
-		view.ManagedZone = common.State.ManagedZone
-		view.RootPrivateKey = append(ed25519.PrivateKey(nil), common.State.RootPrivateKey...)
-		view.ZonePrivateKey = append(ed25519.PrivateKey(nil), common.State.IdentityPrivateKey...)
-		view.Network = zone.CloneNetworkState(common.State.Network)
-		if view.Network == nil {
-			view.Network = zone.NewNetworkState()
-		}
-		configureValidation(view.Network)
-	}
-	view.SyncPeers = syncPeerReadView(common.Gossip)
-	applyLinuxRuntimeReadView(view, runtime)
-	return view
-}
-
-func applyLinuxRuntimeReadView(view *stateFile, runtime *linuxRuntimeState) {
-	if view == nil || runtime == nil {
-		return
-	}
-	view.IdentityKeyPath = runtime.IdentityKeyPath
-	view.PeerCleanups = clonePeerCleanups(runtime.PeerCleanups)
-	view.IPsecTransportKey = cloneIPsecTransportKeyState(runtime.IPsecTransportKey)
-	view.IPsecPortRecord = cloneIPsecPortRecordState(runtime.IPsecPortRecord)
-	view.LinkInstances = cloneLinkInstances(runtime.LinkInstances)
-	view.IPsecReconcile = cloneIPsecReconcileState(runtime.IPsecReconcile)
-	view.RoutingReconcile = cloneRoutingReconcileState(runtime.RoutingReconcile)
-	view.FirewallReconcile = cloneFirewallReconcileState(runtime.FirewallReconcile)
-	view.EndpointACLs = cloneEndpointACLs(runtime.EndpointACLs)
-	view.BirdInstances = cloneBirdInstances(runtime.BirdInstances)
-	view.Admission = cloneAdmissionState(runtime.Admission)
-}
 
 func cloneLinuxRuntimeState(runtime *linuxRuntimeState) *linuxRuntimeState {
 	if runtime == nil {
 		return &linuxRuntimeState{}
 	}
-	view := &stateFile{}
-	applyLinuxRuntimeReadView(view, runtime)
-	return linuxRuntimeStateFromLegacy(view)
+	return &linuxRuntimeState{
+		IdentityKeyPath:   runtime.IdentityKeyPath,
+		PeerCleanups:      clonePeerCleanups(runtime.PeerCleanups),
+		IPsecTransportKey: cloneIPsecTransportKeyState(runtime.IPsecTransportKey),
+		IPsecPortRecord:   cloneIPsecPortRecordState(runtime.IPsecPortRecord),
+		LinkInstances:     cloneLinkInstances(runtime.LinkInstances),
+		IPsecReconcile:    cloneIPsecReconcileState(runtime.IPsecReconcile),
+		RoutingReconcile:  cloneRoutingReconcileState(runtime.RoutingReconcile),
+		FirewallReconcile: cloneFirewallReconcileState(runtime.FirewallReconcile),
+		EndpointACLs:      cloneEndpointACLs(runtime.EndpointACLs),
+		BirdInstances:     cloneBirdInstances(runtime.BirdInstances),
+		Admission:         cloneAdmissionState(runtime.Admission),
+	}
 }
 
 func syncPeerReadView(checkpoint *corestate.GossipCheckpoint) map[string]syncPeerState {

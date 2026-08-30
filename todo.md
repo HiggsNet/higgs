@@ -1011,6 +1011,8 @@ package dependency: app -> host -> gossip -> state -> zone
           `stateFile`；待 state/admission 定义独立的 pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。
           通用 `saveStateAt/stateMetaFromState` 已移到测试。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
+          production `cloneLinuxRuntimeState` 已改为直接复制 typed runtime，不再绕行
+          `runtime -> stateFile -> runtime`；`composeLinuxStateView/applyLinuxRuntimeReadView` 已降为纯测试 fixture。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
