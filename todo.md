@@ -1004,6 +1004,9 @@ package dependency: app -> host -> gossip -> state -> zone
           `Runtime.ConfigureNetworkValidation` 删除；生产离线入口只保留启动迁移仍实际调用的 `Runtime.LoadState`。
         - [x] `init root` 直接原子初始化 common/Linux buckets，不再先写 legacy aggregate schema 等待下次 daemon 启动迁移；
           `Runtime.SaveState(stateFile)` 因此移到 test-only helper。旧 schema 读取/迁移仍保留。
+        - [ ] 配置驱动的 pending auto-join 仍是唯一 production legacy writer：此时 managed zone authority 尚未同步，不能通过
+          正式 common `ValidateStateRoot`。当前已缩成 identity/root bootstrap 所需的最小 writer；待 state/admission 定义独立的
+          pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。通用 `saveStateAt/stateMetaFromState` 已移到测试。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、

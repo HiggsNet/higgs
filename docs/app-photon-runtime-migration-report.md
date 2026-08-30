@@ -156,7 +156,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
 | `health_reconcile.go` | health manager 装配、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已统一进入 HostRuntime scheduler/queue；`LinkOutput -> ProbeTarget` 规则已进 `internal/photonlinux/linkstate` |
 | `health_spool.go` | JSONL health 历史和查询 | 已整体迁入 `internal/observability/healthspool` 并删除 app 文件；不属于 state/checkpoint |
-| `identity_bootstrap.go` | identity key/config、auto-join adoption 和 refresh | 文件处理进 config/CLI；安装和 refresh 留 state；调度进 host；旧 stateFile mutation 删除 |
+| `identity_bootstrap.go` | identity key/config、pending auto-join bootstrap 和 refresh | pending managed authority 尚不存在，当前保留唯一最小 legacy bootstrap writer；待 state/admission 有独立 pending identity root 后删除，正式 verified 校验不放宽 |
 | `init.go` | root 初始化 | 已直接原子初始化 common/Linux buckets，不再写 legacy aggregate schema；文件/CLI 壳后续进 photoncli |
 | `inspect_links.go` | Linux link 到 inspect input | Linux controller 输出稳定 DTO，view 进 inspect |
 | `inspect_peers.go` | verified/checkpoint/bootstrap/observability endpoint view | `internal/inspect`，不再依赖 stateFile |

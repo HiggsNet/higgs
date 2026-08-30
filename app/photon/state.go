@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"os"
 	"sync"
 	"time"
 
@@ -308,85 +307,6 @@ func loadPartitionedState(path string, config *appConfig) (*stateFile, bool, err
 		return nil, false, err
 	}
 	return state, true, nil
-}
-
-func saveStateAt(path string, state *stateFile) error {
-	_, err := saveStateAtWithFileInfo(path, state)
-	return err
-}
-
-// saveStateAtWithFileInfo returns a stable file marker only after the Bolt
-// transactions and Close have succeeded. A stat failure or a file change
-// between the final transaction and close does not fail the save; it merely
-// leaves the marker unavailable so the daemon reloads conservatively.
-func saveStateAtWithFileInfo(path string, state *stateFile) (os.FileInfo, error) {
-	store, err := zone.OpenBoltStore(path, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = store.Close()
-		}
-	}()
-	if state != nil && state.Network != nil && state.ManagedZone.Valid() {
-		if zs := state.Network.Zones[state.ManagedZone]; zs != nil {
-			logger := newAppLogger(nil)
-			logger.Debug("state", "save", map[string]any{
-				"path":         path,
-				"managed_zone": state.ManagedZone.String(),
-				"records":      len(zs.Records),
-			})
-		}
-	}
-
-	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network); err != nil {
-		return nil, err
-	}
-	return closeStateStoreWithFileInfo(path, store, &closed)
-}
-
-func stateMetaFromState(state *stateFile) stateMeta {
-	if state == nil {
-		return stateMeta{}
-	}
-	return stateMeta{
-		ManagedZone:       state.ManagedZone,
-		IdentityKeyPath:   state.IdentityKeyPath,
-		RootPrivateKey:    state.RootPrivateKey,
-		ZonePrivateKey:    state.ZonePrivateKey,
-		SyncPeers:         state.SyncPeers,
-		PeerCleanups:      state.PeerCleanups,
-		IPsecTransportKey: state.IPsecTransportKey,
-		IPsecPortRecord:   state.IPsecPortRecord,
-		LinkInstances:     state.LinkInstances,
-		IPsecReconcile:    state.IPsecReconcile,
-		RoutingReconcile:  state.RoutingReconcile,
-		FirewallReconcile: state.FirewallReconcile,
-		EndpointACLs:      state.EndpointACLs,
-		BirdInstances:     state.BirdInstances,
-		Admission:         state.Admission,
-	}
-}
-
-func closeStateStoreWithFileInfo(path string, store *zone.BoltStore, closed *bool) (os.FileInfo, error) {
-	beforeClose, beforeErr := os.Stat(path)
-	if err := store.Close(); err != nil {
-		*closed = true
-		return nil, err
-	}
-	*closed = true
-	afterClose, afterErr := os.Stat(path)
-	if beforeErr != nil || afterErr != nil || !sameStateFileInfo(beforeClose, afterClose) {
-		return nil, nil
-	}
-	return afterClose, nil
-}
-
-func sameStateFileInfo(a, b os.FileInfo) bool {
-	return a != nil && b != nil && os.SameFile(a, b) &&
-		a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
 
 func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {

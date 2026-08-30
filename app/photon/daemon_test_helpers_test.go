@@ -250,6 +250,38 @@ func (rt *Runtime) SaveState(state *stateFile) error {
 	return saveStateAt(rt.StatePath, state)
 }
 
+func saveStateAt(path string, state *stateFile) error {
+	store, err := zone.OpenBoltStore(path, 0o600)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network)
+}
+
+func stateMetaFromState(state *stateFile) stateMeta {
+	if state == nil {
+		return stateMeta{}
+	}
+	return stateMeta{
+		ManagedZone:       state.ManagedZone,
+		IdentityKeyPath:   state.IdentityKeyPath,
+		RootPrivateKey:    state.RootPrivateKey,
+		ZonePrivateKey:    state.ZonePrivateKey,
+		SyncPeers:         state.SyncPeers,
+		PeerCleanups:      state.PeerCleanups,
+		IPsecTransportKey: state.IPsecTransportKey,
+		IPsecPortRecord:   state.IPsecPortRecord,
+		LinkInstances:     state.LinkInstances,
+		IPsecReconcile:    state.IPsecReconcile,
+		RoutingReconcile:  state.RoutingReconcile,
+		FirewallReconcile: state.FirewallReconcile,
+		EndpointACLs:      state.EndpointACLs,
+		BirdInstances:     state.BirdInstances,
+		Admission:         state.Admission,
+	}
+}
+
 func cloneStateFile(s *stateFile) *stateFile {
 	if s == nil {
 		return nil

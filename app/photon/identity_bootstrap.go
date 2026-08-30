@@ -46,7 +46,18 @@ func createConfiguredBootstrapState(path string, config *appConfig) (*stateFile,
 		IPsecPortRecord:   nil,
 		IPsecTransportKey: nil,
 	}
-	if err := saveStateAt(path, state); err != nil {
+	store, err := zone.OpenBoltStore(path, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	meta := stateMeta{
+		ManagedZone:     state.ManagedZone,
+		IdentityKeyPath: state.IdentityKeyPath,
+		ZonePrivateKey:  append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
+		SyncPeers:       state.SyncPeers,
+	}
+	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, meta, state.Network); err != nil {
 		return nil, err
 	}
 	return state, nil
