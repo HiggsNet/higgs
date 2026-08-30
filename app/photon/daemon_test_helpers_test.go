@@ -212,7 +212,7 @@ func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {
 		checkpoint = testGossipCheckpoint(state.SyncPeers)
 	}
 	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
-	store, err := NewDaemonStateStore(common, linuxRuntimeStateFromLegacy(state))
+	store, err := newDaemonStateStore(common, linuxRuntimeStateFromLegacy(state), nil)
 	if err != nil {
 		panic(err)
 	}

@@ -148,7 +148,6 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	peers := syncPeerReadView(view.Gossip)
 	d.StateStore.mu.RLock()
 	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
-	revision := d.StateStore.revision
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
 	if view.State == nil {
@@ -161,11 +160,11 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	if !changed {
 		return false
 	}
-	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(revision, cleanups); err != nil {
+	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(uint64(view.Revision), cleanups); err != nil {
 		d.logWarn("peer_lifecycle", "cleanup_commit_failed", map[string]any{"error": err})
 		return false
 	}
-	if _, err := d.StateStore.DeleteCommonPeerCheckpoints(context.Background(), removed); err != nil {
+	if _, err := d.StateStore.common.DeletePeerCheckpoints(context.Background(), removed); err != nil {
 		d.logWarn("peer_lifecycle", "checkpoint_cleanup_failed", map[string]any{"error": err})
 		return false
 	}

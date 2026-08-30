@@ -351,11 +351,7 @@ func loadPartitionedState(path string, config *appConfig) (*stateFile, bool, err
 	if err != nil {
 		return nil, false, err
 	}
-	combined, err := NewDaemonStateStore(common, snapshot.Runtime)
-	if err != nil {
-		return nil, false, err
-	}
-	state, _ := combined.Snapshot()
+	state := composeLinuxStateView(common.ReadView(), snapshot.Runtime)
 	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
 		return nil, false, err
 	}

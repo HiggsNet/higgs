@@ -22,10 +22,10 @@ func newDaemonStateStoreTestFixture(t *testing.T, commit corestate.CommitFunc) (
 		t.Fatalf("projectLegacyCommonState: %v", err)
 	}
 	common := corestate.NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, commit)
-	store, err := NewDaemonStateStore(common, &linuxRuntimeState{
+	store, err := newDaemonStateStore(common, &linuxRuntimeState{
 		IdentityKeyPath: legacy.IdentityKeyPath,
 		EndpointACLs:    map[string]endpointACL{"admin": {Name: "admin"}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewDaemonStateStore: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) 
 
 func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision(t *testing.T) {
 	store, _ := newDaemonStateStoreTestFixture(t, nil)
-	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
+	result, err := store.common.UpdatePeerCheckpoint(context.Background(), "peer.catofes.", corestate.PeerCheckpointPatch{
 		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: 42},
 	})
 	if err != nil {

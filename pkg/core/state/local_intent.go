@@ -204,6 +204,18 @@ func (store *Store) ApplyLocalIntent(ctx context.Context, intent LocalIntent, no
 // authority-owned mutations as one candidate. A later failure discards all
 // earlier mutations in the batch.
 func (store *Store) ApplyLocalIntents(ctx context.Context, intents []LocalIntent, now time.Time) (LocalIntentBatchResult, error) {
+	return store.applyLocalIntents(ctx, intents, now, nil)
+}
+
+// ApplyLocalIntentsAtRevision publishes a plan only while the common verified
+// state is still at the revision from which the caller derived it. This is
+// used when platform-private state must be persisted before its public records
+// become visible.
+func (store *Store) ApplyLocalIntentsAtRevision(ctx context.Context, intents []LocalIntent, now time.Time, expected VerifiedRevision) (LocalIntentBatchResult, error) {
+	return store.applyLocalIntents(ctx, intents, now, &expected)
+}
+
+func (store *Store) applyLocalIntents(ctx context.Context, intents []LocalIntent, now time.Time, expected *VerifiedRevision) (LocalIntentBatchResult, error) {
 	var out LocalIntentBatchResult
 	if store == nil {
 		return out, ErrVerifiedStoreClosed
@@ -231,6 +243,9 @@ func (store *Store) ApplyLocalIntents(ctx context.Context, intents []LocalIntent
 	candidate := cloneVerifiedState(store.state)
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
+	if expected != nil && baseRevision != *expected {
+		return out, ErrVerifiedRevisionStale
+	}
 	changedZones := make([]zone.ZonePath, 0, len(intents))
 	var securityPriority bool
 	var metadataChanged bool

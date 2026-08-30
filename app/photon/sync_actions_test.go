@@ -269,7 +269,7 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	if _, err := service.StateStore.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		Reject: map[zone.ZonePath]corestate.RejectedObject{snapshot.Zone: {
 			RootHash:    corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot)),
 			Reason:      "previous transient rejection",

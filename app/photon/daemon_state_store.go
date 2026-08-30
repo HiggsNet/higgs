@@ -11,7 +11,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-var errDaemonStateRevisionStale = errors.New("daemon state revision is stale")
+var errDaemonStateRevisionStale = corestate.ErrVerifiedRevisionStale
 
 type daemonDirtyFlags struct {
 	IPsec    bool `json:"ipsec,omitempty"`
@@ -48,21 +48,6 @@ type DaemonStateStore struct {
 type protocolPublishResult struct {
 	RuntimeCommitted bool
 	Common           corestate.LocalIntentBatchResult
-}
-
-// ReadView exposes the one common committed view to HostRuntime. Linux runtime
-// state remains a separate owner and is never projected through this method.
-func (s *DaemonStateStore) ReadView() corestate.View {
-	if s == nil || s.common == nil {
-		return corestate.View{}
-	}
-	return s.common.ReadView()
-}
-
-// NewDaemonStateStore combines the common state owner and Linux runtime owner
-// into the detached read view consumed by daemon planners and projections.
-func NewDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState) (*DaemonStateStore, error) {
-	return newDaemonStateStore(common, runtime, nil)
 }
 
 func newPersistedDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, boltStore *corestate.BoltStore) (*DaemonStateStore, error) {
@@ -195,8 +180,8 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	currentRevision := uint64(s.common.VerifiedRevision())
 	s.mu.RLock()
-	currentRevision := s.revision
 	currentRuntime := cloneLinuxRuntimeState(s.runtime)
 	s.mu.RUnlock()
 	if currentRevision != sourceRevision {
@@ -214,7 +199,7 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 		out.RuntimeCommitted = true
 	}
 	if len(intents) > 0 {
-		result, err := s.common.ApplyLocalIntents(ctx, intents, now)
+		result, err := s.common.ApplyLocalIntentsAtRevision(ctx, intents, now, corestate.VerifiedRevision(sourceRevision))
 		if err != nil {
 			s.refreshMeta()
 			return out, err
@@ -227,62 +212,6 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 	return out, nil
 }
 
-func (s *DaemonStateStore) ApplyCommonRemoteBatch(ctx context.Context, peerID string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.RemoteBatchResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	result, err := s.common.ApplyRemoteBatch(ctx, peerID, batch, now)
-	if err != nil {
-		return corestate.RemoteBatchResult{}, err
-	}
-	if result.Committed {
-		s.refreshMeta()
-	}
-	return result, nil
-}
-
-// ApplyRemoteBatch is the common HostRuntime transaction boundary. The Linux
-// wrapper only serializes it with Linux runtime commits and refreshes metadata;
-// verification and mutation semantics remain owned by state.Store.
-func (s *DaemonStateStore) ApplyRemoteBatch(ctx context.Context, peerID string, batch []corestate.RemoteSnapshot, now time.Time) (corestate.RemoteBatchResult, error) {
-	return s.ApplyCommonRemoteBatch(ctx, peerID, batch, now)
-}
-
-func (s *DaemonStateStore) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
-	return s.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
-}
-
-func (s *DaemonStateStore) UpdatePeerCheckpoints(ctx context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.CommitResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	result, err := s.common.UpdatePeerCheckpoints(ctx, patches)
-	if err != nil {
-		return corestate.CommitResult{}, err
-	}
-	if result.Committed {
-		s.refreshMeta()
-	}
-	return result, nil
-}
-
-func (s *DaemonStateStore) DeleteCommonPeerCheckpoints(ctx context.Context, peerIDs []string) (corestate.CommitResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.CommitResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	result, err := s.common.DeletePeerCheckpoints(ctx, peerIDs)
-	if err == nil && result.Committed {
-		s.refreshMeta()
-	}
-	return result, err
-}
-
 func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate func(*linuxRuntimeState)) (uint64, bool, error) {
 	if s == nil || s.common == nil {
 		return 0, false, errors.New("daemon composed state is not initialized")
@@ -292,8 +221,8 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	currentRevision := uint64(s.common.VerifiedRevision())
 	s.mu.RLock()
-	currentRevision := s.revision
 	baseRuntime := cloneLinuxRuntimeState(s.runtime)
 	s.mu.RUnlock()
 	if currentRevision != sourceRevision {
@@ -311,16 +240,13 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.revision != sourceRevision {
-		return s.revision, false, errDaemonStateRevisionStale
-	}
 	s.runtime = candidate
 	if s.now != nil {
 		s.snapshotTime = s.now()
 	} else {
 		s.snapshotTime = time.Now()
 	}
-	return s.revision, true, nil
+	return sourceRevision, true, nil
 }
 
 func (s *DaemonStateStore) commitRoutingIfRevision(revision uint64, birdInstances map[string]*BirdInstanceState, reconcile *routingReconcileState) (uint64, bool, error) {
@@ -413,15 +339,6 @@ func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntime
 	return common, runtime
 }
 
-func (s *DaemonStateStore) metadata() daemonStateStoreMeta {
-	if s == nil {
-		return daemonStateStoreMeta{}
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.metaLocked()
-}
-
 func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	return daemonStateStoreMeta{
 		Revision:          s.revision,
@@ -431,23 +348,17 @@ func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	}
 }
 
-// ZoneDigests delegates directly to the common owner and never constructs the
-// legacy aggregate state shape.
-func (s *DaemonStateStore) ZoneDigests() []corestate.ZoneDigest {
-	if s == nil || s.common == nil {
-		return nil
-	}
-	digests, _ := s.common.ZoneDigests()
-	return digests
-}
-
 func (s *DaemonStateStore) Meta() daemonStateStoreMeta {
 	if s == nil {
 		return daemonStateStoreMeta{}
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.metaLocked()
+	meta := s.metaLocked()
+	s.mu.RUnlock()
+	if s.common != nil {
+		meta.Revision = uint64(s.common.VerifiedRevision())
+	}
+	return meta
 }
 
 func (s *DaemonStateStore) SetDirty(flags daemonDirtyFlags) {

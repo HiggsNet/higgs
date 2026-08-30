@@ -22,7 +22,7 @@ func newTestObserverServer() *observerServer {
 			App:    &Runtime{Config: &appConfig{}},
 		},
 	}
-	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
+	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store.common, corehost.GossipRuntimeConfig{})
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
 	return newObserverServer(d, cfg)

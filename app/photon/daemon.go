@@ -167,7 +167,7 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 		spoolConfig = rt.Config.Health.spoolConfig()
 	}
 	syncRuntime := newSyncRuntime(config, nil, rt)
-	hostRuntime := corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore, gossipHostRuntimeConfig(config))
+	hostRuntime := corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config))
 	d := &DaemonService{
 		Sync:              syncRuntime,
 		Interval:          interval,
@@ -1793,7 +1793,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 				}},
 			}
 		}
-		if _, err := d.StateStore.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
+		if _, err := d.StateStore.common.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
 			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 			return
 		}

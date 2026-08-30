@@ -121,8 +121,8 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 HostRuntime；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
 | `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
-| `daemon_state_store.go` | E1 唯一 writer 协调器和聚合读视图 | owner/排序进入 host；Linux persistence 进入 capability；聚合 view 消失后删除 |
-| `daemon_sync.go` | Linux gossip ingress 观测、发送日志和 session 收尾 | packet、gossip timer、object-pull completion 的类型判断和协议分发已统一进入 `HostRuntime.HandleGossipHostEvent`，旧 `daemonEventPacket` 已删除；继续迁走 announce/fetch-zone/chunk/NACK 公共执行，最终只留 transport/observability/reconcile hook |
+| `daemon_state_store.go` | Linux runtime 持久化顺序、临时聚合测试视图和少量 mutation coordinator | HostRuntime 已直接持有 common Store，remote/checkpoint/read forwarding 已删除；剩余 Linux commit 迁入 platform owner，聚合 Snapshot fixture 改完后删除该文件 |
+| `daemon_sync.go` | HostRuntime 终态结果到 Linux reconcile 的接线 | gossip packet/session FSM、发送、observed checkpoint、relay、日志和 observability 已在 HostRuntime 闭环；daemon 不再提供 gossip I/O/controller adapter |
 
 ### 3.2 DB、debug 和 diagnostics
 
@@ -263,7 +263,8 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 
 1. direct writer：已完成；record/IPAM/route/service/delegation、fresh join bootstrap 与 Linux state GC 均写入各自 owner，不再通过聚合 `stateFile` 落盘。
 2. 公共 HostRuntime：协议 receive、timer、object-pull、discovery 和 controller 周期调度已完成；`sync.go` 与
-   `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。
+   `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。HostRuntime 已直接持有 common Store 和同一个
+   gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
 3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
 4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。

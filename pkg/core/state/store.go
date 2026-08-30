@@ -17,6 +17,7 @@ var (
 	ErrSnapshotRootMismatch       = errors.New("snapshot root does not match advertised catalog digest")
 	ErrTrustedRootAuthorityChange = errors.New("remote snapshot cannot replace the trusted root authority")
 	ErrVerifiedStoreClosed        = errors.New("verified state store is closed")
+	ErrVerifiedRevisionStale      = errors.New("verified state revision is stale")
 )
 
 // VerifiedState is the platform-neutral persisted root owned by Store. It

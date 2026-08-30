@@ -983,11 +983,14 @@ package dependency: app -> host -> gossip -> state -> zone
       test 等价 I/O glue。Linux/Windows composition 现在用 `StartGossipTransport` 把同一个公共 `gossip.Transport` 直接交给
       HostRuntime；Runtime 直接使用其 Send/SendTo、datagram budget 和可重建 address book，平台只创建底层 DatagramIO。
       通用 receiver capability 已改为 HostRuntime 私有实现细节，不再形成第二条公开 transport 边界。
-    - [ ] F0e5：F0e4 前再做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次
-      wrapper 和 legacy alias 都必须列出真实调用方。只被测试构造器使用的兼容入口直接删除；仍串联 common commit 与 Linux
-      runtime 同一 Bolt transaction 的 `DaemonStateStore` 方法保留到调用方改用 typed owner；F0e5 完成前必须把它迁出
-      HostRuntime 的 common Store 依赖，期间不得新增 aggregate view。完成后同步更新 runtime migration report，而不是靠文档
-      把临时层解释成长期抽象。
+    - [ ] F0e5：做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次 wrapper 和
+      legacy alias 都必须列出真实调用方。只被测试构造器使用的兼容入口直接删除；仍串联 common commit 与 Linux runtime
+      持久化顺序的方法保留到调用方改用 typed owner，期间不得新增 aggregate view。
+      - [x] F0e5a：HostRuntime 直接持有 `*corestate.Store`，删除 `DaemonStateStore` 的 remote-batch/checkpoint/ReadView/
+        ZoneDigests 转发和仅供旧 projection 构造的公开 constructor。platform-first protocol publish 改用 common Store 的
+        expected-revision intent commit；gossip 若在两步之间推进 verified revision，旧平台计划 fail closed 并交给下一轮 reconcile。
+      - [ ] F0e5b：迁走剩余 production `stateFile` 输入并批量改写依赖 `DaemonStateStore.Snapshot()` 的测试 fixture，随后删除
+        aggregate Snapshot/clone、legacy alias 和没有多调用方价值的 runtime commit wrapper；同步更新 runtime migration report。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

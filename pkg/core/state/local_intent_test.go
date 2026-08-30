@@ -86,6 +86,29 @@ func TestStoreApplyLocalIntentsCommitsOnceAndRollsBackAsBatch(t *testing.T) {
 	}
 }
 
+func TestStoreApplyLocalIntentsAtRevisionRejectsStalePlan(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
+	sink := &memoryCommitSink{}
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit)
+	if _, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
+		Zone: "node-a.catofes.", Key: "current", Type: "text", Value: []byte("current"),
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.ApplyLocalIntentsAtRevision(context.Background(), []LocalIntent{PutRecordIntent{
+		Zone: "node-a.catofes.", Key: "stale", Type: "text", Value: []byte("stale"),
+	}}, now, 0)
+	if !errors.Is(err, ErrVerifiedRevisionStale) {
+		t.Fatalf("stale plan error = %v, want ErrVerifiedRevisionStale", err)
+	}
+	view := store.ReadView()
+	if view.Revision != 1 || view.State.Network.Zones["node-a.catofes."].Records["stale"] != nil || sink.commits != 1 {
+		t.Fatalf("stale plan changed state: revision=%d commits=%d", view.Revision, sink.commits)
+	}
+}
+
 func TestStoreProtocolRecordIntentValidatesTupleAndNoop(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
