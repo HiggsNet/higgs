@@ -90,6 +90,43 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	}
 }
 
+func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _ := testNetwork(t)
+	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+	snapshot, err := Snapshot(network, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	root := ZoneRoot(ZoneStateFromSnapshot(snapshot))
+	sink := &memoryCommitSink{}
+	store := NewStoreWithCheckpoint(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network}, &GossipCheckpoint{
+		Peers: map[string]PeerCheckpoint{"peer-a": {RejectedObjects: map[zone.ZonePath]RejectedObject{
+			"catofes.": {RootHash: append([]byte(nil), root...), Reason: "previous transient rejection", UpdatedUnix: now.Add(-time.Minute).Unix(), UntilUnix: now.Add(time.Minute).Unix()},
+		}}},
+	}, sink.Commit)
+
+	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: root}}, now)
+	if err != nil {
+		t.Fatalf("ApplyRemoteBatch: %v", err)
+	}
+	if !result.Committed || result.Changes.NetworkChanged || !result.Changes.GossipCheckpointChanged || result.Changes.VerifiedRevision != 0 {
+		t.Fatalf("checkpoint-only result = %#v", result.CommitResult)
+	}
+	view := store.ReadView()
+	if view.Revision != 0 || len(view.Gossip.Peers["peer-a"].RejectedObjects) != 0 || sink.commits != 1 {
+		t.Fatalf("view/commits = revision %d checkpoint %#v commits %d", view.Revision, view.Gossip.Peers["peer-a"], sink.commits)
+	}
+
+	noop, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: root}}, now)
+	if err != nil {
+		t.Fatalf("ApplyRemoteBatch(no-op): %v", err)
+	}
+	if noop.Committed || noop.Changes.NetworkChanged || noop.Changes.GossipCheckpointChanged || sink.commits != 1 {
+		t.Fatalf("pure no-op result/commits = %#v/%d", noop.CommitResult, sink.commits)
+	}
+}
+
 func TestStoreApplyRemoteBatchRejectsRootAuthorityReplacement(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)

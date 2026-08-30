@@ -40,6 +40,7 @@ func TestStoreApplyRemoteBatchRefreshesAuthorityAndRetainsLocalContents(t *testi
 	if err := initial.PutAt(local, now); err != nil {
 		t.Fatalf("PutAt(local): %v", err)
 	}
+	initial.Zones["node-a.catofes."].Delegations["leaf.node-a.catofes."] = &zone.Delegation{ZoneName: "leaf.node-a.catofes."}
 
 	source := cloneNetworkState(initial)
 	parent := source.Zones["catofes."]
@@ -82,11 +83,61 @@ func TestStoreApplyRemoteBatchRefreshesAuthorityAndRetainsLocalContents(t *testi
 	if record := managed.Records["local"]; record == nil || string(record.Value) != "retained" {
 		t.Fatalf("local record = %#v, want retained", record)
 	}
+	if managed.Delegations["leaf.node-a.catofes."] == nil {
+		t.Fatal("managed authority refresh dropped local child delegation")
+	}
+	if len(managed.ParentProof) != 1 || managed.ParentProof[0].AuthorityEpoch != 2 {
+		t.Fatalf("managed parent proof = %#v, want refreshed epoch 2 proof", managed.ParentProof)
+	}
 	if initial.Zones["node-a.catofes."].Authority.Epoch != 1 {
 		t.Fatal("store refresh mutated retained initial network")
 	}
 	if len(result.Changes.ChangedZones) != 2 {
 		t.Fatalf("changed zones = %#v, want parent and managed", result.Changes.ChangedZones)
+	}
+}
+
+func TestStoreApplyRemoteBatchRejectsManagedAuthorityRefreshForDifferentKey(t *testing.T) {
+	now := time.Unix(1000, 0)
+	initial, _, identityPrivate, parentPrivate := managedAuthorityFixture(t, true)
+	remote := cloneNetworkState(initial)
+	otherPublic, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(other): %v", err)
+	}
+	nextAuthority := cloneAuthority(remote.Zones["node-a.catofes."].Authority)
+	nextAuthority.Epoch = 2
+	nextAuthority.Keys[0].Key = otherPublic
+	delegation := &zone.Delegation{ZoneName: "node-a.catofes.", Scope: zone.DelegationScopeDirectChild, Authority: *nextAuthority}
+	if err := photoncrypto.SignDelegation(delegation, "catofes.", parentPrivate); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+	remote.Zones["catofes."].Delegations["node-a.catofes."] = delegation
+	snapshot, err := Snapshot(remote, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot(parent): %v", err)
+	}
+
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial, IdentityPrivateKey: identityPrivate}, nil)
+	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
+		Snapshot:     snapshot,
+		ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
+	}}, now)
+	if err != nil {
+		t.Fatalf("ApplyRemoteBatch: %v", err)
+	}
+	if len(result.Outcomes) != 1 || result.Outcomes[0].Err == nil || result.Changes.NetworkChanged {
+		t.Fatalf("outcome = %#v changes = %#v, want rejected network candidate", result.Outcomes, result.Changes)
+	}
+	view := store.ReadView()
+	if got := view.State.Network.Zones["node-a.catofes."].Authority.Epoch; got != 1 {
+		t.Fatalf("managed authority epoch = %d, want 1", got)
+	}
+	if got := view.State.Network.Zones["catofes."].Delegations["node-a.catofes."].AuthorityEpoch; got != 1 {
+		t.Fatalf("parent delegation epoch = %d, want 1", got)
+	}
+	if err := photoncrypto.VerifyChain(view.State.Network, "node-a.catofes.", now); err != nil {
+		t.Fatalf("VerifyChain after rejection: %v", err)
 	}
 }
 

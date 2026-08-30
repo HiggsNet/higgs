@@ -1027,8 +1027,11 @@ package dependency: app -> host -> gossip -> state -> zone
           - gossip/sync 测试按被测 owner 重新归档：catalog summary 的 session/observability 覆盖已从 app daemon 迁到
             `pkg/core/host/gossip_event_test.go`；app 中 catalog/fetch responder、chunk fallback 和 invalid chunk reject 的重复测试删除，
             由 `pkg/core/host/gossip_inbound_test.go`、`gossip_chunk_test.go` 负责。app 只保留 HostRuntime 结果触发 Linux reconcile/
-            state-changed hook 的薄集成覆盖。剩余 `executeSyncActions` 测试目前仍依赖 test-only daemon wrapper，下一批按 Store 语义
-            迁入 `pkg/core/state`、按 action/completion 语义迁入 `pkg/core/host` 后删除该 wrapper。
+            state-changed hook 的薄集成覆盖。`sync_actions_test.go` 与 test-only `executeSyncActions`/sender wrapper 已删除：remote batch
+            的 success/reject/no-op/checkpoint-only/managed-authority 原子语义归入 `pkg/core/state`，未验证 peer 的入站地址回复归入
+            `pkg/core/host`；启动 authority 恢复与 chunk commit 后的平台通知分别保留为窄 app 集成测试。下一批继续审计
+            `sync_transport_discovery_test.go`：地址排序、endpoint 过滤与 discovery checkpoint 属公共 HostRuntime，只有 Linux datagram
+            bind/dependency 注入可留在 app。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

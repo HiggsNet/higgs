@@ -17,19 +17,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// Compatibility aliases keep tests ported from the pre-host-runtime gossip
-// layout focused on behavior while production code uses pkg/core/gossip.
-type SyncAction = gossip.SyncAction
-type ApplySnapshotAction = gossip.ApplySnapshotAction
-type SnapshotAppliedEvent = gossip.SnapshotAppliedEvent
-type SyncTimerEvent = gossip.SyncTimerEvent
-type PongReceivedEvent = gossip.PongReceivedEvent
-type ObjectPullResultEvent = gossip.ObjectPullResultEvent
-
-var NewSyncSession = gossip.NewSyncSession
-
-const SyncSessionCompleted = gossip.SyncSessionCompleted
-
 func (d *DaemonService) setState(state *stateFile) {
 	if d == nil {
 		return
@@ -176,23 +163,4 @@ func UpdateRevocationLayerStatus(impact *inspect.RevocationImpact, layer string,
 
 func publishSOCKS5ServiceWithRuntime(rt *Runtime, region, address string, port uint16) error {
 	return publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: region, Address: address, Port: port}})
-}
-
-func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.SyncSession, actions []gossip.SyncAction) bool {
-	if d == nil || session == nil || len(actions) == 0 {
-		return false
-	}
-	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, testGossipSender{transport: d.Sync.Transport})
-	return result.NetworkChanged
-}
-
-type testGossipSender struct {
-	transport *gossip.Transport
-}
-
-func (sender testGossipSender) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
-	if sender.transport == nil {
-		return nil
-	}
-	return sender.transport.Send(outbound.PeerID, outbound.Message)
 }
