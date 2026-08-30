@@ -1021,6 +1021,9 @@ package dependency: app -> host -> gossip -> state -> zone
             daemon lifecycle、control common view、links/status、packet checkpoint 与 Observer snapshot 测试已直接准备 typed owners。
             原先通过锁住 constructor `stateFile` 验证 detached 的两组 read 测试，改为直接修改构造输入并断言 Store 的 owner clone
             不受影响；packet 测试直接断言 GossipCheckpoint，不再拼回 aggregate snapshot。
+          - 第二批开始清理 `daemon_events_test.go`：删除重复的 constructor-lock record 测试，record/event-loop/endpoint 发布直接
+            断言 common owner，IPsec port rotate 直接断言 Linux runtime owner；delegation issue 改用真实 persisted owner Store，
+            关闭重开后验证 delegation，而不是把内存 aggregate snapshot 误称为“已持久化”。该文件已不再调用 `stateFile.Lock`。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

@@ -16,17 +16,13 @@ import (
 )
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(2000, 0)
 	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config: defaultAppConfig(),
+		Clock:  func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,
@@ -46,72 +42,20 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	if result.Version != 1 {
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
-	latest := service.currentState()
-	if latest.Network.Zones["node-b.catofes."].Records["identity"] == nil {
+	latest := service.StateStore.common.ReadView()
+	if latest.State.Network.Zones["node-b.catofes."].Records["identity"] == nil {
 		t.Fatalf("record was not persisted")
 	}
 }
 
-func TestDaemonRecordPutUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(2100, 0)
-	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
-
-	state.Lock()
-	unlock := state.Unlock
-	version, err := service.handleRecordPutEvent(&daemonRecordPut{
-		Zone:  zone.ZonePath("node-b.catofes."),
-		Key:   "locked-record",
-		Value: []byte("store"),
-		Type:  "policy.string",
-	})
-	if err != nil {
-		unlock()
-		t.Fatalf("handleRecordPutEvent: %v", err)
-	}
-	current := service.currentState()
-	if current == state {
-		unlock()
-		t.Fatal("committed snapshot still aliases constructor input")
-	}
-	if got := current.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
-		unlock()
-		t.Fatal("committed state missing locked record")
-	}
-	unlock()
-	if version != 1 {
-		t.Fatalf("version = %d, want 1", version)
-	}
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if got := snapshot.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
-		t.Fatal("committed snapshot missing locked record")
-	}
-	latest := service.currentState()
-	if got := latest.Network.Zones["node-b.catofes."].Records["locked-record"]; got == nil {
-		t.Fatal("persisted state missing locked record")
-	}
-}
-
-func TestDaemonEventLoopRecordPutDoesNotWaitForConstructorInputLock(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(2125, 0)
 	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config: defaultAppConfig(),
+		Clock:  func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{
@@ -124,80 +68,38 @@ func TestDaemonEventLoopRecordPutDoesNotWaitForConstructorInputLock(t *testing.T
 		},
 		Reply: reply,
 	}
-	state.Lock()
-	unlock := state.Unlock
-	done := make(chan daemonEventResult, 1)
-	go func() {
-		service.processEvents(context.Background())
-		done <- <-reply
-	}()
-
-	select {
-	case result := <-done:
-		if result.Error != nil {
-			unlock()
-			t.Fatalf("processEvents(record_put): %v", result.Error)
-		}
-	case <-time.After(time.Second):
-		unlock()
-		t.Fatal("record_put event blocked behind detached constructor-input lock")
+	service.processEvents(context.Background())
+	if result := <-reply; result.Error != nil {
+		t.Fatalf("processEvents(record_put): %v", result.Error)
 	}
-	current := service.currentState()
-	if current == state {
-		unlock()
-		t.Fatal("committed snapshot still aliases constructor input")
-	}
-	unlock()
 
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if got := snapshot.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
-		t.Fatal("committed snapshot missing event-loop record")
+	current := service.StateStore.common.ReadView()
+	if got := current.State.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
+		t.Fatal("common owner missing event-loop record")
 	}
 }
 
-func TestDaemonEndpointTimerUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+func TestDaemonEndpointTimerPublishesToCommonOwner(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "198.51.100.20:4242"
 	now := time.Unix(2150, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	state.Lock()
-	unlock := state.Unlock
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
-		unlock()
 		t.Fatalf("handleEndpointTimerEvent: %v", err)
 	}
-	current := service.currentState()
-	if current == state {
-		unlock()
-		t.Fatal("committed snapshot still aliases constructor input")
-	}
-	if got := current.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
-		unlock()
-		t.Fatal("committed state missing endpoint record")
-	}
-	unlock()
-
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if got := snapshot.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
-		t.Fatal("committed snapshot missing endpoint record")
-	}
-	latest := service.currentState()
-	if got := latest.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
-		t.Fatal("persisted state missing endpoint record")
+	current := service.StateStore.common.ReadView()
+	if got := current.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
+		t.Fatal("common owner missing endpoint record")
 	}
 }
 
@@ -270,52 +172,31 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecPortRotateUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+func TestDaemonIPsecPortRotateCommitsLinuxRuntimeOwner(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(2300, 0)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 31000, To: 31099}
 	appConfig.IPsec.PortPreviousGrace = time.Hour
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	state.Lock()
-	unlock := state.Unlock
 	result, err := service.handleIPsecPortRotateEvent()
 	if err != nil {
-		unlock()
 		t.Fatalf("handleIPsecPortRotateEvent: %v", err)
 	}
-	current := service.currentState()
-	if current == state {
-		unlock()
-		t.Fatal("committed snapshot still aliases constructor input")
-	}
-	if got := current.IPsecPortRecord; got == nil || got.Generation != result.CurrentGeneration {
-		unlock()
-		t.Fatalf("transferred live IPsecPortRecord = %#v, want generation %d", got, result.CurrentGeneration)
-	}
-	unlock()
 	if result == nil || result.CurrentGeneration == 0 {
 		t.Fatalf("rotate result = %#v", result)
 	}
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if snapshot.IPsecPortRecord == nil || snapshot.IPsecPortRecord.Generation != result.CurrentGeneration {
-		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", snapshot.IPsecPortRecord, result.CurrentGeneration)
-	}
-	latest := service.currentState()
-	if latest.IPsecPortRecord == nil || latest.IPsecPortRecord.Generation != result.CurrentGeneration {
-		t.Fatalf("persisted IPsecPortRecord = %#v, want generation %d", latest.IPsecPortRecord, result.CurrentGeneration)
+	_, currentRuntime := service.StateStore.readCommonAndRuntime()
+	if currentRuntime.IPsecPortRecord == nil || currentRuntime.IPsecPortRecord.Generation != result.CurrentGeneration {
+		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", currentRuntime.IPsecPortRecord, result.CurrentGeneration)
 	}
 }
 
@@ -518,7 +399,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	}
 }
 
-func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
+func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 	now := time.Unix(6100, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
@@ -528,43 +409,43 @@ func TestDaemonDelegateIssueUsesStateStoreWhileConstructorInputLocked(t *testing
 	if _, err := initRootStateInRuntime(rt); err != nil {
 		t.Fatalf("initRootStateInRuntime: %v", err)
 	}
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
-		t.Fatalf("LoadState(root): %v", err)
+		t.Fatalf("openLinuxDaemonState(root): %v", err)
 	}
-	service := newTestDaemonService(rt, state, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
+	if err != nil {
+		t.Fatalf("newPersistedDaemonStateStore: %v", err)
+	}
+	service := newDaemonServiceWithStore(rt, stateStore, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 
-	state.Lock()
-	unlock := state.Unlock
 	result, err := service.handleDelegateIssueEvent(&joinRequest{Version: 1, Zone: "catofes.", PublicKey: pub}, nil)
 	if err != nil {
-		unlock()
 		t.Fatalf("handleDelegateIssueEvent: %v", err)
 	}
-	current := service.currentState()
-	if current == state {
-		unlock()
-		t.Fatal("committed snapshot still aliases constructor input")
-	}
-	if got := current.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
-		unlock()
-		t.Fatal("committed state missing catofes delegation")
-	}
-	unlock()
 	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
 		t.Fatalf("delegate issue result = %#v", result)
 	}
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if got := snapshot.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
-		t.Fatal("committed snapshot missing catofes delegation")
+	if got := startup.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+		t.Fatal("common owner missing catofes delegation")
 	}
-	latest := service.currentState()
-	if got := latest.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
-		t.Fatal("persisted state missing catofes delegation")
+	startup.Common.Close()
+	if err := boltStore.Close(); err != nil {
+		t.Fatalf("close BoltStore: %v", err)
+	}
+
+	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("reopen Linux daemon state: %v", err)
+	}
+	defer reopened.Common.Close()
+	defer reopenedStore.Close()
+	if got := reopened.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+		t.Fatal("reopened common owner missing persisted catofes delegation")
 	}
 }
 
