@@ -32,6 +32,41 @@ func TestRuntimeHandleGossipSessionEventOwnsEngineToActionBridge(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogSummaryUpdatesSessionObservability(t *testing.T) {
+	clock := newFakeClock(time.Unix(100, 0))
+	peerID := "peer-a"
+	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer runtime.Stop()
+	bindMemoryGossipTransport(t, runtime, peerID)
+	runtime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
+
+	result, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.CatalogSummaryReceivedEvent{
+		PeerID: peerID,
+		Summary: &corestate.CatalogSummary{
+			CatalogRoot: []byte{0x21, 0x22},
+			ZoneCount:   2,
+			NextCursor:  "next-page",
+		},
+	}}, clock.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.NetworkChanged {
+		t.Fatal("metadata-only catalog event reported a Network change")
+	}
+	diagnostics, ok := runtime.Observability.Snapshot(peerID, clock.Now())
+	if !ok || diagnostics.DatagramStats == nil {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	stats := diagnostics.DatagramStats
+	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
+		t.Fatalf("catalog stats = %#v", stats)
+	}
+	if diagnostics.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || diagnostics.ActivePullLastEvent != "catalog_summary" {
+		t.Fatalf("active pull = state %q event %q", diagnostics.ActivePullState, diagnostics.ActivePullLastEvent)
+	}
+}
+
 func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	runtime := NewRuntime(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})

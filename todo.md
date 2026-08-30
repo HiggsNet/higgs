@@ -1024,6 +1024,11 @@ package dependency: app -> host -> gossip -> state -> zone
           - 第二批开始清理 `daemon_events_test.go`：删除重复的 constructor-lock record 测试，record/event-loop/endpoint 发布直接
             断言 common owner，IPsec port rotate 直接断言 Linux runtime owner；delegation issue 改用真实 persisted owner Store，
             关闭重开后验证 delegation，而不是把内存 aggregate snapshot 误称为“已持久化”。该文件已不再调用 `stateFile.Lock`。
+          - gossip/sync 测试按被测 owner 重新归档：catalog summary 的 session/observability 覆盖已从 app daemon 迁到
+            `pkg/core/host/gossip_event_test.go`；app 中 catalog/fetch responder、chunk fallback 和 invalid chunk reject 的重复测试删除，
+            由 `pkg/core/host/gossip_inbound_test.go`、`gossip_chunk_test.go` 负责。app 只保留 HostRuntime 结果触发 Linux reconcile/
+            state-changed hook 的薄集成覆盖。剩余 `executeSyncActions` 测试目前仍依赖 test-only daemon wrapper，下一批按 Store 语义
+            迁入 `pkg/core/state`、按 action/completion 语义迁入 `pkg/core/host` 后删除该 wrapper。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
