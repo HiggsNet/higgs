@@ -107,8 +107,10 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 }
 
 func TestDaemonServiceStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	if err := service.closeLinuxRuntime(); err != nil {
 		t.Fatalf("close Linux runtime: %v", err)
 	}
@@ -128,8 +130,10 @@ func TestDaemonServiceStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *t
 }
 
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	service.drainingEvents = true
 	var flushed []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
@@ -147,8 +151,10 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 }
 
 func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	beforeRevision := service.StateStore.Meta().Revision
 
 	service.firewallDirty = true

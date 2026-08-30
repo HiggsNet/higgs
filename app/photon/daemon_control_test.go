@@ -20,8 +20,10 @@ import (
 )
 
 func TestDaemonControlErrorResponses(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
 	if response.OK || response.Error == "" {
@@ -45,8 +47,10 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 }
 
 func TestDaemonControlStatus(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
 	ctx := t.Context()
 	stop, err := service.startControlServer(ctx)
@@ -129,9 +133,11 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 }
 
 func TestDaemonControlCommonReadViews(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:43435"}}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 
 	records := controlViewRequestViaPipe[inspect.RecordsDebugView](t, service, controlRequest{Method: "records_view", Zone: "node-b.catofes."})
 	if !records.OK {
@@ -205,9 +211,9 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !zoneView.OK || zoneView.View.Detail.Path == "" {
 		t.Fatalf("zone_debug response = %#v", zoneView)
 	}
-	verified := controlRequestViaPipe(t, service, controlRequest{Method: "verify_chain", Zone: "node-b.catofes."})
-	if !verified.OK {
-		t.Fatalf("verify_chain response = %#v", verified)
+	verifiedResponse := controlRequestViaPipe(t, service, controlRequest{Method: "verify_chain", Zone: "node-b.catofes."})
+	if !verifiedResponse.OK {
+		t.Fatalf("verify_chain response = %#v", verifiedResponse)
 	}
 }
 
@@ -328,8 +334,8 @@ func TestDaemonControlBirdDump(t *testing.T) {
 }
 
 func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.LinkInstances = map[string]linkInstanceState{
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-1": {
 			ID:            "link-1",
 			GroupID:       "main",
@@ -345,7 +351,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			Endpoint:      "198.51.100.2:4500",
 		},
 	}
-	state.IPsecReconcile = &ipsecReconcileState{
+	runtime.IPsecReconcile = &ipsecReconcileState{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{
@@ -368,7 +374,9 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			Established:    true,
 		}},
 	}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 
 	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	if !response.OK {
@@ -389,9 +397,9 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	}
 }
 
-func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.LinkInstances = map[string]linkInstanceState{
+func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -399,7 +407,7 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 			ActualState: "up",
 		},
 	}
-	state.IPsecReconcile = &ipsecReconcileState{
+	runtime.IPsecReconcile = &ipsecReconcileState{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{
@@ -409,16 +417,20 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 			Endpoint:   "203.0.113.9:4500",
 		}},
 	}
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b": {LastSyncUnix: 1111, ObservedAddr: "198.51.100.2:7777", ObservedUntilUnix: time.Now().Add(time.Minute).Unix()},
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
+		"node-b": {
+			LastSyncUnix:      1111,
+			ObservedEndpoint:  "198.51.100.2:7777",
+			ObservedUntilUnix: time.Now().Add(time.Minute).Unix(),
+		},
 	}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	committedRev := service.StateStore.Meta().Revision
 
-	state.Lock()
-	state.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
-	state.IPsecReconcile.DesiredLinks = 99
-	defer state.Unlock()
+	runtime.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	runtime.IPsecReconcile.DesiredLinks = 99
 
 	status := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	if !status.OK {
@@ -442,9 +454,11 @@ func TestDaemonControlReadMethodsUseCommittedSnapshotWhileConstructorInputLocked
 	}
 }
 
-func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 	packet := &gossip.Packet{
 		Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 33434},
 		Message: &gossip.Message{
@@ -454,27 +468,13 @@ func TestDaemonPacketEventDoesNotWaitForConstructorInputLock(t *testing.T) {
 		},
 	}
 
-	state.Lock()
-	done := make(chan error, 1)
-	go func() {
-		done <- service.processPacketEvent(packet, context.Background())
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("packet event error: %v", err)
-		}
-	case <-time.After(time.Second):
-		state.Unlock()
-		t.Fatal("packet event blocked behind detached constructor-input lock")
+	if err := service.processPacketEvent(packet, context.Background()); err != nil {
+		t.Fatalf("packet event error: %v", err)
 	}
-	state.Unlock()
 
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	peerState := snapshot.SyncPeers["node-b.catofes."]
-	if peerState.ObservedAddr != "198.51.100.9:33434" {
-		t.Fatalf("observed addr = %q, want packet source", peerState.ObservedAddr)
+	peer := service.StateStore.common.ReadView().Gossip.Peers["node-b.catofes."]
+	if peer.ObservedEndpoint != "198.51.100.9:33434" {
+		t.Fatalf("observed endpoint = %q, want packet source", peer.ObservedEndpoint)
 	}
 }
 

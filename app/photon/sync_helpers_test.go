@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"net"
@@ -15,6 +16,11 @@ import (
 )
 
 func buildTestNetworkState(t testing.TB) (*stateFile, *syncConfigFile) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	return composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime), config
+}
+
+func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -99,16 +105,16 @@ func buildTestNetworkState(t testing.TB) (*stateFile, *syncConfigFile) {
 		t.Fatalf("VerifyChain(node-b): %v", err)
 	}
 
-	state := &stateFile{
-		ManagedZone:    "node-a.catofes.",
-		Network:        ns,
-		ZonePrivateKey: nodeBPriv,
+	verified := &corestate.VerifiedState{
+		ManagedZone:        "node-a.catofes.",
+		Network:            ns,
+		IdentityPrivateKey: nodeBPriv,
 	}
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
 	}
-	return state, config
+	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config
 }
 
 func endpointRecordFromState(t *testing.T, state *stateFile, path zone.ZonePath) gossip.EndpointRecord {

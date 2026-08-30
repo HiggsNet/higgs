@@ -37,9 +37,9 @@ func TestObserverStatusAPI(t *testing.T) {
 	}
 }
 
-func TestObserverReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.LinkInstances = map[string]linkInstanceState{
+func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -47,20 +47,20 @@ func TestObserverReadMethodsUseCommittedSnapshotWhileConstructorInputLocked(t *t
 			ActualState: "up",
 		},
 	}
-	state.IPsecReconcile = &ipsecReconcileState{DesiredLinks: 1}
+	runtime.IPsecReconcile = &ipsecReconcileState{DesiredLinks: 1}
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
-	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
+	)
 	srv := newObserverServer(service, appConfig.Observer)
 	if srv == nil {
 		t.Fatal("observer server is nil")
 	}
 	committedRev := service.StateStore.Meta().Revision
 
-	state.Lock()
-	state.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
-	state.IPsecReconcile.DesiredLinks = 99
-	defer state.Unlock()
+	runtime.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	runtime.IPsecReconcile.DesiredLinks = 99
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()

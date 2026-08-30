@@ -1017,6 +1017,10 @@ package dependency: app -> host -> gossip -> state -> zone
           `stateFile` 构造 common/Linux owners。先增加直接接收 `VerifiedState + GossipCheckpoint + linuxRuntimeState` 的
           typed-owner fixture，并迁移 daemon lifecycle 基础测试；随后按 gossip、reconcile、root-smoke 拆分 helper 与调用方，
           最终只允许 legacy migration 测试使用 `LoadState/SaveState/cloneStateFile/stateMetaFromState`。
+          - 第一批已建立 owner-first `buildTestDaemonOwners`，旧 `buildTestNetworkState` 只作为待迁调用方的反向组合 wrapper；
+            daemon lifecycle、control common view、links/status、packet checkpoint 与 Observer snapshot 测试已直接准备 typed owners。
+            原先通过锁住 constructor `stateFile` 验证 detached 的两组 read 测试，改为直接修改构造输入并断言 Store 的 owner clone
+            不受影响；packet 测试直接断言 GossipCheckpoint，不再拼回 aggregate snapshot。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
