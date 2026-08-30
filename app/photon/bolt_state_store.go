@@ -89,13 +89,15 @@ func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState,
 	if found {
 		return store, startup, nil
 	}
-	// Only an uninitialized database may enter the legacy bootstrap path. Once
-	// common state exists, every reopen above is independent of the old Network
-	// and meta representation.
+	// Only an uninitialized database may enter the pending identity bootstrap
+	// path. Existing legacy databases were already migrated by the first call
+	// above. Pending auto-join cannot yet be represented by VerifiedState because
+	// its managed authority has not been synchronized, so this narrow writer is
+	// the sole temporary legacy-schema exception.
 	if err := store.Close(); err != nil {
 		return nil, linuxStartupState{}, err
 	}
-	if _, err := rt.LoadState(); err != nil {
+	if err := writeConfiguredPendingBootstrap(rt.StatePath, rt.Config); err != nil {
 		return nil, linuxStartupState{}, err
 	}
 	store, err = corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)

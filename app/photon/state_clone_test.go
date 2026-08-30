@@ -180,7 +180,7 @@ func TestCloneStateFilePreservesNilAndEmptyShape(t *testing.T) {
 }
 
 func TestCloneStateFileSchemaGuard(t *testing.T) {
-	assertStateCloneFields(t, stateFile{}, "mu", "ManagedZone", "IdentityKeyPath", "RootPrivateKey", "ZonePrivateKey", "Network", "SyncPeers", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances", "IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission")
+	assertStateCloneFields(t, stateFile{}, "ManagedZone", "IdentityKeyPath", "RootPrivateKey", "ZonePrivateKey", "Network", "SyncPeers", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances", "IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission")
 	assertStateCloneFields(t, peerLifecycleCleanupState{}, "LastActiveUnix", "CleanupUnix", "Reason")
 	assertStateCloneFields(t, ipsecTransportKeyState{}, "Kind", "Algorithm", "PublicKey", "PrivateKey", "Fingerprint", "NotBefore", "NotAfter", "UpdatedAt")
 	assertStateCloneFields(t, ipsecPortRecordState{}, "Mode", "Range", "Generation", "UpdatedAt")

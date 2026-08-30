@@ -994,19 +994,22 @@ package dependency: app -> host -> gossip -> state -> zone
         - [x] 49 处测试读取已改为 test-only `snapshotTestDaemonState`，生产 `DaemonStateStore.Snapshot()` 已删除；测试需要的
           aggregate shape 不再迫使生产类型暴露 Snapshot API。
         - [x] aggregate `cloneStateFile` 已移入 test-only helper；生产 `state_clone.go` 只保留各 typed Linux runtime 字段的 clone。
-          无调用方的 `stateFile` RLock/WithLock convenience API 已删除。
+          无调用方的 `stateFile` RLock/WithLock convenience API 已删除；最后只用于证明 constructor input 已 detached 的
+          `Lock/Unlock` 与 mutex 也已移入 `_test.go`，生产 migration DTO 不再为了测试并发断言携带锁。
         - [x] 删除只做 nil guard 和单次转发的 `daemon_runtime_commit.go`；routing/IPsec/firewall/cleanup 调用方直接进入
           `DaemonStateStore` 当前的 typed runtime commit，后续随 Linux runtime owner 一起下沉。
         - [x] 删除 production 中只被测试调用的 aggregate helper：`autoJoinPending(stateFile)`、旧 `CleanupRevokedPeerCache`、
           `CollectAllRevokedZones(stateFile)` 和 record signing helper；测试直接使用 verified/network typed helper，签名 fixture 移入
           test-only helper。实际 revoked checkpoint 清理由在线 typed owner 路径及其测试覆盖。
         - [x] `loadState()`、`Runtime.SyncConfig(stateFile)` 已移到 test-only helper，零调用的
-          `Runtime.ConfigureNetworkValidation` 删除；生产离线入口只保留启动迁移仍实际调用的 `Runtime.LoadState`。
+          `Runtime.ConfigureNetworkValidation` 删除；随后确认旧数据库已由首次 `loadAndRestoreLinuxState` 直接迁移，生产
+          `Runtime.LoadState/loadPartitionedState/applyConfiguredIdentityOverlay` 也已整体移到 `_test.go`，启动不再重建 aggregate view。
         - [x] `init root` 直接原子初始化 common/Linux buckets，不再先写 legacy aggregate schema 等待下次 daemon 启动迁移；
           `Runtime.SaveState(stateFile)` 因此移到 test-only helper。旧 schema 读取/迁移仍保留。
         - [ ] 配置驱动的 pending auto-join 仍是唯一 production legacy writer：此时 managed zone authority 尚未同步，不能通过
-          正式 common `ValidateStateRoot`。当前已缩成 identity/root bootstrap 所需的最小 writer；待 state/admission 定义独立的
-          pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。通用 `saveStateAt/stateMetaFromState` 已移到测试。
+          正式 common `ValidateStateRoot`。当前已缩成直接写 root-only Network 与 identity meta 的最小 writer，不再先构造或返回
+          `stateFile`；待 state/admission 定义独立的 pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。
+          通用 `saveStateAt/stateMetaFromState` 已移到测试。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、

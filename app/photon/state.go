@@ -3,20 +3,17 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/hex"
-	"sync"
 	"time"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	bolt "go.etcd.io/bbolt"
 )
 
 const cliMetaKey = "cli_state"
 
 type stateFile struct {
-	mu                sync.RWMutex       `json:"-"`
 	ManagedZone       zone.ZonePath      `json:"managed_zone"`
 	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
 	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
@@ -33,17 +30,6 @@ type stateFile struct {
 	EndpointACLs      map[string]endpointACL
 	BirdInstances     map[string]*BirdInstanceState
 	Admission         *admissionState `json:"admission,omitempty"`
-}
-
-// Lock acquires the write lock for this state file. All state mutations must
-// be performed while holding the write lock.
-func (s *stateFile) Lock() {
-	s.mu.Lock()
-}
-
-// Unlock releases the write lock for this state file.
-func (s *stateFile) Unlock() {
-	s.mu.Unlock()
 }
 
 type stateMeta struct {
@@ -200,122 +186,6 @@ func (rt *Runtime) Now() time.Time {
 	return time.Now()
 }
 
-func (rt *Runtime) LoadState() (*stateFile, error) {
-	return loadStateAtWithConfig(rt.StatePath, rt.Config)
-}
-
-func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
-	if config == nil {
-		config = defaultAppConfig()
-	}
-	partitioned, found, err := loadPartitionedState(path, config)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		return partitioned, nil
-	}
-	store, err := zone.OpenBoltStore(path, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if store != nil {
-			_ = store.Close()
-		}
-	}()
-
-	ns, err := store.LoadNetwork()
-	if err != nil {
-		return nil, err
-	}
-	var meta stateMeta
-	if err := store.LoadMetaJSON(cliMetaKey, &meta); err != nil {
-		return nil, err
-	}
-	state := stateFile{
-		ManagedZone:       meta.ManagedZone,
-		IdentityKeyPath:   meta.IdentityKeyPath,
-		RootPrivateKey:    meta.RootPrivateKey,
-		ZonePrivateKey:    meta.ZonePrivateKey,
-		Network:           ns,
-		SyncPeers:         meta.SyncPeers,
-		PeerCleanups:      meta.PeerCleanups,
-		IPsecTransportKey: meta.IPsecTransportKey,
-		IPsecPortRecord:   meta.IPsecPortRecord,
-		LinkInstances:     meta.LinkInstances,
-		IPsecReconcile:    meta.IPsecReconcile,
-		RoutingReconcile:  meta.RoutingReconcile,
-		FirewallReconcile: meta.FirewallReconcile,
-		EndpointACLs:      meta.EndpointACLs,
-		BirdInstances:     meta.BirdInstances,
-		Admission:         meta.Admission,
-	}
-	if state.Network == nil || len(state.Network.Zones) == 0 {
-		if err := store.Close(); err != nil {
-			return nil, err
-		}
-		store = nil
-		state, err := createConfiguredBootstrapState(path, config)
-		if err != nil {
-			return nil, err
-		}
-		return state, nil
-	}
-	normalizeState(state.Network)
-	normalizeSyncPeers(&state)
-	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
-		return nil, err
-	}
-	if err := applyConfiguredIdentityOverlay(&state, config); err != nil {
-		return nil, err
-	}
-	return &state, nil
-}
-
-func loadPartitionedState(path string, config *appConfig) (*stateFile, bool, error) {
-	store, err := corestate.OpenBoltStore(path, 0o600, daemonBoltLockTimeout)
-	if err != nil {
-		return nil, false, err
-	}
-	var snapshot linuxStateSnapshot
-	var found bool
-	loadErr := store.View(func(tx *bolt.Tx) error {
-		var err error
-		snapshot, found, err = loadLinuxStateTx(tx)
-		return err
-	})
-	closeErr := store.Close()
-	if loadErr != nil {
-		return nil, false, loadErr
-	}
-	if closeErr != nil {
-		return nil, false, closeErr
-	}
-	if !found {
-		return nil, false, nil
-	}
-	common, err := corestate.RestoreStore(snapshot.Candidate, snapshot.Revision, nil)
-	if err != nil {
-		return nil, false, err
-	}
-	state := composeLinuxStateView(common.ReadView(), snapshot.Runtime)
-	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
-		return nil, false, err
-	}
-	if err := applyConfiguredIdentityOverlay(state, config); err != nil {
-		return nil, false, err
-	}
-	return state, true, nil
-}
-
-func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.PublicKey) error {
-	if len(trustRoot) == 0 {
-		return nil
-	}
-	return photoncrypto.VerifyPinnedRoot(ns, trustRoot)
-}
-
 func equalPublicKey(a, b ed25519.PublicKey) bool {
 	if len(a) != len(b) {
 		return false
@@ -351,15 +221,6 @@ func normalizeState(ns *zone.NetworkState) {
 		if zs.RecordHistory == nil {
 			zs.RecordHistory = make(map[string][]*zone.Record)
 		}
-	}
-}
-
-func normalizeSyncPeers(state *stateFile) {
-	if state.SyncPeers == nil {
-		state.SyncPeers = make(map[string]syncPeerState)
-	}
-	if state.PeerCleanups == nil {
-		state.PeerCleanups = make(map[string]peerLifecycleCleanupState)
 	}
 }
 

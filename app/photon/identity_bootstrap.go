@@ -13,13 +13,13 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func createConfiguredBootstrapState(path string, config *appConfig) (*stateFile, error) {
+func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	if err := validateAutoJoinBootstrapConfig(config); err != nil {
-		return nil, err
+		return err
 	}
 	key, keyPath, err := configuredIdentityKey(config)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rootAuthority := &zone.ZoneAuthority{
 		Zone:      zone.RootZone,
@@ -35,32 +35,18 @@ func createConfiguredBootstrapState(path string, config *appConfig) (*stateFile,
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	configureValidation(ns)
-	state := &stateFile{
-		ManagedZone:       config.ManagedZone,
-		IdentityKeyPath:   keyPath,
-		ZonePrivateKey:    append(ed25519.PrivateKey(nil), key.PrivateKey...),
-		Network:           ns,
-		SyncPeers:         make(map[string]syncPeerState),
-		LinkInstances:     make(map[string]linkInstanceState),
-		IPsecReconcile:    nil,
-		IPsecPortRecord:   nil,
-		IPsecTransportKey: nil,
-	}
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer store.Close()
 	meta := stateMeta{
-		ManagedZone:     state.ManagedZone,
-		IdentityKeyPath: state.IdentityKeyPath,
-		ZonePrivateKey:  append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
-		SyncPeers:       state.SyncPeers,
+		ManagedZone:     config.ManagedZone,
+		IdentityKeyPath: keyPath,
+		ZonePrivateKey:  append(ed25519.PrivateKey(nil), key.PrivateKey...),
+		SyncPeers:       make(map[string]syncPeerState),
 	}
-	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, meta, state.Network); err != nil {
-		return nil, err
-	}
-	return state, nil
+	return store.SaveNetworkAndMetaJSON(cliMetaKey, meta, ns)
 }
 
 func validateAutoJoinBootstrapConfig(config *appConfig) error {
@@ -83,47 +69,6 @@ func validateAutoJoinBootstrapConfig(config *appConfig) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("cannot initialize empty state for auto-join: missing required configuration: %s", strings.Join(missing, ", "))
 	}
-	return nil
-}
-
-func applyConfiguredIdentityOverlay(state *stateFile, config *appConfig) error {
-	if state == nil || config == nil {
-		return nil
-	}
-	if config.ManagedZone == "" && config.Identity.KeyPath == "" {
-		return nil
-	}
-	if state.ManagedZone == "" {
-		return fmt.Errorf("configured identity requires initialized ManagedZone; use a new data_dir/state_path to create this node")
-	}
-	if config.ManagedZone != "" && state.ManagedZone != config.ManagedZone {
-		return fmt.Errorf("managed_zone %s does not match DB ManagedZone %s; identity is immutable, use a new data_dir/state_path to create a different node", config.ManagedZone, state.ManagedZone)
-	}
-	if config.Identity.KeyPath == "" {
-		return nil
-	}
-	key, keyPath, err := configuredIdentityKey(config)
-	if err != nil {
-		return err
-	}
-	if state.IdentityKeyPath != "" && state.IdentityKeyPath != keyPath {
-		return fmt.Errorf("identity.key_path %s does not match DB identity key path %s; identity is immutable, use a new data_dir/state_path to create a different node", keyPath, state.IdentityKeyPath)
-	}
-	if len(state.ZonePrivateKey) == ed25519.PrivateKeySize {
-		dbPub := state.ZonePrivateKey.Public().(ed25519.PublicKey)
-		if !equalPublicKey(dbPub, key.PublicKey) {
-			return fmt.Errorf("identity.key_path public key does not match DB ZonePrivateKey; identity is immutable, use a new data_dir/state_path to create a different node")
-		}
-	} else if len(state.ZonePrivateKey) != 0 {
-		return errors.New("DB ZonePrivateKey is invalid")
-	}
-	if state.Network != nil {
-		if zs := state.Network.Zones[state.ManagedZone]; zs != nil && zs.Authority != nil && !authorityHasKey(zs.Authority, key.PublicKey) {
-			return fmt.Errorf("identity.key_path public key does not match ManagedZone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", state.ManagedZone)
-		}
-	}
-	state.IdentityKeyPath = keyPath
-	state.ZonePrivateKey = append(ed25519.PrivateKey(nil), key.PrivateKey...)
 	return nil
 }
 
