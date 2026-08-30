@@ -28,6 +28,45 @@ import (
 
 type birdClient = photonlinux.BirdClient
 
+type testGossipDatagram struct {
+	addr *net.UDPAddr
+}
+
+func (*testGossipDatagram) ReadDatagram([]byte) (int, *net.UDPAddr, error) {
+	return 0, nil, net.ErrClosed
+}
+func (*testGossipDatagram) WriteDatagram(payload []byte, _ *net.UDPAddr) (int, error) {
+	return len(payload), nil
+}
+func (datagram *testGossipDatagram) LocalAddr() *net.UDPAddr { return datagram.addr }
+func (*testGossipDatagram) SetReadDeadline(time.Time) error  { return nil }
+func (*testGossipDatagram) Close() error                     { return nil }
+
+func bindTestHostGossipTransport(t *testing.T, service *DaemonService, peerIDs ...string) *gossip.Transport {
+	t.Helper()
+	known := make(map[string]*net.UDPAddr, len(peerIDs))
+	for _, peerID := range peerIDs {
+		known[peerID] = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33435}
+	}
+	transport, err := gossip.NewTransport(gossip.Config{
+		PeerID: service.Sync.Config.PeerID, KnownPeers: known,
+		MaxMessageBytes: gossip.DefaultDatagramBudget,
+	}, &testGossipDatagram{addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setTestGossipTransport(t, service, transport)
+	return transport
+}
+
+func setTestGossipTransport(t *testing.T, service *DaemonService, transport *gossip.Transport) {
+	t.Helper()
+	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
+		t.Fatal(err)
+	}
+	service.Sync.Transport = transport
+}
+
 type testLinuxDrivers struct {
 	ipsec             ipsec.IPsecDriver
 	xfrm              ipsec.XFRMDriver
@@ -71,6 +110,39 @@ func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile,
 		store.refreshMeta()
 	}
 	service := newDaemonServiceWithStore(rt, store, config, interval)
+	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
+	if state != nil && state.Network != nil {
+		for path := range state.Network.Zones {
+			if path.Valid() && path != state.ManagedZone {
+				peerIDs = append(peerIDs, path.String())
+			}
+		}
+	}
+	if config != nil {
+		for _, peer := range config.Bootstrap {
+			peerIDs = append(peerIDs, peer.ID)
+		}
+	}
+	known := make(map[string]*net.UDPAddr, len(peerIDs))
+	for _, peerID := range peerIDs {
+		if peerID != "" {
+			known[peerID] = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33435}
+		}
+	}
+	localPeerID := "test-local.catofes."
+	if config != nil && config.PeerID != "" {
+		localPeerID = config.PeerID
+	}
+	transport, err := gossip.NewTransport(gossip.Config{
+		PeerID: localPeerID, KnownPeers: known, MaxMessageBytes: gossip.DefaultDatagramBudget,
+	}, &testGossipDatagram{addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}})
+	if err != nil {
+		panic(err)
+	}
+	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
+		panic(err)
+	}
+	service.Sync.Transport = transport
 	dryRun := &ipsec.DryRunDriver{}
 	installTestIPsecDrivers(service, dryRun, dryRun)
 	return service

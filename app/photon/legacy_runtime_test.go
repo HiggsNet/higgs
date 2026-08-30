@@ -182,8 +182,17 @@ func (d *DaemonService) executeSyncActions(ctx context.Context, session *gossip.
 	if d == nil || session == nil || len(actions) == 0 {
 		return false
 	}
-	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, &daemonGossipIO{
-		daemon: d,
-	})
+	result := d.hostRuntime.ExecuteGossipActions(ctx, session, actions, testGossipSender{transport: d.Sync.Transport})
 	return result.NetworkChanged
+}
+
+type testGossipSender struct {
+	transport *gossip.Transport
+}
+
+func (sender testGossipSender) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
+	if sender.transport == nil {
+		return nil
+	}
+	return sender.transport.Send(outbound.PeerID, outbound.Message)
 }

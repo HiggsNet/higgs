@@ -309,9 +309,9 @@ func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, suppressed m
 	return nil
 }
 
-// RestoreGossipObservedPath republishes one already-persisted observed path
+// restoreGossipObservedPath republishes one already-persisted observed path
 // into the loss-tolerant address book after packet/checkpoint processing.
-func (runtime *Runtime) RestoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
+func (runtime *Runtime) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
 	if !runtime.gossipDiscoveryAvailable() {
 		return ErrRuntimeStopped
 	}

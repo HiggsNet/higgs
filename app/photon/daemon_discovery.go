@@ -18,15 +18,6 @@ func (d *DaemonService) updateDiscoveredPeers() {
 	}
 }
 
-func (d *DaemonService) seedObservedPeerPath(peerID string) {
-	if d == nil || d.Sync == nil || d.Sync.Transport == nil || d.StateStore == nil || d.hostRuntime == nil || peerID == "" {
-		return
-	}
-	if err := d.hostRuntime.RestoreGossipObservedPath(peerID, d.currentGossipSuppressions(), d.Sync.now(), d.Sync.Transport); err != nil {
-		d.logDebug("endpoint", "observed_path_restore_failed", map[string]any{"peer_id": peerID, "error": err})
-	}
-}
-
 func (d *DaemonService) currentGossipSuppressions() map[string]bool {
 	if d == nil || d.StateStore == nil {
 		return nil

@@ -18,14 +18,12 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const defaultSyncRoundTimeout = 5 * time.Second
 const syncOnceResponderQuiet = 500 * time.Millisecond
-const maxRelayFanoutPerUpdate = 8
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
@@ -239,7 +237,7 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	service.updateDiscoveredPeers()
-	err = service.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
+	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {
@@ -290,7 +288,7 @@ func syncOnce(peerID string) error {
 	logger := newAppLogger(service.Sync.Config)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
-	err = service.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
+	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {
@@ -382,36 +380,6 @@ func (e *syncPendingZonesError) PendingZones() []string {
 		return nil
 	}
 	return zonePathStrings(e.zones)
-}
-
-func recordRelaySuccessDiagnostics(store *observability.PeerObservabilityStore, peerID, sourcePeerID string, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
-		diagnostics.LastUpdateSource = sourcePeerID
-		diagnostics.LastRelaySuppression = ""
-		diagnostics.LastRelaySuppressedAt = 0
-	})
-}
-
-func recordRelaySuppression(store *observability.PeerObservabilityStore, peerID, reason string, now time.Time) {
-	if store == nil || peerID == "" || reason == "" {
-		return
-	}
-	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
-		diagnostics.LastRelaySuppression = reason
-		diagnostics.LastRelaySuppressedAt = now.Unix()
-	})
-}
-
-func recordObservedSource(store *observability.PeerObservabilityStore, peerID string, source gossip.MessageType, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(diagnostics *observability.PeerDiagnostics) {
-		diagnostics.ObservedSource = string(source)
-	})
 }
 
 func (sr *SyncRuntime) openTransport() (*gossip.Transport, error) {
@@ -621,25 +589,6 @@ func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(verified *corestate.Ve
 		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: verified.ManagedZone,
 		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
 	}, nil
-}
-
-func recordDatagramTooLarge(store *observability.PeerObservabilityStore, peerID, direction, object string, zoneName zone.ZonePath, key string, size, limit int, now time.Time) {
-	if store == nil || peerID == "" {
-		return
-	}
-	store.Update(peerID, now, func(snapshot *observability.PeerDiagnostics) {
-		if snapshot.DatagramStats == nil {
-			snapshot.DatagramStats = &observability.PeerDatagramStats{}
-		}
-		snapshot.DatagramStats.TooLargeDropped++
-		snapshot.DatagramStats.LastTooLargeUnix = now.Unix()
-		snapshot.DatagramStats.LastTooLargeDirection = direction
-		snapshot.DatagramStats.LastTooLargeObject = object
-		snapshot.DatagramStats.LastTooLargeZone = string(zoneName)
-		snapshot.DatagramStats.LastTooLargeKey = key
-		snapshot.DatagramStats.LastTooLargeBytes = size
-		snapshot.DatagramStats.LastTooLargeLimit = limit
-	})
 }
 
 func syncLimits(config *syncConfigFile) corestate.SyncLimits {

@@ -57,8 +57,8 @@ func (datagramTimeoutError) Temporary() bool { return true }
 func TestRuntimeGossipDatagramReceiverForwardsPackets(t *testing.T) {
 	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	receiver := newFakeDatagramReceiver()
-	if err := runtime.StartGossipDatagramReceiver(t.Context(), receiver, nil); err != nil {
-		t.Fatalf("StartGossipDatagramReceiver: %v", err)
+	if err := runtime.startGossipDatagramReceiver(t.Context(), receiver, nil); err != nil {
+		t.Fatalf("startGossipDatagramReceiver: %v", err)
 	}
 	defer runtime.Stop()
 	want := &gossip.Packet{Message: &gossip.Message{Type: gossip.MessagePing}}
@@ -79,8 +79,8 @@ func TestRuntimeGossipDatagramReceiverReportsErrorAndContinues(t *testing.T) {
 	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	receiver := newFakeDatagramReceiver()
 	warnings := make(chan error, 1)
-	if err := runtime.StartGossipDatagramReceiver(t.Context(), receiver, func(err error) { warnings <- err }); err != nil {
-		t.Fatalf("StartGossipDatagramReceiver: %v", err)
+	if err := runtime.startGossipDatagramReceiver(t.Context(), receiver, func(err error) { warnings <- err }); err != nil {
+		t.Fatalf("startGossipDatagramReceiver: %v", err)
 	}
 	defer runtime.Stop()
 	wantErr := errors.New("receive failed")
@@ -111,8 +111,8 @@ func TestRuntimeStopClosesGossipDatagramReceiver(t *testing.T) {
 	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	receiver := newFakeDatagramReceiver()
 	var warnings atomic.Int32
-	if err := runtime.StartGossipDatagramReceiver(context.Background(), receiver, func(error) { warnings.Add(1) }); err != nil {
-		t.Fatalf("StartGossipDatagramReceiver: %v", err)
+	if err := runtime.startGossipDatagramReceiver(context.Background(), receiver, func(error) { warnings.Add(1) }); err != nil {
+		t.Fatalf("startGossipDatagramReceiver: %v", err)
 	}
 	receiver.results <- datagramReceiveResult{err: datagramTimeoutError{}}
 	runtime.Stop()
@@ -129,8 +129,8 @@ func TestRuntimeGossipDatagramReceiverContextCancellationClosesReceiver(t *testi
 	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	receiver := newFakeDatagramReceiver()
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := runtime.StartGossipDatagramReceiver(ctx, receiver, nil); err != nil {
-		t.Fatalf("StartGossipDatagramReceiver: %v", err)
+	if err := runtime.startGossipDatagramReceiver(ctx, receiver, nil); err != nil {
+		t.Fatalf("startGossipDatagramReceiver: %v", err)
 	}
 	cancel()
 	select {
@@ -147,14 +147,14 @@ func TestRuntimeGossipDatagramReceiverContextCancellationClosesReceiver(t *testi
 func TestRuntimeGossipDatagramReceiverRejectsNilAndSecondStart(t *testing.T) {
 	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
 	defer runtime.Stop()
-	if err := runtime.StartGossipDatagramReceiver(t.Context(), nil, nil); !errors.Is(err, ErrDatagramReceiverRequired) {
+	if err := runtime.startGossipDatagramReceiver(t.Context(), nil, nil); !errors.Is(err, ErrDatagramReceiverRequired) {
 		t.Fatalf("nil receiver error = %v, want %v", err, ErrDatagramReceiverRequired)
 	}
 	receiver := newFakeDatagramReceiver()
-	if err := runtime.StartGossipDatagramReceiver(t.Context(), receiver, nil); err != nil {
+	if err := runtime.startGossipDatagramReceiver(t.Context(), receiver, nil); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
-	if err := runtime.StartGossipDatagramReceiver(t.Context(), newFakeDatagramReceiver(), nil); !errors.Is(err, ErrDatagramReceiverStarted) {
+	if err := runtime.startGossipDatagramReceiver(t.Context(), newFakeDatagramReceiver(), nil); !errors.Is(err, ErrDatagramReceiverStarted) {
 		t.Fatalf("second start error = %v, want %v", err, ErrDatagramReceiverStarted)
 	}
 }

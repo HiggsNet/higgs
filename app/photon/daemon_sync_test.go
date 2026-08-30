@@ -67,9 +67,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
-	serviceA.Sync.Transport = transportA
+	setTestGossipTransport(t, serviceA, transportA)
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
-	serviceB.Sync.Transport = transportB
+	setTestGossipTransport(t, serviceB, transportB)
 
 	fc := newFakeClock(now)
 	serviceA.EnableEventLoopSync(fc)
@@ -326,6 +326,7 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		Config: defaultAppConfig(),
 		Clock:  func() time.Time { return now },
 	}, state, config, time.Second)
+	bindTestHostGossipTransport(t, service, "peer-a")
 
 	summary := corestate.CatalogSummaryFor(state.Network)
 	message := &gossip.Message{
@@ -333,11 +334,8 @@ func TestDaemonPingSummaryShortcutCommitsPeerChangesOnce(t *testing.T) {
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: summary},
 	}
-	controller := &daemonGossipIO{
-		daemon: service,
-	}
 	before := service.StateStore.Meta().Revision
-	if _, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller); err != nil {
+	if _, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, nil); err != nil {
 		t.Fatalf("HandleGossipHostEvent: %v", err)
 	}
 	after := service.StateStore.Meta().Revision
@@ -478,7 +476,7 @@ func TestDaemonEventLoopAnnounceDoesNotStealActiveSession(t *testing.T) {
 		t.Fatal("active announce did not record a follow-up hint")
 	}
 	session.State = gossip.SyncSessionCompleted
-	service.completeSyncSessionAfterPeerState(session, false)
+	service.handleSyncEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: peerID})
 	if service.hostRuntime.Gossip.PendingHint(peerID) {
 		t.Fatal("follow-up hint was not consumed after session completion")
 	}

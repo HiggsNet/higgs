@@ -28,6 +28,7 @@ func TestHandleSyncEventStoresPeerDiagnosticsOutsideCommittedState(t *testing.T)
 	}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
+	bindTestHostGossipTransport(t, service, peerID)
 	service.hostRuntime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
 	if changed := service.handleSyncEvent(context.Background(), &gossip.CatalogSummaryReceivedEvent{
@@ -114,6 +115,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
 	peerID := "node-b.catofes."
+	bindTestHostGossipTransport(t, service, peerID)
 
 	state.Lock()
 	unlock := state.Unlock
@@ -124,10 +126,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 			PeerID:           peerID,
 			FetchCatalogPage: &gossip.FetchCatalogPage{},
 		}
-		controller := &daemonGossipIO{
-			daemon: service,
-		}
-		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, nil)
 		done <- err
 	}()
 
@@ -147,8 +146,7 @@ func TestReadOnlyResponderUsesCommittedSnapshotWhileConstructorInputLocked(t *te
 	unlock = state.Unlock
 	go func() {
 		message := &gossip.Message{Type: gossip.MessageFetchZone, PeerID: peerID, FetchZone: &gossip.FetchZone{Zone: "node-b.catofes."}}
-		controller := &daemonGossipIO{daemon: service}
-		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, nil)
 		done <- err
 	}()
 	select {
@@ -191,15 +189,14 @@ func TestChunkResponderCommitsDatagramDiagnostics(t *testing.T) {
 	peerID := "node-b.catofes."
 	transport.SetPeerAddrs(peerID, []*net.UDPAddr{transport.LocalAddr()})
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	service.Sync.Transport = transport
+	setTestGossipTransport(t, service, transport)
 
 	state.Lock()
 	unlock := state.Unlock
 	done := make(chan error, 1)
 	go func() {
 		message := &gossip.Message{Type: gossip.MessageFetchZone, PeerID: peerID, FetchZone: &gossip.FetchZone{Zone: "node-b.catofes.", ChunkFallback: true}}
-		controller := &daemonGossipIO{daemon: service}
-		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, controller)
+		_, err := service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, now, nil)
 		done <- err
 	}()
 
@@ -304,7 +301,7 @@ func TestExecuteSyncActionsNoopSnapshotCommitsMetadataOnly(t *testing.T) {
 	service.Hooks.OnStateChanged = func() { notifications++ }
 	session.State = SyncSessionCompleted
 	service.hostRuntime.Gossip.SetSession(session.PeerID, session)
-	service.completeSyncSessionAfterPeerState(session, changed)
+	service.handleSyncEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: session.PeerID})
 	if notifications != 0 {
 		t.Fatalf("no-op snapshot emitted %d state-change notifications", notifications)
 	}

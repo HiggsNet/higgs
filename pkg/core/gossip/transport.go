@@ -48,8 +48,8 @@ type Transport struct {
 	knownMu         sync.RWMutex
 	outboundAddrs   map[string][]*net.UDPAddr // addresses used for Send
 	outboundMu      sync.RWMutex
-	lastSeenAddrs   map[string]*net.UDPAddr // fallback addresses from recent inbound packets
-	lastSeenMu      sync.RWMutex
+	recentInbound   map[string]recentInboundPath // short-lived paths learned from accepted inbound packets
+	recentInboundMu sync.Mutex
 	observedPaths   map[string]observedPath // verified short-lived inbound UDP paths
 	observedMu      sync.RWMutex
 	addrStates      map[string]map[string]*addrState // per-peer per-address reachability state
@@ -72,11 +72,17 @@ type addrState struct {
 	LastAttempt  time.Time
 }
 
+type recentInboundPath struct {
+	Addr  *net.UDPAddr
+	Until time.Time
+}
+
 const (
 	addrFailureBackoffThreshold = 2
 	addrFailureBackoffBase      = 500 * time.Millisecond
 	addrFailureBackoffMax       = 30 * time.Second
 	addrSuccessResetAfter       = 2 * time.Minute
+	recentInboundPathTTL        = time.Minute
 )
 
 type Packet struct {
@@ -320,20 +326,18 @@ func (t *Transport) sendAddrsFor(peerID string) []*net.UDPAddr {
 	}
 	t.observedMu.RUnlock()
 
-	t.lastSeenMu.RLock()
-	lastSeen := t.lastSeenAddrs[peerID]
-	t.lastSeenMu.RUnlock()
+	recentInbound := t.activeRecentInboundPath(peerID)
 
-	var addrs []*net.UDPAddr
+	// A recently accepted packet is the strongest live reachability signal for
+	// an active session, especially when the peer is behind NAT. Keep it ahead
+	// of configured and checkpoint-derived candidates for a bounded period.
+	addrs := appendUDPAddrCopies(nil, recentInbound)
 	if preferObservedFirst {
 		addrs = appendUDPAddrCopies(addrs, observed...)
 		addrs = appendUDPAddrCopies(addrs, outbound...)
 	} else {
 		addrs = appendUDPAddrCopies(addrs, outbound...)
 		addrs = appendUDPAddrCopies(addrs, observed...)
-	}
-	if len(addrs) == 0 && lastSeen != nil {
-		addrs = appendUDPAddrCopies(addrs, lastSeen)
 	}
 	if len(addrs) == 0 {
 		return nil
@@ -403,13 +407,16 @@ func (t *Transport) Receive() (*Packet, error) {
 		t.logEvent(event, err, start)
 		return nil, err
 	}
-	t.lastSeenMu.Lock()
-	if t.lastSeenAddrs == nil {
-		t.lastSeenAddrs = make(map[string]*net.UDPAddr)
+	t.recentInboundMu.Lock()
+	if t.recentInbound == nil {
+		t.recentInbound = make(map[string]recentInboundPath)
 	}
 	copied := *addr
-	t.lastSeenAddrs[message.PeerID] = &copied
-	t.lastSeenMu.Unlock()
+	t.recentInbound[message.PeerID] = recentInboundPath{
+		Addr:  &copied,
+		Until: t.now().Add(recentInboundPathTTL),
+	}
+	t.recentInboundMu.Unlock()
 	t.RecordAddrSuccess(message.PeerID, addr)
 	t.logEvent(event, nil, start)
 	return &Packet{Message: message, Addr: addr, Bytes: n}, nil
@@ -739,6 +746,10 @@ func (t *Transport) RemovePeer(peerID string) {
 	delete(t.observedPaths, peerID)
 	t.observedMu.Unlock()
 
+	t.recentInboundMu.Lock()
+	delete(t.recentInbound, peerID)
+	t.recentInboundMu.Unlock()
+
 	t.addrStateMu.Lock()
 	delete(t.addrStates, peerID)
 	t.addrStateMu.Unlock()
@@ -746,6 +757,24 @@ func (t *Transport) RemovePeer(peerID string) {
 	t.lastSentMu.Lock()
 	delete(t.lastSentAddr, peerID)
 	t.lastSentMu.Unlock()
+}
+
+func (t *Transport) activeRecentInboundPath(peerID string) *net.UDPAddr {
+	if t == nil || peerID == "" {
+		return nil
+	}
+	t.recentInboundMu.Lock()
+	defer t.recentInboundMu.Unlock()
+	path, ok := t.recentInbound[peerID]
+	if !ok || path.Addr == nil {
+		return nil
+	}
+	if !path.Until.IsZero() && !t.now().Before(path.Until) {
+		delete(t.recentInbound, peerID)
+		return nil
+	}
+	copied := *path.Addr
+	return &copied
 }
 
 // SetPeers initializes both the inbound allowlist and the outbound address

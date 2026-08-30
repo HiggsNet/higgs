@@ -39,12 +39,11 @@ func (runtime *Runtime) gossipFetchZoneResponse(path zone.ZonePath, budget int, 
 	return response
 }
 
-func (runtime *Runtime) respondGossipFetchZone(ctx context.Context, peerID string, request *gossip.FetchZone, controller GossipIO) error {
+func (runtime *Runtime) respondGossipFetchZone(ctx context.Context, peerID string, request *gossip.FetchZone, sender GossipSender, budget int) error {
 	if request == nil {
 		return nil
 	}
 	now := runtime.schedulerForRead().clock.Now()
-	budget := controller.GossipDatagramBudget()
 	response := runtime.gossipFetchZoneResponse(request.Zone, budget, now)
 	kind := "fetch_zone"
 	if request.ChunkFallback {
@@ -66,7 +65,7 @@ func (runtime *Runtime) respondGossipFetchZone(ctx context.Context, peerID strin
 		if announce == nil {
 			continue
 		}
-		if err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}}); err != nil {
+		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}}); err != nil {
 			return err
 		}
 		runtime.logGossip("info", "sending_announce", peerID, "responder", nil, map[string]any{"digests": len(announce.Zones)})
@@ -79,7 +78,7 @@ func (runtime *Runtime) respondGossipFetchZone(ctx context.Context, peerID strin
 		return err
 	}
 	for _, chunk := range chunks {
-		if err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
+		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
 			return err
 		}
 	}
@@ -102,7 +101,7 @@ func (runtime *Runtime) buildGossipSnapshotChunks(peerID string, snapshot *cores
 	return chunks, nil
 }
 
-func (runtime *Runtime) handleGossipObjectChunkNACK(ctx context.Context, message *gossip.Message, controller GossipIO) error {
+func (runtime *Runtime) handleGossipObjectChunkNACK(ctx context.Context, message *gossip.Message, sender GossipSender) error {
 	if message == nil || message.ObjectChunkNACK == nil {
 		return nil
 	}
@@ -110,7 +109,7 @@ func (runtime *Runtime) handleGossipObjectChunkNACK(ctx context.Context, message
 	chunks := runtime.gossipSentChunks.Repair(message.PeerID, message.ObjectChunkNACK, now)
 	runtime.observeChunkRepair(message.PeerID, len(chunks) == 0, len(chunks), now)
 	for _, chunk := range chunks {
-		if err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
+		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
 			return err
 		}
 	}

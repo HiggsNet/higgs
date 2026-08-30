@@ -12,23 +12,64 @@ import (
 var (
 	ErrDatagramReceiverRequired = errors.New("gossip datagram receiver is required")
 	ErrDatagramReceiverStarted  = errors.New("gossip datagram receiver is already started")
+	ErrGossipTransportRequired  = errors.New("gossip transport is required")
 )
 
-// DatagramReceiver is the injected receive/close capability owned by Runtime.
+// BindGossipTransport installs the common UDP transport used by Runtime for
+// send, reply routing and its rebuildable peer address book. Composition may
+// replace it before the receive loop starts, for example after config reload.
+func (runtime *Runtime) BindGossipTransport(transport *gossip.Transport) error {
+	if runtime == nil {
+		return ErrRuntimeStopped
+	}
+	if transport == nil {
+		return ErrGossipTransportRequired
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.stopped {
+		return ErrRuntimeStopped
+	}
+	if runtime.datagramReceiver != nil && runtime.gossipTransport != transport {
+		return ErrDatagramReceiverStarted
+	}
+	runtime.gossipTransport = transport
+	return nil
+}
+
+// StartGossipTransport binds the concrete common transport and starts its
+// single runtime-owned receive loop.
+func (runtime *Runtime) StartGossipTransport(ctx context.Context, transport *gossip.Transport, onError func(error)) error {
+	if err := runtime.BindGossipTransport(transport); err != nil {
+		return err
+	}
+	return runtime.startGossipDatagramReceiver(ctx, transport, onError)
+}
+
+func (runtime *Runtime) gossipTransportForRead() *gossip.Transport {
+	if runtime == nil {
+		return nil
+	}
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return runtime.gossipTransport
+}
+
+// datagramReceiver is the receive/close capability owned by Runtime.
 // Protocol decoding and peer validation may still live in the adapter; the
 // common runtime owns the single blocking receive goroutine, event-queue
 // backpressure and shutdown ordering.
-type DatagramReceiver interface {
+type datagramReceiver interface {
 	Receive() (*gossip.Packet, error)
 	Close() error
 }
 
-// StartGossipDatagramReceiver starts the runtime-owned, bounded receive loop.
+// startGossipDatagramReceiver starts the runtime-owned, bounded receive loop.
 // Runtime.Stop cancels the loop, closes the injected receiver to unblock a
 // blocking Receive call, and waits for the receive goroutine to exit.
-func (runtime *Runtime) StartGossipDatagramReceiver(
+func (runtime *Runtime) startGossipDatagramReceiver(
 	ctx context.Context,
-	receiver DatagramReceiver,
+	receiver datagramReceiver,
 	onError func(error),
 ) error {
 	if runtime == nil {
@@ -63,7 +104,7 @@ func (runtime *Runtime) StartGossipDatagramReceiver(
 
 func (runtime *Runtime) runGossipDatagramReceiver(
 	ctx context.Context,
-	receiver DatagramReceiver,
+	receiver datagramReceiver,
 	onError func(error),
 ) {
 	defer runtime.datagramWG.Done()

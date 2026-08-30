@@ -495,6 +495,17 @@ func TestReceiveRecordsAddrSuccess(t *testing.T) {
 	if transport.AddrFailureCount("node-a", packet.Addr) != 0 {
 		t.Fatalf("failure count after receive = %d, want 0", transport.AddrFailureCount("node-a", packet.Addr))
 	}
+	transport.SetPeerAddrs("node-a", []*net.UDPAddr{{IP: net.ParseIP("192.0.2.10"), Port: 33434}})
+	addrs := transport.sendAddrsFor("node-a")
+	if len(addrs) != 2 || addrs[0].String() != packet.Addr.String() {
+		t.Fatalf("send addresses after receive = %v, want recent inbound %v first", addrs, packet.Addr)
+	}
+
+	now = now.Add(recentInboundPathTTL)
+	addrs = transport.sendAddrsFor("node-a")
+	if len(addrs) != 1 || addrs[0].String() != "192.0.2.10:33434" {
+		t.Fatalf("send addresses after recent path expiry = %v, want configured address", addrs)
+	}
 }
 
 func TestLastSendAddr(t *testing.T) {
@@ -524,8 +535,17 @@ func TestRemovePeerClearsAddrState(t *testing.T) {
 	transport := &Transport{clock: time.Now}
 	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 1234}})
 	transport.RecordAddrSuccess("peer-a", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234})
+	transport.recentInbound = map[string]recentInboundPath{
+		"peer-a": {
+			Addr:  &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4321},
+			Until: time.Now().Add(time.Minute),
+		},
+	}
 	transport.RemovePeer("peer-a")
 	if transport.LastSendAddr("peer-a") != nil {
 		t.Fatalf("LastSendAddr after RemovePeer should be nil")
+	}
+	if transport.activeRecentInboundPath("peer-a") != nil {
+		t.Fatalf("recent inbound path after RemovePeer should be nil")
 	}
 }

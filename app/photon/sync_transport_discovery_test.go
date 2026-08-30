@@ -45,7 +45,7 @@ func updateDiscoveredPeersForTest(t *testing.T, state *stateFile, config *syncCo
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
-	service.Sync.Transport = transport
+	setTestGossipTransport(t, service, transport)
 	service.updateDiscoveredPeers()
 	committed, _ := service.StateStore.Snapshot()
 	state.Network = committed.Network
@@ -61,21 +61,6 @@ func TestStartupDiscoveryAddsDelegatedChildWithoutZoneState(t *testing.T) {
 	found := slices.Contains(transport.KnownPeerIDs(), "node-b.catofes.")
 	if !found {
 		t.Fatalf("KnownPeerIDs() does not contain delegated node-b.catofes.")
-	}
-}
-
-func TestSyncIngressRouteExpiresWithoutBecomingDurable(t *testing.T) {
-	now := time.Unix(1000, 0)
-	service := &DaemonService{}
-	addr := &net.UDPAddr{IP: net.ParseIP("198.51.100.20"), Port: 42000}
-	service.rememberSyncIngressRoute("node-b.catofes.", addr, now)
-
-	got := service.syncIngressRouteAddr("node-b.catofes.", now.Add(syncIngressRouteTTL-time.Second))
-	if got == nil || got.String() != addr.String() {
-		t.Fatalf("active ingress route = %v, want %v", got, addr)
-	}
-	if got := service.syncIngressRouteAddr("node-b.catofes.", now.Add(syncIngressRouteTTL)); got != nil {
-		t.Fatalf("expired ingress route = %v, want nil", got)
 	}
 }
 
@@ -127,7 +112,7 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 	}
 
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	service.Sync.Transport = transportA
+	setTestGossipTransport(t, service, transportA)
 	if err := service.processPacketEvent(packet, context.Background()); err != nil {
 		t.Fatalf("processPacketEvent: %v", err)
 	}
@@ -164,10 +149,7 @@ func TestPingResponderRepliesToInboundSourceBeforePeerZoneIsVerified(t *testing.
 	}
 
 	session.State = SyncSessionCompleted
-	service.completeSyncSessionAfterPeerState(session, false)
-	if got := service.syncIngressRouteAddr(session.PeerID, now); got != nil {
-		t.Fatalf("session ingress route remained after completion: %v", got)
-	}
+	service.handleSyncEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: session.PeerID})
 }
 
 func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) {
@@ -215,17 +197,14 @@ func TestHandlePingWithDifferentCatalogSummaryRequestsPeerCatalog(t *testing.T) 
 	remoteSummary.CatalogRoot[0] ^= 0xff
 
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	service.Sync.Transport = transportB
+	setTestGossipTransport(t, service, transportB)
 	message := &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: "node-a.catofes.",
 		Ping:   &gossip.Ping{Summary: remoteSummary},
 	}
-	controller := &daemonGossipIO{
-		daemon: service,
-	}
 	state.Lock()
-	_, err = service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, service.Sync.now(), controller)
+	_, err = service.hostRuntime.HandleGossipHostEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: message}}, service.Sync.now(), nil)
 	state.Unlock()
 	if err != nil {
 		t.Fatalf("HandleGossipHostEvent: %v", err)

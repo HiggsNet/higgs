@@ -15,12 +15,12 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func executeTestGossipSnapshots(service *DaemonService, controller *daemonGossipIO, peerID string, actions []gossip.ApplySnapshotAction) corehost.GossipExecutionResult {
+func executeTestGossipSnapshots(service *DaemonService, peerID string, actions []gossip.ApplySnapshotAction) corehost.GossipExecutionResult {
 	syncActions := make([]gossip.SyncAction, len(actions))
 	for index := range actions {
 		syncActions[index] = actions[index]
 	}
-	return service.hostRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: peerID}, syncActions, controller)
+	return service.hostRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: peerID}, syncActions, testGossipSender{})
 }
 
 func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
@@ -34,8 +34,7 @@ func TestApplySyncSnapshotRecordsRejectedDigest(t *testing.T) {
 	snapshot := &corestate.ZoneSnapshot{Zone: "node-b.catofes.", Authority: state.Network.Zones["node-b.catofes."].Authority, Records: map[string]*zone.Record{"bad": badRecord}}
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	controller := &daemonGossipIO{daemon: service}
-	if result := executeTestGossipSnapshots(service, controller, "node-b.catofes.", []gossip.ApplySnapshotAction{{PeerID: "node-b.catofes.", Snapshot: snapshot}}); result.Aborted {
+	if result := executeTestGossipSnapshots(service, "node-b.catofes.", []gossip.ApplySnapshotAction{{PeerID: "node-b.catofes.", Snapshot: snapshot}}); result.Aborted {
 		t.Fatal("snapshot execution aborted")
 	}
 	rejected := service.StateStore.common.ReadView().Gossip.Peers["node-b.catofes."].RejectedObjects[snapshot.Zone]
@@ -68,8 +67,7 @@ func TestParentSnapshotRefreshesManagedZoneAuthority(t *testing.T) {
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	controller := &daemonGossipIO{daemon: service}
-	if result := executeTestGossipSnapshots(service, controller, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted || !result.NetworkChanged {
+	if result := executeTestGossipSnapshots(service, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted || !result.NetworkChanged {
 		t.Fatal("root grant snapshot was not committed")
 	}
 
@@ -119,8 +117,7 @@ func TestParentSnapshotRejectsManagedAuthorityRefreshForDifferentKey(t *testing.
 
 	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
-	controller := &daemonGossipIO{daemon: service}
-	if result := executeTestGossipSnapshots(service, controller, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted {
+	if result := executeTestGossipSnapshots(service, "root-admin", []gossip.ApplySnapshotAction{{PeerID: "root-admin", Snapshot: snapshot}}); result.Aborted {
 		t.Fatal("snapshot execution aborted")
 	}
 

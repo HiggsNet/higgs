@@ -2,19 +2,36 @@ package host
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"net"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-// GossipIO is the remaining platform datagram boundary. Runtime owns protocol
-// state, scheduling, persistence, logging and observability; implementations
-// only prepare ephemeral ingress routing and send encoded gossip messages.
-type GossipIO interface {
-	GossipSender
-	GossipDatagramBudget() int
-	PrepareGossipInbound(context.Context, *gossip.Packet, time.Time) error
+const DefaultGossipRelayFanout = 8
+
+type runtimeGossipSender struct {
+	transport *gossip.Transport
+	replyAddr *net.UDPAddr
+}
+
+func (sender runtimeGossipSender) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
+	if sender.transport == nil {
+		return ErrGossipTransportRequired
+	}
+	if sender.replyAddr != nil {
+		return sender.transport.SendTo(outbound.PeerID, sender.replyAddr, outbound.Message)
+	}
+	return sender.transport.Send(outbound.PeerID, outbound.Message)
+}
+
+func (sender runtimeGossipSender) datagramBudget() int {
+	if sender.transport == nil {
+		return gossip.DefaultDatagramBudget
+	}
+	return sender.transport.MaxMessageBytes()
 }
 
 // StartGossipSession creates and queues one common gossip pull session. It is
@@ -65,6 +82,8 @@ type GossipEventResult struct {
 	Done           bool
 	NetworkChanged bool
 	ProtocolErr    error
+	TerminalErr    error
+	FollowupQueued bool
 }
 
 // GossipHostEventResult describes the common gossip work performed for one
@@ -78,24 +97,23 @@ type GossipHostEventResult struct {
 // HandleGossipHostEvent is the only switch from Runtime queue events to the
 // gossip inbound planner or session FSM. Packet, timer and object-pull
 // completion producers therefore share one consumer on every platform.
-func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, controller GossipIO) (GossipHostEventResult, error) {
+func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, suppressedPeers map[string]bool) (GossipHostEventResult, error) {
 	var out GossipHostEventResult
 	if runtime == nil {
 		return out, ErrRuntimeStopped
 	}
-	if controller == nil {
-		return out, ErrGossipIORequired
+	transport := runtime.gossipTransportForRead()
+	if transport == nil {
+		return out, ErrGossipTransportRequired
 	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
 		if received.Packet == nil {
 			return out, nil
 		}
-		if err := controller.PrepareGossipInbound(ctx, received.Packet, now); err != nil {
-			runtime.logGossipPacketFailure(received.Packet, err)
-			return out, err
-		}
-		err := runtime.executeGossipPacketActions(ctx, runtime.Gossip.PlanInbound(received.Packet), controller)
+		runtime.acceptGossipInboundPath(ctx, received.Packet, now, suppressedPeers, transport)
+		sender := runtimeGossipSender{transport: transport, replyAddr: received.Packet.Addr}
+		err := runtime.executeGossipPacketActions(ctx, runtime.Gossip.PlanInbound(received.Packet), sender, sender.datagramBudget())
 		if err != nil {
 			runtime.logGossipPacketFailure(received.Packet, err)
 		}
@@ -106,9 +124,96 @@ func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Eve
 		return out, nil
 	}
 	out.Handled = true
-	result, err := runtime.handleGossipSessionEvent(ctx, event, now, controller)
+	result, err := runtime.handleGossipSessionEvent(ctx, event, now, runtimeGossipSender{transport: transport})
+	if err == nil && result.Done {
+		runtime.finishGossipSession(ctx, &result, now, suppressedPeers)
+	}
 	out.Session = result
 	return out, err
+}
+
+func (runtime *Runtime) acceptGossipInboundPath(ctx context.Context, packet *gossip.Packet, now time.Time, suppressedPeers map[string]bool, transport *gossip.Transport) {
+	if runtime == nil || packet == nil || packet.Message == nil || packet.Addr == nil {
+		return
+	}
+	peerID := packet.Message.PeerID
+	committed, err := runtime.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
+	if err != nil {
+		runtime.logGossip("warn", "observed_checkpoint_commit_failed", peerID, "persistence", err, nil)
+	} else if committed {
+		runtime.observeObservedSource(peerID, packet.Message.Type, now)
+	}
+	if err := runtime.restoreGossipObservedPath(peerID, suppressedPeers, now, transport); err != nil {
+		runtime.logGossip("debug", "observed_path_restore_failed", peerID, "discovery", err, nil)
+	}
+}
+
+// finishGossipSession closes the common session lifecycle at the same boundary
+// that advanced its FSM. Platform composition receives only the detached
+// terminal result needed for data-plane reconciliation and route cleanup.
+func (runtime *Runtime) finishGossipSession(ctx context.Context, result *GossipEventResult, now time.Time, suppressedPeers map[string]bool) {
+	if runtime == nil || result == nil || result.PeerID == "" {
+		return
+	}
+	peerID := result.PeerID
+	session := runtime.Gossip.Session(peerID)
+	if session == nil {
+		return
+	}
+	runtime.CancelGossipTimers(peerID)
+	result.NetworkChanged = session.NetworkChanged()
+	result.TerminalErr = session.LastError()
+	if session.State == gossip.SyncSessionCompleted && result.NetworkChanged {
+		runtime.relayGossipUpdate(ctx, peerID, now, suppressedPeers)
+	}
+	runtime.Gossip.RemoveSession(peerID)
+	if runtime.Gossip.TakePendingHint(peerID) {
+		if err := runtime.StartGossipSession(peerID, "announce_hint_followup"); err == nil {
+			result.FollowupQueued = runtime.Gossip.HasActiveSession(peerID)
+		}
+	}
+}
+
+func (runtime *Runtime) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time, suppressedPeers map[string]bool) {
+	input := runtime.GossipDiscoveryInput(suppressedPeers)
+	summary := runtime.GossipCatalogSummary()
+	if summary == nil {
+		return
+	}
+	root := hex.EncodeToString(summary.CatalogRoot)
+	relayed := 0
+	for _, peerID := range GossipOutboundPeers(input, now) {
+		if peerID == sourcePeerID {
+			continue
+		}
+		if relayed >= DefaultGossipRelayFanout {
+			runtime.observeRelaySuppression(peerID, "relay_fanout_limited", now)
+			continue
+		}
+		allowed, reason := ShouldRelayGossipUpdate(input.Peers[peerID], peerID, sourcePeerID, root, now)
+		if !allowed {
+			runtime.observeRelaySuppression(peerID, reason, now)
+			continue
+		}
+		relayed++
+		if runtime.Gossip.HasActiveSession(peerID) {
+			continue
+		}
+		runtime.Gossip.NewSession(peerID)
+		if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
+			runtime.Gossip.RemoveSession(peerID)
+			runtime.logGossip("warn", "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
+			continue
+		}
+		committed, err := runtime.RecordGossipRelay(ctx, peerID, root, now)
+		if err != nil {
+			runtime.logGossip("warn", "relay_checkpoint_commit_failed", peerID, "persistence", err, nil)
+			continue
+		}
+		if committed {
+			runtime.observeRelaySuccess(peerID, sourcePeerID, now)
+		}
+	}
 }
 
 func (runtime *Runtime) logGossipPacketFailure(packet *gossip.Packet, err error) {
@@ -131,7 +236,7 @@ func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event goss
 		return out, ErrRuntimeStopped
 	}
 	if controller == nil {
-		return out, ErrGossipIORequired
+		return out, errGossipSenderRequired
 	}
 	peerID := gossip.SyncEventPeerID(event)
 	if peerID == "" {

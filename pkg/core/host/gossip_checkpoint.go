@@ -10,9 +10,9 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-// RecordGossipObservedPath persists one authenticated packet source after
+// recordGossipObservedPath persists one authenticated packet source after
 // validating it against the Runtime's current verified state.
-func (runtime *Runtime) RecordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
+func (runtime *Runtime) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
 	if runtime == nil || runtime.gossipState == nil {
 		return false, ErrRuntimeStopped
 	}

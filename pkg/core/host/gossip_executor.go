@@ -18,7 +18,7 @@ const (
 	GossipPhasePersistence = "persistence"
 )
 
-var ErrGossipIORequired = errors.New("gossip I/O is required")
+var errGossipSenderRequired = errors.New("gossip sender is required")
 
 // GossipStateView is the bounded read projection required by the common
 // executor after snapshot application. It never exposes a live state root.

@@ -56,7 +56,6 @@ type DaemonService struct {
 
 	hostRuntime        *corehost.Runtime
 	objectPullExecutor *corehost.GossipObjectPullExecutor
-	syncIngressRoutes  map[string]syncIngressRoute
 }
 
 type DaemonHooks struct {
@@ -263,7 +262,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		return err
 	}
 	d.updateDiscoveredPeers()
-	err = d.hostRuntime.StartGossipDatagramReceiver(ctx, transport, func(err error) {
+	err = d.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
 		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {

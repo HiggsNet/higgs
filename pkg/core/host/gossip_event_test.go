@@ -1,8 +1,10 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -34,15 +36,15 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 	clock := newFakeClock(time.Unix(100, 0))
 	runtime := NewRuntime(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer runtime.Stop()
-	controller := &memoryInboundController{budget: gossip.DefaultDatagramBudget}
+	_, datagram := bindMemoryGossipTransport(t, runtime, "peer-a", "peer-b")
 
 	packet := &gossip.Packet{Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{}}}
-	packetResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now(), controller)
+	packetResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !packetResult.Handled || packetResult.Session.PeerID != "" || len(controller.outbound) != 1 {
-		t.Fatalf("packet result = %#v, outbound = %#v", packetResult, controller.outbound)
+	if !packetResult.Handled || packetResult.Session.PeerID != "" || datagram.writeCount() != 1 {
+		t.Fatalf("packet result = %#v, writes = %d", packetResult, datagram.writeCount())
 	}
 
 	runtime.Gossip.NewSession("peer-a")
@@ -50,7 +52,7 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
-	timerResult, err := runtime.HandleGossipHostEvent(context.Background(), <-runtime.Events(), clock.Now(), controller)
+	timerResult, err := runtime.HandleGossipHostEvent(context.Background(), <-runtime.Events(), clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 
 	runtime.Gossip.NewSession("peer-b")
 	completion := &gossip.ObjectPullResultEvent{PeerID: "peer-b", Zone: "remote.catofes.", Err: errors.New("pull failed")}
-	completionResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now(), controller)
+	completionResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,73 @@ func TestRuntimeHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
 	}
 	if len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
 		t.Fatalf("event=%#v", event)
+	}
+}
+
+func TestRuntimeFinishesSessionAndStartsDeferredHint(t *testing.T) {
+	now := time.Unix(100, 0)
+	runtime := NewRuntime(newFakeClock(now), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes."})
+	defer runtime.Stop()
+	session := runtime.Gossip.NewSession("peer-a")
+	session.State = gossip.SyncSessionCompleted
+	runtime.Gossip.DeferHint("peer-a")
+
+	result := GossipEventResult{PeerID: "peer-a", Done: true}
+	runtime.finishGossipSession(context.Background(), &result, now, nil)
+
+	if !result.FollowupQueued || runtime.Gossip.Session("peer-a") == nil {
+		t.Fatalf("result=%#v session=%#v", result, runtime.Gossip.Session("peer-a"))
+	}
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	if !ok {
+		t.Fatal("deferred hint did not queue a session event")
+	}
+	if timer, ok := event.(*gossip.SyncTimerEvent); !ok || timer.PeerID != "peer-a" || timer.LocalSummary == nil {
+		t.Fatalf("follow-up event = %#v", event)
+	}
+}
+
+func TestRuntimeFinishesChangedSessionAndOwnsRelay(t *testing.T) {
+	now := time.Unix(100, 0)
+	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
+	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-c": {}}}
+	state := &memoryGossipStateStore{views: []corestate.View{view, view}}
+	runtime := NewRuntime(newFakeClock(now), 4, state, GossipRuntimeConfig{
+		PeerID: "local.catofes.",
+		Discovery: GossipDiscoveryConfig{
+			Bootstrap:      map[string]*net.UDPAddr{"peer-c": {IP: net.ParseIP("127.0.0.1"), Port: 33434}},
+			BootstrapPeers: []string{"peer-c"},
+		},
+	})
+	defer runtime.Stop()
+	session := runtime.Gossip.NewSession("peer-b")
+	session.State = gossip.SyncSessionCompleted
+	session.AccumulateNetworkChanged(true)
+
+	result := GossipEventResult{PeerID: "peer-b", Done: true}
+	runtime.finishGossipSession(context.Background(), &result, now, nil)
+
+	if !result.NetworkChanged || runtime.Gossip.Session("peer-b") != nil {
+		t.Fatalf("result=%#v source_session=%#v", result, runtime.Gossip.Session("peer-b"))
+	}
+	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	if !ok {
+		t.Fatal("relay did not queue a session event")
+	}
+	timer, ok := event.(*gossip.SyncTimerEvent)
+	if !ok || timer.PeerID != "peer-c" || timer.LocalSummary == nil {
+		t.Fatalf("relay event = %#v", event)
+	}
+	wantRoot := corestate.CatalogRoot(corestate.ZoneDigests(view.State.Network))
+	if !bytes.Equal(timer.LocalSummary.CatalogRoot, wantRoot) {
+		t.Fatalf("relay root = %x, want %x", timer.LocalSummary.CatalogRoot, wantRoot)
+	}
+	if len(state.updates) != 1 || !state.updates[0]["peer-c"].LastRelayRootHex.Set {
+		t.Fatalf("relay checkpoint updates = %#v", state.updates)
+	}
+	diagnostics, ok := runtime.Observability.Snapshot("peer-c", now)
+	if !ok || diagnostics.LastUpdateSource != "peer-b" || diagnostics.LastRelaySuppression != "" {
+		t.Fatalf("relay diagnostics = %#v", diagnostics)
 	}
 }
 

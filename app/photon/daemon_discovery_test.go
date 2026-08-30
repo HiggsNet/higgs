@@ -188,7 +188,7 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	transport := &gossip.Transport{}
-	service.Sync.Transport = transport
+	setTestGossipTransport(t, service, transport)
 
 	before := service.StateStore.Meta().Revision
 	service.updateDiscoveredPeers()

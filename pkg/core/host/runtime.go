@@ -84,7 +84,8 @@ type Runtime struct {
 	objectPullServerWG       sync.WaitGroup
 	gossipChunks             *gossip.ChunkAssemblyStore
 	gossipSentChunks         *gossip.SentChunkCache
-	datagramReceiver         DatagramReceiver
+	gossipTransport          *gossip.Transport
+	datagramReceiver         datagramReceiver
 	datagramCancel           context.CancelFunc
 	datagramWG               sync.WaitGroup
 	stopped                  bool

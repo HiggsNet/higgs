@@ -87,6 +87,36 @@ func (runtime *Runtime) observeSyncHint(peerID, reason, suppression string, acce
 	})
 }
 
+func (runtime *Runtime) observeRelaySuccess(peerID, sourcePeerID string, now time.Time) {
+	if runtime == nil || peerID == "" {
+		return
+	}
+	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+		peer.LastUpdateSource = sourcePeerID
+		peer.LastRelaySuppression = ""
+		peer.LastRelaySuppressedAt = 0
+	})
+}
+
+func (runtime *Runtime) observeRelaySuppression(peerID, reason string, now time.Time) {
+	if runtime == nil || peerID == "" || reason == "" {
+		return
+	}
+	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+		peer.LastRelaySuppression = reason
+		peer.LastRelaySuppressedAt = now.Unix()
+	})
+}
+
+func (runtime *Runtime) observeObservedSource(peerID string, source gossip.MessageType, now time.Time) {
+	if runtime == nil || peerID == "" {
+		return
+	}
+	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+		peer.ObservedSource = string(source)
+	})
+}
+
 func (runtime *Runtime) observeActivePull(peerID, event string, session *gossip.SyncSession, now time.Time) {
 	if runtime == nil {
 		return

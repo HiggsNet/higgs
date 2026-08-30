@@ -1036,8 +1036,8 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	driverB := &observedIPsecDriver{}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
 	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
-	serviceA.Sync.Transport = transportA
-	serviceB.Sync.Transport = transportB
+	setTestGossipTransport(t, serviceA, transportA)
+	setTestGossipTransport(t, serviceB, transportB)
 	installTestIPsecDrivers(serviceA, driverA, driverA)
 	installTestIPsecDrivers(serviceB, driverB, driverB)
 

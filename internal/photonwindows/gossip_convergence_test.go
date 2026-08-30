@@ -46,6 +46,14 @@ func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for gossip session completion")
 	}
+	// HostRuntime now owns authenticated inbound-path checkpointing. The
+	// completion that triggered relay is reported before the remote relay packet
+	// necessarily reaches this node, so wait for that independent checkpoint
+	// commit before taking the byte-for-byte persistence baseline.
+	waitForWindowsState(t, time.Second, func() bool {
+		peer := right.store.ReadView().Gossip.Peers["node-a.catofes."]
+		return peer.ObservedEndpoint != "" && peer.ObservedLastSyncUnix != 0
+	})
 	converged := right.store.ReadView()
 	if converged.Revision != fixture.rightRevision+1 {
 		t.Fatalf("right revision = %d, want %d", converged.Revision, fixture.rightRevision+1)
@@ -61,7 +69,11 @@ func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing
 		t.Fatal(err)
 	}
 	beforeReject := right.store.VerifiedRevision()
-	execution := right.runtime.ExecuteGossipActions(t.Context(), right.runtime.Gossip.Session("node-a.catofes."), []gossip.SyncAction{gossip.ApplySnapshotAction{
+	// Completed sessions are now removed by HostRuntime itself. This direct
+	// executor check supplies its own detached protocol context instead of
+	// relying on a stale session retained after convergence.
+	rejectSession := gossip.NewSyncSession("node-a.catofes.")
+	execution := right.runtime.ExecuteGossipActions(t.Context(), rejectSession, []gossip.SyncAction{gossip.ApplySnapshotAction{
 		PeerID:       "node-a.catofes.",
 		Snapshot:     snapshot,
 		ExpectedRoot: []byte("wrong-root"),
@@ -129,7 +141,7 @@ func newMemoryHostNode(state *StateStore, transport *gossip.Transport) *memoryHo
 
 func (node *memoryHostNode) start(t *testing.T) {
 	t.Helper()
-	if err := node.runtime.StartGossipDatagramReceiver(node.ctx, node.transport, node.recordError); err != nil {
+	if err := node.runtime.StartGossipTransport(node.ctx, node.transport, node.recordError); err != nil {
 		t.Fatal(err)
 	}
 	go node.run()
@@ -151,7 +163,7 @@ func (node *memoryHostNode) run() {
 }
 
 func (node *memoryHostNode) handleEvent(event corehost.Event) error {
-	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now(), node)
+	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now(), nil)
 	if errors.Is(err, corehost.ErrGossipSessionNotFound) {
 		return nil
 	}
@@ -162,10 +174,6 @@ func (node *memoryHostNode) handleEvent(event corehost.Event) error {
 		}
 	}
 	return err
-}
-
-func (node *memoryHostNode) PrepareGossipInbound(context.Context, *gossip.Packet, time.Time) error {
-	return nil
 }
 
 func (node *memoryHostNode) beginSync(t *testing.T, peerID string) {

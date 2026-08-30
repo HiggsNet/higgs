@@ -26,7 +26,7 @@ func TestSeedObservedPeerPathDoesNotCompactStateGraceSlice(t *testing.T) {
 	}
 	transport := &gossip.Transport{}
 	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
-	service.Sync.Transport = transport
+	setTestGossipTransport(t, service, transport)
 	service.updateDiscoveredPeers()
 
 	grace := state.SyncPeers[peerID].ObservedGraceAddrs
@@ -58,7 +58,7 @@ func TestObservedPathParticipatesInOutboundPeersAndTransport(t *testing.T) {
 	}
 
 	transport := &gossip.Transport{}
-	service.Sync.Transport = transport
+	setTestGossipTransport(t, service, transport)
 	service.updateDiscoveredPeers()
 
 	if addr := transport.ObservedPeerAddr("node-b.catofes."); addr == nil || addr.String() != "127.0.0.1:2000" {

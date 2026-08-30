@@ -971,15 +971,18 @@ package dependency: app -> host -> gossip -> state -> zone
         两套 event loop 的 `InboundController/EventController` 边界。
         该 API 收口已开始：`ExecuteGossipInbound` 已变为私有 `executeGossipPacketActions`，`HandleGossipEvent` 已变为私有
         `handleGossipSessionEvent`，平台生产代码与 app 测试均只进入 `HandleGossipHostEvent`；旧的 packet/session controller
-        已删除，临时平台接口继续缩为 `GossipIO`：只剩本次 ingress route 准备、datagram budget 和真实发送，不再使用
-        `Controller/Effects` 命名；packet failure 也已由 HostRuntime 记录，`GossipHostEventResult` 不再暴露原始 packet 或原始
+        已删除；packet failure 也已由 HostRuntime 记录，`GossipHostEventResult` 不再暴露原始 packet 或原始
         session event 给 daemon/`sync serve` 二次解释和输出日志。
-      - [ ] F0e3c：收回 session 完成后的 remove/pending-hint、relay fanout 与公共 peer observability；daemon 只消费
-        verified `ChangeSet` 触发 Linux reconcile。随后把 `PrepareGossipInbound` 中 common observed-checkpoint/address-book 部分移入
-        HostRuntime，使 `GossipIO` 最终只包含平台 datagram send/reply-route，不再保留一体式 daemon adapter。
-    - [ ] F0e4：删除 `daemonGossipIO` 及 Windows memory test 中等价 I/O glue；Linux/Windows composition
-      均直接构造同一个 HostRuntime + Store + Transport。通过 host/state/gossip race、Linux `make check`/smoke 与 Windows
-      amd64 compile guard 后才开始真实 Windows UDP adapter。
+      - [x] F0e3c：session 完成后的 timer cancel、累计 NetworkChanged、remove、pending-hint follow-up、relay fanout/
+        checkpoint/observability 已收回 HostRuntime；删除 daemon `completeSyncSessionAfterPeerState`、`relaySyncToPeers` 及其观测
+        helper，relay 测试迁到公共 host。daemon 现在只根据 detached terminal result 触发 Linux reconcile 和记录地址失败，
+        不再读回或修改公共 session。入站 source 的 verified guard、checkpoint commit、观测来源和 commit 后 observed path 发布
+        也已收回 HostRuntime；公共 Transport 自己保留一分钟的 recent-inbound live path，供 NAT 后续会话包优先原路发送，且不落盘。
+        原 daemon checkpoint/seed/reply-route wrapper 已删除。
+    - [x] F0e4：删除 `daemonGossipIO`、独立 address-book interface、daemon ingress-route map/send/budget 转发和 Windows memory
+      test 等价 I/O glue。Linux/Windows composition 现在用 `StartGossipTransport` 把同一个公共 `gossip.Transport` 直接交给
+      HostRuntime；Runtime 直接使用其 Send/SendTo、datagram budget 和可重建 address book，平台只创建底层 DatagramIO。
+      通用 receiver capability 已改为 HostRuntime 私有实现细节，不再形成第二条公开 transport 边界。
     - [ ] F0e5：F0e4 前再做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次
       wrapper 和 legacy alias 都必须列出真实调用方。只被测试构造器使用的兼容入口直接删除；仍串联 common commit 与 Linux
       runtime 同一 Bolt transaction 的 `DaemonStateStore` 方法保留到调用方改用 typed owner；F0e5 完成前必须把它迁出
