@@ -14,6 +14,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -225,6 +226,34 @@ func snapshotTestDaemonState(store *DaemonStateStore) (*stateFile, uint64) {
 		return nil, 0
 	}
 	return composeLinuxStateView(common, runtime), uint64(common.Revision)
+}
+
+func cloneStateFile(s *stateFile) *stateFile {
+	if s == nil {
+		return nil
+	}
+	out := &stateFile{
+		ManagedZone:       s.ManagedZone,
+		IdentityKeyPath:   s.IdentityKeyPath,
+		RootPrivateKey:    cloneBytes(s.RootPrivateKey),
+		ZonePrivateKey:    cloneBytes(s.ZonePrivateKey),
+		Network:           zone.CloneNetworkState(s.Network),
+		SyncPeers:         cloneSyncPeers(s.SyncPeers),
+		PeerCleanups:      maps.Clone(s.PeerCleanups),
+		IPsecTransportKey: cloneIPsecTransportKeyState(s.IPsecTransportKey),
+		IPsecPortRecord:   cloneIPsecPortRecordState(s.IPsecPortRecord),
+		LinkInstances:     cloneLinkInstances(s.LinkInstances),
+		IPsecReconcile:    cloneIPsecReconcileState(s.IPsecReconcile),
+		RoutingReconcile:  cloneRoutingReconcileState(s.RoutingReconcile),
+		FirewallReconcile: cloneFirewallReconcileState(s.FirewallReconcile),
+		EndpointACLs:      cloneEndpointACLs(s.EndpointACLs),
+		BirdInstances:     cloneBirdInstances(s.BirdInstances),
+		Admission:         cloneAdmissionState(s.Admission),
+	}
+	if out.Network != nil {
+		configureValidation(out.Network)
+	}
+	return out
 }
 
 func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheckpoint {

@@ -193,7 +193,7 @@ func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs m
 	if firewallReconcileResultEqual(runtime.EndpointACLs, runtime.FirewallReconcile, endpointACLs, summary) {
 		return nil
 	}
-	currentRev, committed, err := d.commitFirewallRuntime(rev, endpointACLs, summary)
+	currentRev, committed, err := d.StateStore.commitFirewallIfRevision(rev, endpointACLs, summary)
 	if err != nil {
 		return err
 	}

@@ -383,7 +383,7 @@ func (d *DaemonService) commitIPsecReconcileResult(rev uint64, runtime *linuxRun
 	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, nextInstances, summary) {
 		return nil
 	}
-	currentRev, committed, err := d.commitIPsecRuntime(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, nextInstances, summary)
+	currentRev, committed, err := d.StateStore.commitIPsecIfRevision(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, nextInstances, summary)
 	if err != nil {
 		return err
 	}
@@ -476,7 +476,7 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, runtime.LinkInstances, reconcile) {
 		return
 	}
-	currentRev, committed, commitErr := d.commitIPsecRuntime(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, runtime.LinkInstances, reconcile)
+	currentRev, committed, commitErr := d.StateStore.commitIPsecIfRevision(rev, runtime.IPsecTransportKey, runtime.IPsecPortRecord, runtime.LinkInstances, reconcile)
 	if commitErr != nil {
 		d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": commitErr})
 		return

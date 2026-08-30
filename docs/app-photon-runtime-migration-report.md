@@ -120,7 +120,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `daemon_common_intent.go` | control DTO 到公共 intent 的转换 | typed control command 落地后删除，不保留永久 adapter |
 | `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
 | `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 HostRuntime；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
-| `daemon_runtime_commit.go` | Linux controller typed commit wrapper | 由 host 的 PlatformCompletion 流程取代后删除 |
+| `daemon_runtime_commit.go` | 已删除 | 原函数只做 nil guard 和单次转发；调用方现直接进入 typed Linux runtime commit，后续整体迁入 platform owner |
 | `daemon_state_store.go` | Linux runtime 持久化顺序和少量 mutation coordinator | HostRuntime 已直接持有 common Store，remote/checkpoint/read forwarding 与生产 Snapshot API 已删除；剩余 Linux commit 迁入 platform owner 后删除该文件 |
 | `daemon_sync.go` | HostRuntime 终态结果到 Linux reconcile 的接线 | gossip packet/session FSM、发送、observed checkpoint、relay、日志和 observability 已在 HostRuntime 闭环；daemon 不再提供 gossip I/O/controller adapter |
 
@@ -196,7 +196,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
 | `state.go` | stateFile、Linux aliases、CLI Runtime、旧 Load/Save、统计 helper | verified/checkpoint 已归 state；Linux runtime 归 Linux state；CLI context 归 photoncli；stateFile/旧 Load/Save 最终删除 |
-| `state_clone.go` | aggregate 和 Linux runtime clone | 各 owner 自己 clone；aggregate clone 随 stateFile 删除 |
+| `state_clone.go` | Linux runtime typed clone | aggregate `cloneStateFile` 已移到 test-only fixture；剩余 clone 随 Linux runtime owner 迁入 platform 包 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
 | `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | daemon、`sync serve`、`sync once` 已共用 HostRuntime 的 event consumer，启动 peer/endpoint/observed 恢复也统一走 HostRuntime discovery；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |

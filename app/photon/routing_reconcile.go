@@ -164,7 +164,7 @@ func (d *DaemonService) commitRoutingReconcileResult(rev uint64, baseBird map[st
 	if routingReconcileResultEqual(baseBird, baseReconcile, nextBird, nextReconcile) {
 		return nil
 	}
-	currentRev, committed, err := d.commitRoutingRuntime(rev, nextBird, nextReconcile)
+	currentRev, committed, err := d.StateStore.commitRoutingIfRevision(rev, nextBird, nextReconcile)
 	if err != nil {
 		return err
 	}

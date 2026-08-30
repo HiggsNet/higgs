@@ -133,7 +133,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 			return cleaned, orphans, err
 		}
 	}
-	if _, committed, err := d.commitIPsecRuntime(
+	if _, committed, err := d.StateStore.commitIPsecIfRevision(
 		uint64(common.Revision),
 		runtimeCandidate.IPsecTransportKey,
 		runtimeCandidate.IPsecPortRecord,

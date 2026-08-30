@@ -259,7 +259,7 @@ func (d *DaemonService) commitEndpointACLMutation(rev uint64, acls map[string]en
 	if d == nil || d.StateStore == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if _, committed, err := d.commitFirewallRuntime(rev, acls, reconcile); err != nil {
+	if _, committed, err := d.StateStore.commitFirewallIfRevision(rev, acls, reconcile); err != nil {
 		return err
 	} else if !committed {
 		return errDaemonStateRevisionStale

@@ -993,6 +993,10 @@ package dependency: app -> host -> gossip -> state -> zone
         aggregate Snapshot/clone、legacy alias 和没有多调用方价值的 runtime commit wrapper；同步更新 runtime migration report。
         - [x] 49 处测试读取已改为 test-only `snapshotTestDaemonState`，生产 `DaemonStateStore.Snapshot()` 已删除；测试需要的
           aggregate shape 不再迫使生产类型暴露 Snapshot API。
+        - [x] aggregate `cloneStateFile` 已移入 test-only helper；生产 `state_clone.go` 只保留各 typed Linux runtime 字段的 clone。
+          无调用方的 `stateFile` RLock/WithLock convenience API 已删除。
+        - [x] 删除只做 nil guard 和单次转发的 `daemon_runtime_commit.go`；routing/IPsec/firewall/cleanup 调用方直接进入
+          `DaemonStateStore` 当前的 typed runtime commit，后续随 Linux runtime owner 一起下沉。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、

@@ -2,39 +2,7 @@ package main
 
 import (
 	"maps"
-
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
-
-func cloneStateFile(s *stateFile) *stateFile {
-	if s == nil {
-		return nil
-	}
-	// Callers must already own the appropriate state lock, or pass an immutable
-	// snapshot/workspace that cannot be mutated concurrently.
-	out := &stateFile{
-		ManagedZone:       s.ManagedZone,
-		IdentityKeyPath:   s.IdentityKeyPath,
-		RootPrivateKey:    cloneBytes(s.RootPrivateKey),
-		ZonePrivateKey:    cloneBytes(s.ZonePrivateKey),
-		Network:           zone.CloneNetworkState(s.Network),
-		SyncPeers:         cloneSyncPeers(s.SyncPeers),
-		PeerCleanups:      maps.Clone(s.PeerCleanups),
-		IPsecTransportKey: cloneIPsecTransportKeyState(s.IPsecTransportKey),
-		IPsecPortRecord:   cloneIPsecPortRecordState(s.IPsecPortRecord),
-		LinkInstances:     cloneLinkInstances(s.LinkInstances),
-		IPsecReconcile:    cloneIPsecReconcileState(s.IPsecReconcile),
-		RoutingReconcile:  cloneRoutingReconcileState(s.RoutingReconcile),
-		FirewallReconcile: cloneFirewallReconcileState(s.FirewallReconcile),
-		EndpointACLs:      cloneEndpointACLs(s.EndpointACLs),
-		BirdInstances:     cloneBirdInstances(s.BirdInstances),
-		Admission:         cloneAdmissionState(s.Admission),
-	}
-	if out.Network != nil {
-		configureValidation(out.Network)
-	}
-	return out
-}
 
 func cloneRoutingReconcileState(in *routingReconcileState) *routingReconcileState {
 	if in == nil {

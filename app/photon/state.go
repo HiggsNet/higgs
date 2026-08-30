@@ -47,31 +47,6 @@ func (s *stateFile) Unlock() {
 	s.mu.Unlock()
 }
 
-// RLock acquires the read lock for this state file. All reads of mutable
-// state fields from non-event-loop goroutines must hold the read lock.
-func (s *stateFile) RLock() {
-	s.mu.RLock()
-}
-
-// RUnlock releases the read lock for this state file.
-func (s *stateFile) RUnlock() {
-	s.mu.RUnlock()
-}
-
-// WithLock runs fn while holding the write lock.
-func (s *stateFile) WithLock(fn func()) {
-	s.Lock()
-	defer s.Unlock()
-	fn()
-}
-
-// WithRLock runs fn while holding the read lock.
-func (s *stateFile) WithRLock(fn func()) {
-	s.RLock()
-	defer s.RUnlock()
-	fn()
-}
-
 type stateMeta struct {
 	ManagedZone       zone.ZonePath                        `json:"managed_zone"`
 	IdentityKeyPath   string                               `json:"identity_key_path,omitempty"`
