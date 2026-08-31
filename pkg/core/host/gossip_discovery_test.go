@@ -2,15 +2,18 @@ package host
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 type failingDiscoveryWriter struct {
@@ -51,6 +54,219 @@ func TestRuntimeDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T)
 	if addr := transport.PeerAddr("peer-a"); addr != nil {
 		t.Fatalf("address book published before checkpoint: %v", addr)
 	}
+}
+
+func TestPlanGossipDiscoveryIncludesVerifiedZoneAndDelegatedChild(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", false, nil, now)
+	plan := PlanGossipDiscovery(GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+	}, now)
+	if !slices.Contains(plan.KnownPeerIDs, "peer.catofes.") {
+		t.Fatalf("known peers = %v, want delegated child", plan.KnownPeerIDs)
+	}
+
+	network, _ = signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
+	plan = PlanGossipDiscovery(GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+	}, now)
+	if !slices.Contains(plan.KnownPeerIDs, "peer.catofes.") {
+		t.Fatalf("known peers = %v, want verified zone", plan.KnownPeerIDs)
+	}
+}
+
+func TestPlanGossipDiscoveryRanksEndpointAndPublishesCheckpoint(t *testing.T) {
+	now := time.Unix(1000, 0)
+	entries := []gossip.EndpointEntry{
+		{Address: "10.16.255.8", Port: 33435, Source: "interface", Priority: 200, LastObserved: now.Unix()},
+		{Address: "203.0.113.10", Port: 33434, Source: "reflector", Priority: 10, LastObserved: now.Unix()},
+	}
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, entries, now)
+	plan := PlanGossipDiscovery(GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+	}, now)
+	update := plan.Peers["peer.catofes."]
+	if len(update.SetAddresses) != 2 || update.SetAddresses[0].String() != "203.0.113.10:33434" {
+		t.Fatalf("addresses = %v, want public reflector first", update.SetAddresses)
+	}
+	patch := plan.Patches["peer.catofes."]
+	if !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "203.0.113.10:33434" || !patch.DiscoveredAtUnix.Set {
+		t.Fatalf("checkpoint patch = %#v", patch)
+	}
+
+	transport := &gossip.Transport{}
+	ApplyGossipDiscoveryPlan(transport, plan)
+	if addr := transport.PeerAddr("peer.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
+		t.Fatalf("published address = %v", addr)
+	}
+}
+
+func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, []gossip.EndpointEntry{{
+		Address: "127.0.0.1", Port: 10000, Source: "advertise", LastObserved: now.Unix(),
+	}}, now)
+	plan := PlanGossipDiscovery(GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
+			DiscoveredEndpoint: "127.0.0.1:9999", DiscoveredAtUnix: now.Add(-time.Minute).Unix(),
+		}},
+	}, now)
+	if got := plan.Patches["peer.catofes."].DiscoveredEndpoint; !got.Set || got.Value != "127.0.0.1:10000" {
+		t.Fatalf("replacement patch = %#v", got)
+	}
+
+	emptyNetwork, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
+	plan = PlanGossipDiscovery(GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: emptyNetwork,
+		EndpointGrace: time.Nanosecond,
+		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
+			DiscoveredEndpoint: "127.0.0.1:10000", DiscoveredAtUnix: now.Add(-time.Hour).Unix(), LastSyncUnix: now.Add(-time.Hour).Unix(),
+		}},
+	}, now)
+	update := plan.Peers["peer.catofes."]
+	patch := plan.Patches["peer.catofes."]
+	if !update.RemoveAddresses || !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "" {
+		t.Fatalf("expired update/patch = %#v/%#v", update, patch)
+	}
+}
+
+func TestPlanGossipDiscoveryDoesNotCompactCheckpointGraceInput(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
+	input := GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
+			ObservedEndpoint:  "127.0.0.1:3000",
+			ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{
+				{Endpoint: "127.0.0.1:1000", UntilUnix: now.Add(-time.Second).Unix()},
+				{Endpoint: "127.0.0.1:2000", UntilUnix: now.Add(time.Minute).Unix()},
+			},
+		}},
+	}
+	plan := PlanGossipDiscovery(input, now)
+	grace := input.Peers["peer.catofes."].ObservedGraceEndpoints
+	if len(grace) != 2 || grace[0].Endpoint != "127.0.0.1:1000" || grace[1].Endpoint != "127.0.0.1:2000" {
+		t.Fatalf("checkpoint grace paths were compacted in place: %#v", grace)
+	}
+	paths := plan.Peers["peer.catofes."].ObservedPaths
+	if len(paths) != 2 || paths[0].Addr.String() != "127.0.0.1:3000" || paths[1].Addr.String() != "127.0.0.1:2000" {
+		t.Fatalf("planned observed paths = %#v", paths)
+	}
+}
+
+func TestObservedPathParticipatesInOutboundAndExpires(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
+	input := GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
+			ObservedEndpoint: "127.0.0.1:2000", ObservedFirstSeenUnix: now.Unix(),
+			ObservedLastSeenUnix: now.Unix(), ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureTimeout, Message: "timed out", AtUnix: now.Unix()},
+		}},
+	}
+	if peers := GossipOutboundPeers(input, now); len(peers) != 1 || peers[0] != "peer.catofes." {
+		t.Fatalf("outbound peers = %v", peers)
+	}
+	transport := &gossip.Transport{}
+	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(input, now))
+	if addr := transport.ObservedPeerAddr("peer.catofes."); addr == nil || addr.String() != "127.0.0.1:2000" {
+		t.Fatalf("observed address = %v", addr)
+	}
+
+	expiredAt := now.Add(2 * time.Minute)
+	if peers := GossipOutboundPeers(input, expiredAt); len(peers) != 0 {
+		t.Fatalf("outbound peers after expiry = %v", peers)
+	}
+	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(input, expiredAt))
+	if addr := transport.ObservedPeerAddr("peer.catofes."); addr != nil {
+		t.Fatalf("observed address after expiry = %v", addr)
+	}
+}
+
+func TestPlanGossipDiscoveryObservedPathPreference(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
+	input := GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
+			DiscoveredEndpoint: "127.0.0.1:9999", ObservedEndpoint: "127.0.0.1:2000", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+		}},
+	}
+	if PlanGossipDiscovery(input, now).Peers["peer.catofes."].PreferObserved {
+		t.Fatal("observed path preferred before direct endpoint failure")
+	}
+	peer := input.Peers["peer.catofes."]
+	peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureTimeout, Message: "timed out", AtUnix: now.Unix()}
+	input.Peers["peer.catofes."] = peer
+	if !PlanGossipDiscovery(input, now).Peers["peer.catofes."].PreferObserved {
+		t.Fatal("observed path not preferred after direct endpoint failure")
+	}
+	peer.LastFailure = nil
+	peer.DiscoveredEndpoint = "10.16.255.8:33435"
+	input.Peers["peer.catofes."] = peer
+	if !PlanGossipDiscovery(input, now).Peers["peer.catofes."].PreferObserved {
+		t.Fatal("observed path not preferred over private discovered endpoint")
+	}
+}
+
+func signedDiscoveryNetwork(t *testing.T, peer zone.ZonePath, includePeer bool, endpoints []gossip.EndpointEntry, now time.Time) (*zone.NetworkState, ed25519.PrivateKey) {
+	t.Helper()
+	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentPublic, parentPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerPublic, peerPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAuthority := &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
+		Key: rootPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite}}},
+	}}}
+	parent := peer.Parent()
+	parentAuthority := &zone.ZoneAuthority{Zone: parent, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
+		Key: parentPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite}}},
+	}}}
+	peerAuthority := &zone.ZoneAuthority{Zone: peer, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
+		Key: peerPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}},
+	}}}
+	parentDelegation := &zone.Delegation{ZoneName: parent, Scope: zone.DelegationScopeDirectChild, Authority: *parentAuthority}
+	if err := photoncrypto.SignDelegation(parentDelegation, zone.RootZone, rootPrivate); err != nil {
+		t.Fatal(err)
+	}
+	delegation := &zone.Delegation{ZoneName: peer, Scope: zone.DelegationScopeDirectChild, Authority: *peerAuthority}
+	if err := photoncrypto.SignDelegation(delegation, parent, parentPrivate); err != nil {
+		t.Fatal(err)
+	}
+	network := zone.NewNetworkState()
+	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	network.Zones[zone.RootZone].Delegations[parent] = parentDelegation
+	network.Zones[parent] = zone.NewZoneState(parent, parentAuthority)
+	network.Zones[parent].ParentProof = []*zone.Delegation{parentDelegation}
+	network.Zones[parent].Delegations[peer] = delegation
+	if includePeer {
+		network.Zones[peer] = zone.NewZoneState(peer, peerAuthority)
+		network.Zones[peer].ParentProof = []*zone.Delegation{parentDelegation, delegation}
+	}
+	if includePeer && endpoints != nil {
+		payload, err := json.Marshal(gossip.EndpointRecord{Endpoints: endpoints, TTL: int64(time.Hour / time.Second), UpdatedAt: now.Unix()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := &zone.Record{Zone: peer, Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: payload, Version: 1, Timestamp: now.Unix()}
+		if err := photoncrypto.SignRecord(record, peerPrivate); err != nil {
+			t.Fatal(err)
+		}
+		network.Zones[peer].Records[record.Key] = record
+	}
+	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+	return network, peerPrivate
 }
 
 func TestDiscoveryAddressOrderAndRecentFallback(t *testing.T) {
