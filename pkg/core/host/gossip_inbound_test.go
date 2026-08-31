@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -98,6 +99,94 @@ func TestRuntimeExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T
 	diagnostics, ok := runtime.Observability.Snapshot("peer-a", time.Unix(100, 0))
 	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogRootHex == "" || diagnostics.HintAccepted != 1 {
 		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}
+
+func TestRuntimePingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	peerID := zone.ZonePath("peer.catofes.")
+	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
+	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
+	defer runtime.Stop()
+	bindMemoryGossipTransport(t, runtime, peerID.String())
+	summary := corestate.CatalogSummaryFor(network)
+
+	result, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
+		Addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434},
+		Message: &gossip.Message{
+			Type: gossip.MessagePing, PeerID: peerID.String(), Ping: &gossip.Ping{Summary: summary},
+		},
+	}}, now, nil)
+	if err != nil || !result.Handled {
+		t.Fatalf("HandleGossipHostEvent result/error = %#v/%v", result, err)
+	}
+	if runtime.Gossip.Session(peerID.String()) != nil || runtime.PendingEventCount() != 0 {
+		t.Fatalf("matching summary created session/event: session=%#v events=%d", runtime.Gossip.Session(peerID.String()), runtime.PendingEventCount())
+	}
+	view := store.ReadView()
+	peer := view.Gossip.Peers[peerID.String()]
+	if view.Revision != 0 || peer.LastSyncUnix != now.Unix() || peer.BackoffUntilUnix != 0 || peer.ObservedEndpoint != "127.0.0.1:33434" {
+		t.Fatalf("shortcut view = revision %d peer %#v", view.Revision, peer)
+	}
+	diagnostics, ok := runtime.Observability.Snapshot(peerID.String(), now)
+	if !ok || diagnostics.LastHintReason != "ping_summary_match" {
+		t.Fatalf("shortcut diagnostics = %#v", diagnostics)
+	}
+}
+
+func TestRuntimePingSummaryMismatchStartsCommonSession(t *testing.T) {
+	now := time.Unix(1000, 0)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil)
+	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
+	defer runtime.Stop()
+	bindMemoryGossipTransport(t, runtime, "peer-a")
+
+	_, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+		Type: gossip.MessagePing, PeerID: "peer-a", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
+	}}}, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session := runtime.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
+		t.Fatalf("mismatch session = %#v", session)
+	}
+	if runtime.PendingEventCount() != 1 {
+		t.Fatalf("pending events = %d, want 1", runtime.PendingEventCount())
+	}
+}
+
+func TestRuntimeAnnounceIsHintAndDefersWhileSessionActive(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network := zone.NewNetworkState()
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
+	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
+	defer runtime.Stop()
+	bindMemoryGossipTransport(t, runtime, "peer-a")
+	rootBefore := corestate.CatalogRoot(corestate.ZoneDigests(network))
+	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+		Type: gossip.MessageAnnounce, PeerID: "peer-a",
+		Announce: &gossip.Announce{Zones: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("remote")}}},
+	}}}
+
+	if _, err := runtime.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	if session := runtime.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
+		t.Fatalf("announce session = %#v", session)
+	}
+	if runtime.PendingEventCount() != 1 {
+		t.Fatalf("announce events = %d, want 1", runtime.PendingEventCount())
+	}
+	if rootAfter := corestate.CatalogRoot(corestate.ZoneDigests(store.ReadView().State.Network)); !bytes.Equal(rootAfter, rootBefore) {
+		t.Fatal("announce mutated verified network")
+	}
+	<-runtime.Events()
+	if _, err := runtime.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.PendingEventCount() != 0 || !runtime.Gossip.PendingHint("peer-a") {
+		t.Fatalf("active announce events/pending = %d/%t", runtime.PendingEventCount(), runtime.Gossip.PendingHint("peer-a"))
 	}
 }
 

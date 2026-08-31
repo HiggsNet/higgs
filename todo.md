@@ -1034,7 +1034,11 @@ package dependency: app -> host -> gossip -> state -> zone
             address-book publication 已迁入 `pkg/core/host/gossip_discovery_test.go`，旧 app 混合测试文件已删除。app 仅保留 transport
             replay/quota/logger 构造注入，以及仍直接读取 `syncConfigFile` 的本机 endpoint publish policy；后者在公共 config 边界确定前
             不额外创建 adapter。`sync_path_test.go` 的 observed path input-detach、outbound/expiry 与 preference 覆盖也已迁入 HostRuntime。
-            下一批审计 `daemon_sync_test.go`，区分公共 session/observability 行为、双节点端到端验收与平台 hook。
+            `daemon_sync_test.go` 已从 10 个测试收敛为两个 app 组合验收：Linux daemon 双节点 UDP/TCP object-pull/event-pump 闭环，
+            以及 daemon 周期 bootstrap 在公共事件队列已满时的 fallback。read-only responder、announce hint/defer、ping summary
+            shortcut/mismatch、checkpoint/backoff 与 observability 均由 `pkg/core/host` 直接绑定 Store/Transport 验证。下一批审计
+            `sync_mtu_test.go` 和剩余 `sync_endpoint_publish_test.go`：前者确认与 `pkg/core/gossip/datagram_test.go`、`catalog_test.go`
+            完全重复后已删除；后者仍测试 app `SyncRuntime.endpointProtocolIntent`，待本机采集 capability 与公共协议 intent 分离时再拆。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
