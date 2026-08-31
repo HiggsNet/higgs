@@ -1042,6 +1042,11 @@ package dependency: app -> host -> gossip -> state -> zone
             错误，`pkg/core/host.PlanGossipEndpointIntent` 统一负责 identity admission、record grace/refresh/clear/no-op 和 typed protocol
             intent，公共语义测试已下沉，app 仅保留采集结果接线测试。sync debug/status 中重复验证 inspect DTO 字段映射的测试也已删除，
             offline checkpoint 不冒充 ephemeral diagnostics、unknown peer 和 zone 排序的 app 边界测试保留。
+          - `daemon_discovery_test.go` 中仍经 `stateFile -> legacy checkpoint projection` 验证公共 planner 的四组测试已改为
+            `pkg/core/host` typed input；observed path grace、无 checkpoint 变化时修复 address book、无 verified zone 的 bootstrap
+            均由 common runtime 覆盖。app 只保留 platform lifecycle suppression overlay 和 commit-before-publish 组合验收，且两者已改用
+            `VerifiedState + GossipCheckpoint + linuxRuntimeState` fixture，不再保存或回读 aggregate state。object-pull 的 observed/signed
+            endpoint 地址选择测试也已随 discovery input 下沉到 HostRuntime，删除 app 对 legacy discovery fixture 的最后两处依赖。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

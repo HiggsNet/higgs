@@ -212,6 +212,83 @@ func TestPlanGossipDiscoveryObservedPathPreference(t *testing.T) {
 	}
 }
 
+func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
+	now := time.Unix(1000, 0)
+	peerID := zone.ZonePath("peer.catofes.")
+	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	input := GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
+			ObservedEndpoint: "198.51.100.10:33434", ObservedFirstSeenUnix: now.Add(-time.Minute).Unix(),
+			ObservedUntilUnix: now.Add(time.Minute).Unix(), ObservedFailureCount: 2,
+		}},
+	}
+	patch, ok := PlanVerifiedObservedCheckpoint(input, peerID.String(), "198.51.100.20:33434", now)
+	if !ok {
+		t.Fatal("verified peer did not produce observed checkpoint patch")
+	}
+	if patch.ObservedEndpoint.Value != "198.51.100.20:33434" || patch.ObservedFirstUnix.Value != now.Unix() || patch.ObservedFailures.Value != 0 {
+		t.Fatalf("observed patch = %#v", patch)
+	}
+	if len(patch.ObservedGrace.Value) != 1 || patch.ObservedGrace.Value[0].Endpoint != "198.51.100.10:33434" {
+		t.Fatalf("observed grace = %#v", patch.ObservedGrace.Value)
+	}
+	if _, ok := PlanVerifiedObservedCheckpoint(input, "unknown.catofes.", "198.51.100.30:33434", now); ok {
+		t.Fatal("unverified peer produced observed checkpoint patch")
+	}
+}
+
+func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	peerID := zone.ZonePath("peer.catofes.")
+	entries := []gossip.EndpointEntry{{Address: "203.0.113.10", Port: 33434, Source: "reflector", LastObserved: now.Unix()}}
+	network, _ := signedDiscoveryNetwork(t, peerID, true, entries, now)
+	input := GossipDiscoveryInput{
+		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
+			DiscoveredEndpoint: "203.0.113.10:33434", DiscoveredAtUnix: now.Unix(),
+			ObservedEndpoint: "198.51.100.20:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{
+				{Endpoint: "expired:33434", UntilUnix: now.Add(-time.Minute).Unix()},
+				{Endpoint: "198.51.100.21:33434", UntilUnix: now.Add(time.Minute).Unix()},
+			},
+		}},
+	}
+	plan := PlanGossipDiscovery(input, now)
+	if len(plan.Patches) != 0 {
+		t.Fatalf("unchanged discovery produced checkpoint patches: %#v", plan.Patches)
+	}
+	if len(input.Peers[peerID.String()].ObservedGraceEndpoints) != 2 {
+		t.Fatal("planning compacted checkpoint grace input")
+	}
+	transport := &gossip.Transport{}
+	ApplyGossipDiscoveryPlan(transport, plan)
+	if addr := transport.PeerAddr(peerID.String()); addr == nil || addr.String() != "203.0.113.10:33434" {
+		t.Fatalf("repaired endpoint = %v", addr)
+	}
+	if paths := transport.ObservedPeerAddrs(peerID.String()); len(paths) != 2 {
+		t.Fatalf("repaired observed paths = %v", paths)
+	}
+}
+
+func TestPlanGossipDiscoveryRepairsBootstrapWithoutVerifiedZone(t *testing.T) {
+	now := time.Unix(1000, 0)
+	peerID := "bootstrap.example."
+	plan := PlanGossipDiscovery(GossipDiscoveryInput{
+		Network:        zone.NewNetworkState(),
+		Bootstrap:      map[string]*net.UDPAddr{peerID: {IP: net.ParseIP("127.0.0.1"), Port: 33434}},
+		BootstrapPeers: []string{peerID},
+	}, now)
+	if len(plan.Patches) != 0 {
+		t.Fatalf("bootstrap produced checkpoint patches: %#v", plan.Patches)
+	}
+	transport := &gossip.Transport{}
+	ApplyGossipDiscoveryPlan(transport, plan)
+	if addr := transport.PeerAddr(peerID); addr == nil || addr.String() != "127.0.0.1:33434" {
+		t.Fatalf("bootstrap address = %v", addr)
+	}
+}
+
 func signedDiscoveryNetwork(t *testing.T, peer zone.ZonePath, includePeer bool, endpoints []gossip.EndpointEntry, now time.Time) (*zone.NetworkState, ed25519.PrivateKey) {
 	t.Helper()
 	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
@@ -321,6 +398,37 @@ func TestResolveGossipObjectPullAddressUsesBootstrap(t *testing.T) {
 	}
 	if got := ResolveGossipObjectPullAddress(input, "unknown", time.Unix(1000, 0)); got != "" {
 		t.Fatalf("unknown object-pull address = %q", got)
+	}
+}
+
+func TestResolveGossipObjectPullAddressPrefersVerifiedObservedPath(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	peerID := zone.ZonePath("peer.catofes.")
+	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	input := GossipDiscoveryInput{
+		Network:   network,
+		Bootstrap: map[string]*net.UDPAddr{peerID.String(): {IP: net.ParseIP("192.0.2.10"), Port: 33434}},
+		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
+			ObservedEndpoint: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+		}},
+	}
+	if got := ResolveGossipObjectPullAddress(input, peerID.String(), now); got != "198.51.100.10:33434" {
+		t.Fatalf("object-pull address = %q", got)
+	}
+	input.Peers["unknown.catofes."] = input.Peers[peerID.String()]
+	if got := ResolveGossipObjectPullAddress(input, "unknown.catofes.", now); got != "" {
+		t.Fatalf("unverified observed address = %q", got)
+	}
+}
+
+func TestResolveGossipObjectPullAddressUsesSignedEndpoint(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	peerID := zone.ZonePath("peer.catofes.")
+	network, _ := signedDiscoveryNetwork(t, peerID, true, []gossip.EndpointEntry{{
+		Address: "203.0.113.10", Port: 33434, Source: "advertise", LastObserved: now.Unix(),
+	}}, now)
+	if got := ResolveGossipObjectPullAddress(GossipDiscoveryInput{Network: network}, peerID.String(), now); got != "203.0.113.10:33434" {
+		t.Fatalf("object-pull address = %q", got)
 	}
 }
 

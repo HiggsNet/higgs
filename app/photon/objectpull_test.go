@@ -96,44 +96,6 @@ func TestObjectPullLookupRejectsRevokedZone(t *testing.T) {
 	t.Skip("revocation tested in pkg/core/gossip")
 }
 
-func TestCommonObjectPullAddressPrefersVerifiedObservedPath(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Now()
-	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {
-		ObservedAddr: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
-	}}
-	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
-	input := testDaemonGossipDiscoveryInput(state, config)
-	if got := corehost.ResolveGossipObjectPullAddress(input, "node-b.catofes.", now); got != "198.51.100.10:33434" {
-		t.Fatalf("object-pull address = %q, want verified observed path", got)
-	}
-	input.Peers["unknown.catofes."] = input.Peers["node-b.catofes."]
-	if got := corehost.ResolveGossipObjectPullAddress(input, "unknown.catofes.", now); got != "" {
-		t.Fatalf("unverified observed address = %q, want empty", got)
-	}
-}
-
-func TestCommonObjectPullAddressUsesSignedEndpoint(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Now()
-	record := &zone.Record{
-		Zone: "node-b.catofes.", Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint",
-		Value: endpointRecordBytes([]gossip.LocalEndpoint{{
-			IP: net.ParseIP("203.0.113.10"), Port: 33434, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise,
-		}}, now),
-		Version: 1, Timestamp: now.Unix(),
-	}
-	if err := photoncrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.Network.PutAt(record, now); err != nil {
-		t.Fatal(err)
-	}
-	if got := corehost.ResolveGossipObjectPullAddress(testDaemonGossipDiscoveryInput(state, config), "node-b.catofes.", now); got != "203.0.113.10:33434" {
-		t.Fatalf("object-pull address = %q, want signed endpoint", got)
-	}
-}
-
 func TestOfflineObjectPullDoesNotPersistDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: photonlinux.GossipObjectPullClient{}})
