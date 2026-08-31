@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -18,6 +16,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -440,7 +439,9 @@ func (sr *SyncRuntime) endpointProtocolIntent(verified *corestate.VerifiedState)
 		return nil, nil
 	}
 	if config != nil && config.DisableEndpointPublish {
-		return sr.clearPublishedEndpointRecordIntent(verified)
+		return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
+			Verified: verified, Disabled: true, Now: sr.now(), TTL: config.EndpointTTL,
+		})
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
@@ -448,57 +449,10 @@ func (sr *SyncRuntime) endpointProtocolIntent(verified *corestate.VerifiedState)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
 		sr.logger().Warn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
 	}
-	now := sr.now()
-	var previous *gossip.EndpointRecord
-
-	zs := verified.Network.Zones[verified.ManagedZone]
-	if zs != nil {
-		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
-			var er gossip.EndpointRecord
-			if err := json.Unmarshal(existing.Value, &er); err == nil {
-				previous = &er
-			}
-		}
-	}
-	recordValue := gossip.LocalEndpointsToRecordWithPolicy(endpoints, previous, now, config.EndpointTTL, config.EndpointGrace)
-	value, err := json.Marshal(recordValue)
-	if err != nil {
-		return nil, err
-	}
-
-	if zs != nil {
-		if existing := zs.Records[gossip.EndpointRecordKeyUDP]; existing != nil {
-			if bytes.Equal(existing.Value, value) || (gossip.EndpointRecordEndpointsEqual(previous, recordValue) && !endpointRefreshDue(previous, now, config.EndpointRefresh)) {
-				return nil, nil
-			}
-		}
-	}
-
-	return &corestate.PutProtocolRecordIntent{
-		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: verified.ManagedZone,
-		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
-	}, nil
-}
-
-func endpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh time.Duration) bool {
-	if previous == nil || len(previous.Endpoints) == 0 {
-		return true
-	}
-	if refresh <= 0 {
-		refresh = gossip.DefaultEndpointRefresh
-	}
-	base := previous.UpdatedAt
-	if base == 0 {
-		for _, ep := range previous.Endpoints {
-			if ep.LastObserved > base {
-				base = ep.LastObserved
-			}
-		}
-	}
-	if base == 0 {
-		return true
-	}
-	return !now.Before(time.Unix(base, 0).Add(refresh))
+	return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
+		Verified: verified, Endpoints: endpoints, Now: sr.now(),
+		TTL: config.EndpointTTL, Grace: config.EndpointGrace, Refresh: config.EndpointRefresh,
+	})
 }
 
 // filterEndpointDiscoveryInputs returns the advertise addresses and reflectors
@@ -563,32 +517,6 @@ func allBootstrapAddrsLoopback(peers []syncConfigPeer) bool {
 func isLoopbackIP(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-func (sr *SyncRuntime) clearPublishedEndpointRecordIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	config := sr.Config
-	zs := verified.Network.Zones[verified.ManagedZone]
-	if zs == nil {
-		return nil, nil
-	}
-	existing := zs.Records[gossip.EndpointRecordKeyUDP]
-	if existing == nil {
-		return nil, nil
-	}
-	var current gossip.EndpointRecord
-	if err := json.Unmarshal(existing.Value, &current); err == nil && len(current.Endpoints) == 0 {
-		return nil, nil
-	}
-	now := sr.now()
-	recordValue := gossip.LocalEndpointsToRecordWithPolicy(nil, nil, now, config.EndpointTTL, 0)
-	value, err := json.Marshal(recordValue)
-	if err != nil {
-		return nil, err
-	}
-	return &corestate.PutProtocolRecordIntent{
-		Kind: corestate.ProtocolRecordGossipEndpoint, Zone: verified.ManagedZone,
-		Key: gossip.EndpointRecordKeyUDP, Type: "sync.endpoint", Value: value,
-	}, nil
 }
 
 func syncLimits(config *syncConfigFile) corestate.SyncLimits {

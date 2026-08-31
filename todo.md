@@ -1038,7 +1038,10 @@ package dependency: app -> host -> gossip -> state -> zone
             以及 daemon 周期 bootstrap 在公共事件队列已满时的 fallback。read-only responder、announce hint/defer、ping summary
             shortcut/mismatch、checkpoint/backoff 与 observability 均由 `pkg/core/host` 直接绑定 Store/Transport 验证。下一批审计
             `sync_mtu_test.go` 和剩余 `sync_endpoint_publish_test.go`：前者确认与 `pkg/core/gossip/datagram_test.go`、`catalog_test.go`
-            完全重复后已删除；后者仍测试 app `SyncRuntime.endpointProtocolIntent`，待本机采集 capability 与公共协议 intent 分离时再拆。
+            完全重复后已删除；endpoint publish 已按真实边界拆开：app `SyncRuntime` 只从配置选择/采集本机候选地址并记录 reflector
+            错误，`pkg/core/host.PlanGossipEndpointIntent` 统一负责 identity admission、record grace/refresh/clear/no-op 和 typed protocol
+            intent，公共语义测试已下沉，app 仅保留采集结果接线测试。sync debug/status 中重复验证 inspect DTO 字段映射的测试也已删除，
+            offline checkpoint 不冒充 ephemeral diagnostics、unknown peer 和 zone 排序的 app 边界测试保留。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

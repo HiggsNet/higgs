@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -96,35 +94,6 @@ func TestSyncStatusGroupsZonesByDotAndHyphenSuffix(t *testing.T) {
 	}
 }
 
-func TestPeerDebugAdapterProjectsRuntimeStats(t *testing.T) {
-	now := time.Unix(1700000000, 0)
-	view := buildPeerDebugView(
-		"node-b.catofes.",
-		"bootstrap",
-		"127.0.0.1:9999",
-		"127.0.0.1:2000",
-		diagnosticSyncPeerState(now),
-		diagnosticPeerObservability(now),
-		now,
-	)
-
-	if view.PeerID != "node-b.catofes." || view.Source != "bootstrap" || view.ConfiguredAddr != "127.0.0.1:9999" || view.ResolvedAddr != "127.0.0.1:2000" {
-		t.Fatalf("peer debug identity = %+v", view)
-	}
-	if view.DiscoveredAddr != "127.0.0.1:2000" || view.ObservedAddr != "127.0.0.1:3000" || view.LastUpdateSource != "node-c.catofes." {
-		t.Fatalf("peer endpoint fields = %+v", view)
-	}
-	if view.SyncFlow.ActivePullState != string(gossip.SyncSessionObjectPulling) || view.SyncFlow.ActivePullLastEvent != "catalog_page" {
-		t.Fatalf("sync flow = %+v", view.SyncFlow)
-	}
-	if view.DatagramStats.TooLargeDropped != 2 || view.DatagramStats.LastTooLargeObject != "record" {
-		t.Fatalf("datagram stats = %+v", view.DatagramStats)
-	}
-	if view.ObjectPullStats.Attempts != 3 || !view.ObjectPullStats.LastUnreachable || view.ObjectPullStats.LastError != "no TCP address" {
-		t.Fatalf("object pull stats = %+v", view.ObjectPullStats)
-	}
-}
-
 func diagnosticSyncPeerState(now time.Time) syncPeerState {
 	return syncPeerState{
 		LastSyncUnix:          now.Unix(),
@@ -135,57 +104,5 @@ func diagnosticSyncPeerState(now time.Time) syncPeerState {
 		ObservedLastSeenUnix:  now.Unix(),
 		ObservedLastSyncUnix:  now.Unix(),
 		ObservedUntilUnix:     now.Add(time.Hour).Unix(),
-	}
-}
-
-func diagnosticPeerObservability(now time.Time) observability.PeerDiagnostics {
-	return observability.PeerDiagnostics{
-		ObservedSource:        string(gossip.MessagePing),
-		LastUpdateSource:      "node-c.catofes.",
-		ActivePullState:       string(gossip.SyncSessionObjectPulling),
-		ActivePullLastEvent:   "catalog_page",
-		ActivePullUpdatedUnix: now.Unix(),
-		HintAccepted:          2,
-		HintSuppressed:        1,
-		LastHintUnix:          now.Unix(),
-		LastHintReason:        "announce_hint",
-		LastHintSuppression:   "session_active",
-		ReadOnlyResponder:     3,
-		LastResponderUnix:     now.Unix(),
-		LastResponderKind:     "chunk_fallback",
-		LastResponderZone:     "node-b.catofes.",
-		DatagramStats:         diagnosticDatagramStats(now),
-		ObjectPullStats:       diagnosticObjectPullStats(now),
-	}
-}
-
-func diagnosticDatagramStats(now time.Time) *observability.PeerDatagramStats {
-	return &observability.PeerDatagramStats{
-		TooLargeDropped:       2,
-		DigestOnlyAnnounces:   1,
-		LastTooLargeUnix:      now.Unix(),
-		LastTooLargeDirection: "send",
-		LastTooLargeObject:    "record",
-		LastTooLargeZone:      "node-b.catofes.",
-		LastTooLargeKey:       "bigdata",
-		LastTooLargeBytes:     1800,
-		LastTooLargeLimit:     gossip.DefaultDatagramBudget,
-	}
-}
-
-func diagnosticObjectPullStats(now time.Time) *observability.PeerObjectPullStats {
-	return &observability.PeerObjectPullStats{
-		Attempts:               3,
-		Successes:              2,
-		Failures:               1,
-		LargeObjectUnreachable: 1,
-		LastUnix:               now.Unix(),
-		LastError:              "no TCP address",
-		LastObject:             "record",
-		LastZone:               "node-b.catofes.",
-		LastKey:                "bigdata",
-		LastBytes:              4096,
-		LastSourcePeer:         "node-b.catofes.",
-		LastUnreachable:        true,
 	}
 }
