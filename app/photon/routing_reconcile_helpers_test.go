@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/health"
@@ -592,7 +593,7 @@ func readFileString(path string) (string, error) {
 	return string(data), nil
 }
 
-func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*stateFile, *Runtime) {
+func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*corestate.VerifiedState, *Runtime) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -720,5 +721,5 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
 		Clock:  func() time.Time { return time.Unix(1000, 0) },
 	}
-	return state, rt
+	return verifiedStateForTest(state), rt
 }

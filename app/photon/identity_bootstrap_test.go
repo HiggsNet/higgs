@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -129,7 +130,7 @@ func TestValidateAutoJoinBootstrapConfigReportsSpecificMissingFields(t *testing.
 	}
 }
 
-func TestLoadStateRejectsConfiguredIdentityMismatch(t *testing.T) {
+func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
 	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -137,18 +138,16 @@ func TestLoadStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
 	config.Identity.KeyPath = otherKeyPath
-	if _, err := rt.LoadState(); err == nil || !strings.Contains(err.Error(), "public key does not match DB ZonePrivateKey") {
-		t.Fatalf("LoadState mismatch error = %v", err)
+	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "public key does not match persisted identity private key") {
+		t.Fatalf("openLinuxDaemonState mismatch error = %v", err)
 	}
 }
 
-func TestLoadStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
+func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
 	dir := t.TempDir()
 	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -156,11 +155,59 @@ func TestLoadStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
 	config.ManagedZone = "node-a.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
+		t.Fatalf("openLinuxDaemonState managed_zone mismatch error = %v", err)
 	}
-	if _, err := rt.LoadState(); err == nil || !strings.Contains(err.Error(), "does not match DB ManagedZone") {
-		t.Fatalf("LoadState managed_zone mismatch error = %v", err)
+}
+
+func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
+	dir := t.TempDir()
+	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
+	config := defaultAppConfig()
+	config.StatePath = filepath.Join(dir, "photon.db")
+	config.ManagedZone = "node-b.catofes."
+	config.Identity.KeyPath = keyPath
+	rt := &Runtime{Config: config, StatePath: config.StatePath}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+
+	store, startup, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState: %v", err)
+	}
+	wantPath, err := canonicalIdentityKeyPath(keyPath)
+	if err != nil {
+		startup.Common.Close()
+		_ = store.Close()
+		t.Fatalf("canonicalIdentityKeyPath: %v", err)
+	}
+	if startup.Runtime.IdentityKeyPath != wantPath {
+		startup.Common.Close()
+		_ = store.Close()
+		t.Fatalf("identity key path = %q, want %q", startup.Runtime.IdentityKeyPath, wantPath)
+	}
+	startup.Common.Close()
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
+	}
+
+	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
+	}
+	if reopened.Runtime.IdentityKeyPath != wantPath {
+		reopened.Common.Close()
+		_ = reopenedStore.Close()
+		t.Fatalf("reopened identity key path = %q, want %q", reopened.Runtime.IdentityKeyPath, wantPath)
+	}
+	reopened.Common.Close()
+	if err := reopenedStore.Close(); err != nil {
+		t.Fatalf("Close reopened BoltStore: %v", err)
+	}
+
+	config.Identity.KeyPath = copyTestPrivateKey(t, keyPath, filepath.Join(dir, "moved.key.json"))
+	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted identity key path") {
+		t.Fatalf("openLinuxDaemonState moved key error = %v", err)
 	}
 }
 
@@ -184,9 +231,6 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	appConfig.Identity.KeyPath = keyPath
 	state.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
 	rt := &Runtime{Config: appConfig, StatePath: statePath}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	config := syncConfigFromAppConfig(appConfig, verifiedStateForTest(state))
 	service := newTestDaemonService(rt, state, config, time.Second)
 

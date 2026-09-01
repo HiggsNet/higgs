@@ -86,31 +86,46 @@ func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState,
 		_ = store.Close()
 		return nil, linuxStartupState{}, err
 	}
-	if found {
-		return store, startup, nil
-	}
-	// Only an uninitialized database may enter the pending identity bootstrap
-	// path. Existing legacy databases were already migrated by the first call
-	// above. Pending auto-join cannot yet be represented by VerifiedState because
-	// its managed authority has not been synchronized, so this narrow writer is
-	// the sole temporary legacy-schema exception.
-	if err := store.Close(); err != nil {
-		return nil, linuxStartupState{}, err
-	}
-	if err := writeConfiguredPendingBootstrap(rt.StatePath, rt.Config); err != nil {
-		return nil, linuxStartupState{}, err
-	}
-	store, err = corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
-	if err != nil {
-		return nil, linuxStartupState{}, err
-	}
-	startup, found, err = loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
-	if err != nil || !found {
-		_ = store.Close()
+	if !found {
+		// Only an uninitialized database may enter the pending identity bootstrap
+		// path. Existing legacy databases were already migrated by the first call
+		// above. Pending auto-join cannot yet be represented by VerifiedState because
+		// its managed authority has not been synchronized, so this narrow writer is
+		// the sole temporary legacy-schema exception.
+		if err := store.Close(); err != nil {
+			return nil, linuxStartupState{}, err
+		}
+		if err := writeConfiguredPendingBootstrap(rt.StatePath, rt.Config); err != nil {
+			return nil, linuxStartupState{}, err
+		}
+		store, err = corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 		if err != nil {
 			return nil, linuxStartupState{}, err
 		}
-		return nil, linuxStartupState{}, errors.New("daemon state is not initialized")
+		startup, found, err = loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
+		if err != nil || !found {
+			_ = store.Close()
+			if err != nil {
+				return nil, linuxStartupState{}, err
+			}
+			return nil, linuxStartupState{}, errors.New("daemon state is not initialized")
+		}
+	}
+	keyPath, err := validateConfiguredIdentityState(startup.Common.ReadView().State, startup.Runtime, rt.Config)
+	if err != nil {
+		startup.Common.Close()
+		_ = store.Close()
+		return nil, linuxStartupState{}, err
+	}
+	if keyPath != "" && startup.Runtime.IdentityKeyPath == "" {
+		nextRuntime := cloneLinuxRuntimeState(startup.Runtime)
+		nextRuntime.IdentityKeyPath = keyPath
+		if err := commitLinuxRuntime(store, startup.Common.VerifiedRevision(), nextRuntime); err != nil {
+			startup.Common.Close()
+			_ = store.Close()
+			return nil, linuxStartupState{}, err
+		}
+		startup.Runtime = nextRuntime
 	}
 	return store, startup, nil
 }

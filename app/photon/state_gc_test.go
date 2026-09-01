@@ -84,15 +84,15 @@ func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
 }
 
 func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
-	state, syncConfig := buildTestNetworkState(t)
-	state.BirdInstances = map[string]*BirdInstanceState{
+	verified, checkpoint, runtime, syncConfig := buildTestDaemonOwners(t)
+	runtime.BirdInstances = map[string]*BirdInstanceState{
 		"default": {NetNSName: "default"},
 		"photon":  {NetNSName: "photon"},
 	}
 	appConfig := defaultAppConfig()
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
 	rt := &Runtime{Config: appConfig}
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 
 	preview, err := service.handleStateGCEvent(false)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	if len(preview.OrphanBirdInstances) != 1 || preview.OrphanBirdInstances[0] != "default" {
 		t.Fatalf("preview = %#v, want default orphan", preview)
 	}
-	if _, ok := state.BirdInstances["default"]; !ok {
+	if _, ok := runtime.BirdInstances["default"]; !ok {
 		t.Fatal("preview mutated state")
 	}
 

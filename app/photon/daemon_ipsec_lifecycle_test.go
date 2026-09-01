@@ -536,7 +536,7 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	now := time.Unix(5101, 0)
-	addRevocationTombstoneForTest(t, state, "node-b.catofes.", "catofes.")
+	addRevocationTombstoneForTest(t, state.Network, "node-b.catofes.", "catofes.")
 	spec := ipsec.TransportLinkSpec{
 		LocalZone:     state.ManagedZone,
 		PeerZone:      "node-b.catofes.",

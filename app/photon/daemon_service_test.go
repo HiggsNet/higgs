@@ -181,9 +181,9 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 }
 
 func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4200, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
 	statePath := filepath.Join(dataDir, "photon.db")
@@ -203,7 +203,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 		StatePath: statePath,
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
@@ -263,7 +263,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 }
 
 func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	dataDir := filepath.Join(dir, "data")
@@ -280,7 +280,7 @@ func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
 		StatePath: filepath.Join(dataDir, "photon.db"),
 		Clock:     func() time.Time { return time.Unix(4300, 0) },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {

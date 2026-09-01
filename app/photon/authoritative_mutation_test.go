@@ -339,8 +339,10 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 }
 
 func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: time.Now}, state, config, time.Second)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
+	)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -76,9 +77,11 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		Name: "socks5-main", Destination: "fd42::20", Scope: endpointACLScopeIP,
 		Selectors: []string{"*.catofes.", "node-a.catofes."},
 	}
-	state := &stateFile{
+	verified := &corestate.VerifiedState{
 		ManagedZone: "node-a.catofes.",
 		Network:     zone.NewNetworkState(),
+	}
+	runtime := &linuxRuntimeState{
 		EndpointACLs: map[string]endpointACL{
 			acl.Name: acl,
 		},
@@ -88,7 +91,9 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true,
 		Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
 	}}
-	service := newTestDaemonService(&Runtime{Config: appConfig}, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: appConfig}, verified, nil, runtime, &syncConfigFile{}, time.Second,
+	)
 	driver := &captureFirewallOwnerDriver{}
 	driver.Backend = firewall.BackendNFT
 	installTestFirewallDriver(service, driver)
@@ -116,8 +121,11 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 }
 
 func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
-	state := &stateFile{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState(), EndpointACLs: map[string]endpointACL{}}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, &syncConfigFile{}, time.Second)
+	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}
+	runtime := &linuxRuntimeState{EndpointACLs: map[string]endpointACL{}}
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, nil, runtime, &syncConfigFile{}, time.Second,
+	)
 	beforeRevision := service.StateStore.Meta().Revision
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }

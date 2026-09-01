@@ -87,6 +87,44 @@ func configuredIdentityKey(config *appConfig) (*privateKeyFile, string, error) {
 	return key, keyPath, nil
 }
 
+// validateConfiguredIdentityState checks that immutable identity settings still
+// describe the identity restored from the current common/Linux partitions.
+// It validates only fully initialized state; pending auto-join remains a
+// separate legacy bootstrap boundary until it has its own persisted owner.
+func validateConfiguredIdentityState(verified *corestate.VerifiedState, runtime *linuxRuntimeState, config *appConfig) (string, error) {
+	if config == nil || (config.ManagedZone == "" && config.Identity.KeyPath == "") {
+		return "", nil
+	}
+	if verified == nil || verified.ManagedZone == "" {
+		return "", errors.New("configured identity requires initialized managed zone; use a new data_dir/state_path to create this node")
+	}
+	if config.ManagedZone != "" && verified.ManagedZone != config.ManagedZone {
+		return "", fmt.Errorf("managed_zone %s does not match persisted managed zone %s; identity is immutable, use a new data_dir/state_path to create a different node", config.ManagedZone, verified.ManagedZone)
+	}
+	if config.Identity.KeyPath == "" {
+		return "", nil
+	}
+	key, keyPath, err := configuredIdentityKey(config)
+	if err != nil {
+		return "", err
+	}
+	if runtime != nil && runtime.IdentityKeyPath != "" && runtime.IdentityKeyPath != keyPath {
+		return "", fmt.Errorf("identity.key_path %s does not match persisted identity key path %s; identity is immutable, use a new data_dir/state_path to create a different node", keyPath, runtime.IdentityKeyPath)
+	}
+	if len(verified.IdentityPrivateKey) != ed25519.PrivateKeySize {
+		return "", errors.New("persisted identity private key is missing or invalid")
+	}
+	if !equalPublicKey(verified.IdentityPrivateKey.Public().(ed25519.PublicKey), key.PublicKey) {
+		return "", errors.New("identity.key_path public key does not match persisted identity private key; identity is immutable, use a new data_dir/state_path to create a different node")
+	}
+	if verified.Network != nil {
+		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil && zs.Authority != nil && !authorityHasKey(zs.Authority, key.PublicKey) {
+			return "", fmt.Errorf("identity.key_path public key does not match managed zone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", verified.ManagedZone)
+		}
+	}
+	return keyPath, nil
+}
+
 func canonicalIdentityKeyPath(path string) (string, error) {
 	if path == "" {
 		return "", nil

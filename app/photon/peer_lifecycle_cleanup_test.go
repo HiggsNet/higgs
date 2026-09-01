@@ -70,9 +70,9 @@ func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
 }
 
 func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T) {
-	state, syncConfig := buildTestNetworkState(t)
+	verified, checkpoint, runtime, syncConfig := buildTestDaemonOwners(t)
 	now := time.Unix(500_000, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	config := defaultAppConfig()
 	config.PeerLifecycle = inspect.PeerLifecycleConfig{
 		StaleAfter:       time.Second,
@@ -89,7 +89,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
 	rt := &Runtime{Config: config, Clock: func() time.Time { return now }}
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {

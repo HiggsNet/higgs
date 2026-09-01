@@ -1136,6 +1136,17 @@ package dependency: app -> host -> gossip -> state -> zone
             测试 helper，不再覆盖生产启动。routing 临时 signer 不再深拷贝整个 `stateFile`；双节点 IPsec dry-run 改用 detached
             `VerifiedState + Network clone + Linux runtime` owner fixture。普通 reconcile/smoke 已退出 `cloneStateFile`，剩余引用限于 clone/schema
             guard、legacy meta/migration 和 peer diagnostics 兼容覆盖。
+          - identity consistency 已迁到正式 `openLinuxDaemonState` 恢复边界：配置 managed zone、identity key path/private key 与 persisted
+            VerifiedState/Linux runtime 不一致时，在 daemon/direct service 创建前 fail closed；首次匹配的 canonical key path 作为 Linux runtime
+            字段提交并经关闭重开验证。旧 mismatch 测试改用当前 partitions，reload 测试删除无人读取的 `SaveState`。peer diagnostics 兼容测试
+            直接断言 legacy JSON codec 保留 checkpoint control 字段且省略 diagnostics，不再执行旧数据库往返。当前 `LoadState/SaveState`
+            调用只剩 pending auto-join/admission 的明确 legacy bootstrap 覆盖及 aggregate test helper 转发。
+          - auto-announce fixture 现在直接返回 `VerifiedState`，7 个测试直接构造 typed-owner service；object-pull worker 的 server/client
+            app 集成测试也在 service 边界显式传入 verified/checkpoint/Linux runtime，不再依赖 `newTestDaemonService(stateFile)` 的隐式反向拆分。
+          - daemon reload、endpoint ACL、state GC、peer lifecycle、revocation purge、sync timer、recovery no-op 与 reserved record 拒绝测试
+            继续改为直接操作各自 owner：ACL/BIRD/link/cleanup 放入 Linux runtime，peer backoff/failure 放入 gossip checkpoint，Network/identity
+            留在 VerifiedState。由 aggregate helper 隐式拆分 service 的调用从 90 降到 80；剩余大头集中在 routing/IPsec/firewall fixture，
+            应在这些 fixture 本身返回 typed owners 时成组迁移，不新增只负责 `stateFile -> owners` 换壳的 helper。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

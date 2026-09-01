@@ -11,7 +11,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
 
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -28,7 +28,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
 
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -58,7 +58,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", nil, map[string]bool{"10.0.0.0/24": true})
 
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -85,7 +85,7 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, map[string]bool{"10.0.0.0/24": true})
 
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -112,7 +112,7 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"192.168.0.0/24"}, nil)
 
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -133,7 +133,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 
 func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	prefix := netip.MustParsePrefix("10.0.0.0/24")
 	ars := &routing.AuthorizedRouteSet{
 		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
@@ -171,7 +171,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"}, map[string]bool{"10.0.3.0/24": true})
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
 	rt.Config.IPAM.Announce = []string{"non-shared", "tag:edge.c"}
-	service := newTestDaemonService(rt, state, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{}, time.Second)
 	ars := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{
 		{Prefix: netip.MustParsePrefix("10.0.1.0/24"), AssignedTo: "node-a.catofes."},
 		{Prefix: netip.MustParsePrefix("10.0.2.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "edge.c"},

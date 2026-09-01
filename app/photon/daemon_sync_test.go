@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 // This remains an app-level test because it validates the complete Linux
@@ -115,12 +116,15 @@ func TestObjectPullTCPAddrUsesGossipPort(t *testing.T) {
 // The timer fallback remains app-specific while daemon scheduling still owns
 // the periodic bootstrap trigger around HostRuntime's bounded event queue.
 func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(1000, 0)
 	peerID := "bootstrap.catofes."
 	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
-	state.SyncPeers = map[string]syncPeerState{peerID: {BackoffUntilUnix: now.Add(-time.Minute).Unix()}}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Minute)
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{peerID: {BackoffUntilUnix: now.Add(-time.Minute).Unix()}}
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		verified, checkpoint, runtime, config, time.Minute,
+	)
 	for {
 		if err := service.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: "queued.catofes."}); err != nil {
 			break

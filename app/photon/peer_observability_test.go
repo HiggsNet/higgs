@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -29,22 +28,10 @@ func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
 	}
 }
 
-func TestSaveStateCannotPersistPeerDiagnostics(t *testing.T) {
+func TestLegacyStateMetaCannotPersistPeerDiagnostics(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	normalizeSyncPeers(state)
 	state.SyncPeers["peer-a.catofes."] = syncPeerState{LastSyncUnix: 42}
-	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-	loaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	peer := loaded.SyncPeers["peer-a.catofes."]
-	if peer.LastSyncUnix != 42 {
-		t.Fatalf("control state was not persisted: %#v", peer)
-	}
 	data, err := json.Marshal(stateMetaFromState(state))
 	if err != nil {
 		t.Fatalf("Marshal state metadata: %v", err)
@@ -58,6 +45,9 @@ func TestSaveStateCannotPersistPeerDiagnostics(t *testing.T) {
 	}
 	peers := decoded["sync_peers"].(map[string]any)
 	encodedPeer := peers["peer-a.catofes."].(map[string]any)
+	if got := encodedPeer["last_sync_unix"]; got != float64(42) {
+		t.Fatalf("legacy control state = %#v, want last_sync_unix 42", encodedPeer)
+	}
 	if _, ok := encodedPeer["datagram_stats"]; ok {
 		t.Fatalf("datagram diagnostics were persisted: %#v", encodedPeer)
 	}

@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func addRevocationTombstoneForTest(t *testing.T, state *stateFile, child, parent zone.ZonePath) {
+func addRevocationTombstoneForTest(t *testing.T, network *zone.NetworkState, child, parent zone.ZonePath) {
 	t.Helper()
-	parentState := state.Network.Zones[parent]
+	parentState := network.Zones[parent]
 	if parentState == nil {
 		t.Fatalf("parent zone not found: %s", parent)
 	}
@@ -25,19 +26,21 @@ func addRevocationTombstoneForTest(t *testing.T, state *stateFile, child, parent
 }
 
 func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(123, 0)
-	state.Network.Zones["leaf.node-b.catofes."] = zone.NewZoneState("leaf.node-b.catofes.", nil)
-	addRevocationTombstoneForTest(t, state, "node-b.catofes.", "catofes.")
-	state.LinkInstances = map[string]linkInstanceState{
+	verified.Network.Zones["leaf.node-b.catofes."] = zone.NewZoneState("leaf.node-b.catofes.", nil)
+	addRevocationTombstoneForTest(t, verified.Network, "node-b.catofes.", "catofes.")
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-b":     {ID: "link-b", PeerZone: "node-b.catofes."},
 		"link-leaf":  {ID: "link-leaf", PeerZone: "leaf.node-b.catofes."},
 		"link-other": {ID: "link-other", PeerZone: "node-c.catofes."},
 	}
-	state.SyncPeers = map[string]syncPeerState{
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {FailureCount: 1}, "leaf.node-b.catofes.": {FailureCount: 1}, "node-c.catofes.": {FailureCount: 1},
 	}
-	service := newTestDaemonService(&Runtime{Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
+	)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", false)
 	if err != nil {

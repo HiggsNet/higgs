@@ -24,15 +24,18 @@ func TestRecoveryChainZonesRootToLeaf(t *testing.T) {
 }
 
 func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
 	now := time.Unix(1000, 0)
-	snapshot, err := corestate.Snapshot(state.Network, "node-b.catofes.")
+	snapshot, err := corestate.Snapshot(verified.Network, "node-b.catofes.")
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
 
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, defaultDaemonInterval)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		verified, checkpoint, runtime, config, defaultDaemonInterval,
+	)
 	if _, _, err := service.handleRecoveryImportZoneEvent(snapshot); err != nil {
 		t.Fatalf("handleRecoveryImportZoneEvent(first): %v", err)
 	}
