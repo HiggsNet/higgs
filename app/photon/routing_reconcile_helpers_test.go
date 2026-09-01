@@ -11,7 +11,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -503,12 +502,8 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(4000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(4000, 0) },
 	}
 
 	return state, config, signers, rt
@@ -586,9 +581,7 @@ func addRouteAnnouncement(t *testing.T, state *stateFile, path zone.ZonePath, pr
 }
 
 func signingState(state *stateFile, signer ed25519.PrivateKey) *stateFile {
-	out := cloneStateFile(state)
-	out.ZonePrivateKey = signer
-	return out
+	return &stateFile{Network: state.Network, ZonePrivateKey: signer}
 }
 
 func readFileString(path string) (string, error) {
@@ -724,12 +717,8 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		RootPrivateKey: rootPriv,
 	}
 	rt := &Runtime{
-		Config:    &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(1000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
+		Clock:  func() time.Time { return time.Unix(1000, 0) },
 	}
 	return state, rt
 }

@@ -60,9 +60,7 @@ func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
 	appConfig.TrustedRootPublicKey = trustedRoot
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
 	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
 
 	plan, err := garbageCollectStateDirect(rt, true)
 	if err != nil {

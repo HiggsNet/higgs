@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -41,12 +40,8 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	manager := health.NewManager(

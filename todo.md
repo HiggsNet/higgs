@@ -1010,6 +1010,9 @@ package dependency: app -> host -> gossip -> state -> zone
           正式 common `ValidateStateRoot`。当前已缩成直接写 root-only Network 与 identity meta 的最小 writer，不再先构造或返回
           `stateFile`；待 state/admission 定义独立的 pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。
           通用 `saveStateAt/stateMetaFromState` 已移到测试。
+          - 当前闭环仍未完成：`openLinuxDaemonState` 在空库写入 pending legacy root 后立即进入正式 migration，随后会因 managed zone
+            authority 尚不存在而被 `ValidateStateRoot` 拒绝。保留 admission/identity bootstrap 的 legacy fixture 覆盖；在定义独立 pending
+            owner 或显式 pending startup 分支前，不能把该路径标记为已切到 common Store，也不能用放宽 verified 校验规避。
         - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
           production `cloneLinuxRuntimeState` 已改为直接复制 typed runtime，不再绕行
           `runtime -> stateFile -> runtime`；`composeLinuxStateView/applyLinuxRuntimeReadView` 已降为纯测试 fixture。
@@ -1119,7 +1122,20 @@ package dependency: app -> host -> gossip -> state -> zone
             “必须在线 daemon”用例删除完全不会被读取的 routing 数据库准备。两节点 daemon event-loop 组合测试以及 firewall/revocation 的纯内存
             reconcile/cleanup 测试也删除无持久化 callback、无磁盘消费者的 `SaveState` 和假 `StatePath`，由测试 service 的 typed owners 直接承载状态。
             需要验证真实离线重开路径的 5 处 fixture 统一使用 `seedPartitionedStateDB`：只表达“空库原子写入 typed common/Linux partitions
-            并关闭”，不包装需要继续持有 handle、锁冲突或已存在数据库提交等其他 BoltStore 生命周期。
+            并关闭”，不包装需要继续持有 handle、锁冲突或已存在数据库提交等其他 BoltStore 生命周期。随着 direct IPsec cleanup/state GC
+            也改用当前 partitions seed，该 helper 已从膨胀的 `daemon_test_helpers_test.go` 移到窄职责 `bolt_state_fixture_test.go`。
+          - routing config/BIRD/cutover/dry-run/auto-announce 测试完成同类审计：删除 19 次无人读取的 legacy `SaveState/LoadState` 及配套
+            `StatePath`。其中原先唯一的 `LoadState` 结果被立即丢弃；IPAM routing smoke 的两次往返也只会拿回刚写入的 aggregate fixture，
+            均不构成持久化或 CLI 行为覆盖。当前这些测试直接验证 typed daemon owners、Linux runtime reconcile 结果与生成的 BIRD config。
+          - BIRD root smoke 与 daemon IPsec smoke 再删除 14 次无消费者 `SaveState`：这些用例虽启动真实 netns/BIRD/StrongSwan 或双节点
+            socket，但 service 仍明确由内存 typed owners 构造；restart 用例也是把 `readCommonAndRuntime` 的 owners 交给新 service，并不重开
+            数据库。真实进程、PID/control socket、SA/XFRM 与 gossip 收敛断言保留，磁盘恢复另由专门 lifecycle/migration 测试覆盖。
+          - direct IPsec cleanup 与 state GC 不再用 legacy `SaveState` 顺带测试一次迁移：两者从当前 partitions 启动，分别验证 cleanup timestamp
+            和 Linux-only GC 持久化且不推进 verified revision。旧 schema 到 common/Linux partitions 的迁移继续由专门 migration 测试独立覆盖。
+          - 删除 `TestRuntimeCachesConfigForStateIO`：它只比较两个均已移到 `_test.go` 的 aggregate loader 对配置缓存的差异，已经是在测试
+            测试 helper，不再覆盖生产启动。routing 临时 signer 不再深拷贝整个 `stateFile`；双节点 IPsec dry-run 改用 detached
+            `VerifiedState + Network clone + Linux runtime` owner fixture。普通 reconcile/smoke 已退出 `cloneStateFile`，剩余引用限于 clone/schema
+            guard、legacy meta/migration 和 peer diagnostics 兼容覆盖。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

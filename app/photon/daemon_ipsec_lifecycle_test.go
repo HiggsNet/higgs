@@ -598,9 +598,7 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
 	cleaned, orphans, err := recoveryCleanupIPsecDirect(context.Background(), rt, false)
 	if err != nil {
 		t.Fatalf("recoveryCleanupIPsecDirect: %v", err)

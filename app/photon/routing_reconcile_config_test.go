@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestReconcileRoutingGeneratesConfig(t *testing.T) {
@@ -26,12 +26,8 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
@@ -65,12 +61,6 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	if !pm.started {
 		t.Fatalf("BIRD process manager Start was not called")
 	}
-
-	configBytes, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	_ = configBytes
 
 	cfg, err := readFileString(inst.ConfigPath)
 	if err != nil {
@@ -133,12 +123,8 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: true}
@@ -181,12 +167,8 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
@@ -234,12 +216,8 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	pm := &blockingBirdProcessManager{
@@ -320,12 +298,8 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	client := &fakeBirdClient{}
@@ -363,12 +337,8 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 	}}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	service := newTestDaemonService(rt, state, config, time.Second)

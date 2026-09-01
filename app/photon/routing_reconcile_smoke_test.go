@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/pkg/routing"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestRoutingDryRunSmoke(t *testing.T) {
@@ -36,12 +36,8 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
@@ -130,15 +126,6 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 	}), now); err != nil {
 		t.Fatalf("node-a route announce: %v", err)
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState prepared routing state: %v", err)
-	}
-
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState after CLI writes: %v", err)
-	}
-
 	// Verify the authorized route set before reconcile.
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
 	if err != nil {
@@ -209,15 +196,6 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}), now); err != nil {
 		t.Fatalf("catofes assignment write: %v", err)
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState prepared auto-announce state: %v", err)
-	}
-
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState after prepared writes: %v", err)
-	}
-
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonService(rt, state, config, time.Second)
@@ -326,12 +304,8 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now.Add(time.Second) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now.Add(time.Second) },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}

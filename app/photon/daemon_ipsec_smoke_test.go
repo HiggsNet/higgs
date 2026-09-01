@@ -33,12 +33,8 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 	t.Cleanup(func() {
 		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", ns)
@@ -194,20 +190,12 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB.Reconcile.RotateRetentionSeconds = 0
 	rtA := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     func() time.Time { return now },
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		Clock:  func() time.Time { return now },
 	}
 	rtB := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		Clock:  func() time.Time { return now },
 	}
 	driverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	driverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
@@ -413,20 +401,12 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	setTestIPsecOverlayIntent(t, stateB.Network.Zones["node-b.catofes."], "node-b.catofes.", groupB, now)
 
 	rtA := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     func() time.Time { return now },
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		Clock:  func() time.Time { return now },
 	}
 	rtB := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		Clock:  func() time.Time { return now },
 	}
 	driverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	driverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
@@ -577,20 +557,12 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     func() time.Time { return now },
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
+		Clock:  func() time.Time { return now },
 	}
 	rtB := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
+		Clock:  func() time.Time { return now },
 	}
 	rotationDriverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	rotationDriverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
@@ -838,26 +810,17 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	rtA := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA),
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     time.Now,
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA),
+		Clock:  time.Now,
 	}
 	rtA.Config.IPsec.Role = ipsec.RoleOut
 	rtA.Config.ListenAddr = gossipA
 	rtB := &Runtime{
-		Config:    testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     time.Now,
+		Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
+		Clock:  time.Now,
 	}
 	rtB.Config.IPsec.Role = ipsec.RoleIn
 	rtB.Config.ListenAddr = gossipB
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
-	}
-
 	serviceA := newTestDaemonService(rtA, stateA, configA, 200*time.Millisecond)
 	serviceA.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
 	installTestIPsecDrivers(serviceA, newDaemonTestStrongSwanDriver(t, viciA, clientA), daemonTestXFRMDriver(groupA.NetNS, nsA))
@@ -906,35 +869,31 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	appConfigA := defaultAppConfig()
 	appConfigA.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rtA := &Runtime{
-		Config:    appConfigA,
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
+		Config: appConfigA,
+		Clock:  func() time.Time { return now },
 	}
 	driverA := &observedIPsecDriver{}
-	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
+	verifiedA := verifiedStateForTest(stateA)
+	serviceA := newTestDaemonServiceFromOwners(
+		rtA, verifiedA, testGossipCheckpoint(stateA.SyncPeers), linuxRuntimeStateFromLegacy(stateA), configA, time.Second,
+	)
 	installTestIPsecDrivers(serviceA, driverA, driverA)
 
-	stateB := cloneStateFile(stateA)
-	stateB.ManagedZone = "node-b.catofes."
-	stateB.LinkInstances = nil
-	stateB.IPsecReconcile = nil
+	verifiedB := *verifiedA
+	verifiedB.ManagedZone = "node-b.catofes."
+	verifiedB.Network = zone.CloneNetworkState(verifiedA.Network)
 	configB := *configA
 	configB.PeerID = "node-b.catofes."
 	appConfigB := defaultAppConfig()
 	appConfigB.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rtB := &Runtime{
-		Config:    appConfigB,
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
+		Config: appConfigB,
+		Clock:  func() time.Time { return now },
 	}
 	driverB := &observedIPsecDriver{}
-	serviceB := newTestDaemonService(rtB, stateB, &configB, time.Second)
+	serviceB := newTestDaemonServiceFromOwners(
+		rtB, &verifiedB, testGossipCheckpoint(stateA.SyncPeers), &linuxRuntimeState{}, &configB, time.Second,
+	)
 	installTestIPsecDrivers(serviceB, driverB, driverB)
 
 	serviceA.notifyStateChanged()
@@ -1014,24 +973,15 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
 	rtA := &Runtime{
-		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "a"), "198.51.100.10:4500", group),
-		StatePath: filepath.Join(t.TempDir(), "node-a.db"),
-		Clock:     time.Now,
+		Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "a"), "198.51.100.10:4500", group),
+		Clock:  time.Now,
 	}
 	rtA.Config.IPsec.Role = ipsec.RoleIn
 	rtB := &Runtime{
-		Config:    testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
-		StatePath: filepath.Join(t.TempDir(), "node-b.db"),
-		Clock:     time.Now,
+		Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
+		Clock:  time.Now,
 	}
 	rtB.Config.IPsec.Role = ipsec.RoleIn
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(node-a): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(node-b): %v", err)
-	}
-
 	driverA := &observedIPsecDriver{}
 	driverB := &observedIPsecDriver{}
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)

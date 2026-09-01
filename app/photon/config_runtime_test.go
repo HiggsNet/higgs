@@ -6,42 +6,6 @@ import (
 	"testing"
 )
 
-func TestRuntimeCachesConfigForStateIO(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	dataDir := filepath.Join(dir, "data")
-	statePath := filepath.Join(dataDir, "photon.db")
-
-	state, _ := buildTestNetworkState(t)
-	rootKey, err := rootPublicKey(state.Network)
-	if err != nil {
-		t.Fatalf("rootPublicKey: %v", err)
-	}
-	writeRuntimeConfig(t, configPath, dataDir, rootKey, nil)
-	t.Setenv("PHOTON_CONFIG", configPath)
-
-	rt, err := NewRuntime()
-	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
-	}
-	if err := saveStateAt(statePath, state); err != nil {
-		t.Fatalf("saveStateAt: %v", err)
-	}
-
-	wrongRoot := make(ed25519.PublicKey, ed25519.PublicKeySize)
-	for i := range wrongRoot {
-		wrongRoot[i] = byte(255 - i)
-	}
-	writeRuntimeConfig(t, configPath, dataDir, wrongRoot, nil)
-
-	if _, err := rt.LoadState(); err != nil {
-		t.Fatalf("cached runtime LoadState should keep original trusted root: %v", err)
-	}
-	if _, err := loadState(); err == nil {
-		t.Fatalf("loadState should observe updated config and reject mismatched root")
-	}
-}
-
 func TestRuntimeStatePathOverride(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

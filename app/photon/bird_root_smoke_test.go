@@ -69,12 +69,8 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(123, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
 	// Use real process manager and birdc client.
@@ -179,12 +175,8 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(123, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
 	service1 := newTestDaemonService(rt, state, syncConfig, time.Second)
@@ -573,12 +565,8 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(123, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
 	// Use real process manager.
