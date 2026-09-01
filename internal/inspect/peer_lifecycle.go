@@ -39,11 +39,6 @@ type PeerLifecycleDebugConfig struct {
 	KeepSAWhileStale bool
 }
 
-type PeerLifecycleDebugInput struct {
-	Config PeerLifecycleConfig
-	Peers  []PeerStatusInfo
-}
-
 type PeerLifecycleInput struct {
 	PeerID                 string
 	PeerZone               zone.ZonePath
@@ -95,8 +90,8 @@ func NormalizePeerLifecycleConfig(cfg PeerLifecycleConfig) PeerLifecycleConfig {
 	return out
 }
 
-func BuildPeerLifecycleDebug(input PeerLifecycleDebugInput) PeerLifecycleDebugView {
-	cfg := NormalizePeerLifecycleConfig(input.Config)
+func BuildPeerLifecycleDebug(config PeerLifecycleConfig, peers []PeerStatusInfo) PeerLifecycleDebugView {
+	cfg := NormalizePeerLifecycleConfig(config)
 	return PeerLifecycleDebugView{
 		Config: PeerLifecycleDebugConfig{
 			StaleAfter:       cfg.StaleAfter,
@@ -104,7 +99,7 @@ func BuildPeerLifecycleDebug(input PeerLifecycleDebugInput) PeerLifecycleDebugVi
 			CleanupAfter:     cfg.CleanupAfter,
 			KeepSAWhileStale: cfg.KeepSAWhileStale,
 		},
-		Peers: append([]PeerStatusInfo(nil), input.Peers...),
+		Peers: append([]PeerStatusInfo(nil), peers...),
 	}
 }
 

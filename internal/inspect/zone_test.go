@@ -55,13 +55,7 @@ func TestBuildZoneDetailSortsRecordsAndIncludesHistory(t *testing.T) {
 	zs.RecordHistory["identity"] = []*zone.Record{old}
 	ns := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}
 
-	got := BuildZoneDetail(ZoneDetailInput{
-		Path:           "node-a.catofes.",
-		State:          zs,
-		Network:        ns,
-		Now:            time.Unix(100, 0),
-		IncludeHistory: true,
-	})
+	got := BuildZoneDetail(ns, "node-a.catofes.", time.Unix(100, 0), true)
 
 	if got.Path != "node-a.catofes." || got.Parent != "catofes." {
 		t.Fatalf("path/parent = %q/%q", got.Path, got.Parent)
@@ -95,31 +89,23 @@ func TestBuildZoneDetailOmitsHistoryWhenDisabled(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", nil)
 	zs.RecordHistory["identity"] = []*zone.Record{{Key: "identity", Version: 1}}
 
-	got := BuildZoneDetail(ZoneDetailInput{
-		Path:           "node-a.catofes.",
-		State:          zs,
-		IncludeHistory: false,
-	})
+	got := BuildZoneDetail(&zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}, "node-a.catofes.", time.Time{}, false)
 
 	if len(got.RecordHistory) != 0 || got.HistoryCount != 1 {
 		t.Fatalf("history = %+v count=%d", got.RecordHistory, got.HistoryCount)
 	}
 }
 
-func TestBuildZoneDebugBuildsDetailAndDigest(t *testing.T) {
+func TestBuildZoneInspectionBuildsDetailAndDigest(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", nil)
 	zs.Records["identity"] = &zone.Record{Zone: "node-a.catofes.", Key: "identity", Type: "profile", Value: []byte("node-a"), Version: 1}
 	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{"node-a.catofes.": zs}}
 	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 
-	got, ok := BuildZoneDebug(ZoneDebugInput{
-		Network: network,
-		Path:    "node-a.catofes.",
-		Now:     time.Unix(100, 0),
-	})
+	got, ok := BuildZoneInspection(network, "node-a.catofes.", time.Unix(100, 0), false)
 
 	if !ok {
-		t.Fatalf("BuildZoneDebug returned ok=false")
+		t.Fatalf("BuildZoneInspection returned ok=false")
 	}
 	if got.Detail.Path != "node-a.catofes." || got.Detail.RecordCount != 1 || got.RootHash == "" {
 		t.Fatalf("zone debug view = %+v", got)
@@ -129,14 +115,10 @@ func TestBuildZoneDebugBuildsDetailAndDigest(t *testing.T) {
 	}
 }
 
-func TestBuildZoneDebugMissingZone(t *testing.T) {
-	_, ok := BuildZoneDebug(ZoneDebugInput{
-		Network: &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}},
-		Path:    "missing.catofes.",
-		Now:     time.Unix(100, 0),
-	})
+func TestBuildZoneInspectionMissingZone(t *testing.T) {
+	_, ok := BuildZoneInspection(&zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}}, "missing.catofes.", time.Unix(100, 0), false)
 	if ok {
-		t.Fatalf("BuildZoneDebug missing zone returned ok=true")
+		t.Fatalf("BuildZoneInspection missing zone returned ok=true")
 	}
 }
 

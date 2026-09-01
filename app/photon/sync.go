@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -101,122 +99,17 @@ func syncStatus(verbose bool) error {
 		return errors.New("common state is not initialized")
 	}
 	config := syncConfigFromAppConfig(rt.Config, common.State)
-	return inspecttext.WriteSyncStatus(os.Stdout, buildSyncStatusView(common.State.Network, syncPeerReadView(common.Gossip), config, rt.Now(), verbose))
+	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(config, rt.Now(), verbose)))
 }
 
-func buildSyncStatusView(network *zone.NetworkState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusView {
-	digests := corestate.ZoneDigests(network)
-	view := inspect.SyncStatusView{
-		PeerID:       config.PeerID,
-		ListenAddr:   config.ListenAddr,
-		KnownPeers:   len(config.Bootstrap),
-		KnownZones:   len(digests),
-		LocalRootHex: hex.EncodeToString(globalRootHash(digests)),
-		Limits: inspect.SyncLimitsView{
-			MaxDatagramBytes: config.MaxMessageBytes,
-			MaxSyncZones:     config.MaxSyncZones,
-			MaxSyncRecords:   config.MaxSyncRecords,
-			WireVersion:      gossip.WireVersion,
-			WireCodec:        "msgpack",
-		},
-		Verbose: verbose,
+func syncStatusOptions(config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusOptions {
+	peers := gossipPeersOptions(config, nil, now)
+	options := inspect.SyncStatusOptions{
+		PeerID: config.PeerID, ListenAddr: config.ListenAddr,
+		MaxDatagramBytes: config.MaxMessageBytes, MaxSyncZones: config.MaxSyncZones,
+		MaxSyncRecords: config.MaxSyncRecords, Bootstrap: peers.Bootstrap, Now: now, Verbose: verbose,
 	}
-	discovered := gossip.ExtractPeerEndpoints(network)
-	if verbose {
-		known := configuredKnownPeers(config)
-		view.AllowlistSource = "bootstrap+discovery"
-		view.BootstrapPeers = len(config.Bootstrap)
-		for peerID := range discovered {
-			if !isBootstrapPeer(config, peerID) {
-				view.DiscoveredPeers++
-			}
-		}
-		for _, peer := range config.Bootstrap {
-			resolved := "-"
-			if addr := known[peer.ID]; addr != nil {
-				resolved = addr.String()
-			}
-			peerState := peers[peer.ID]
-			view.Bootstrap = append(view.Bootstrap, syncVerbosePeerView(peer.ID, peer.Addr, resolved, "", peerState, now))
-		}
-		discoveredIDs := make([]string, 0, len(discovered))
-		for peerID, entries := range discovered {
-			if isBootstrapPeer(config, peerID) {
-				continue
-			}
-			discoveredIDs = append(discoveredIDs, peerID)
-			_ = entries
-		}
-		sort.Slice(discoveredIDs, func(i, j int) bool { return inspect.ZonePathLess(discoveredIDs[i], discoveredIDs[j]) })
-		for _, peerID := range discoveredIDs {
-			entries := discovered[peerID]
-			peerState := peers[peerID]
-			addr := "-"
-			if len(entries) > 0 {
-				addr = fmt.Sprintf("%s:%d", entries[0].Address, entries[0].Port)
-			}
-			view.Discovered = append(view.Discovered, syncVerbosePeerView(peerID, "", "", addr, peerState, now))
-		}
-	}
-	for _, peer := range config.Bootstrap {
-		peerState := peers[peer.ID]
-		peerDebug := inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
-			PeerID:         peer.ID,
-			ConfiguredAddr: peer.Addr,
-			State:          peerState,
-			Now:            now,
-		})
-		lastError := peerState.LastError
-		if lastError == "" {
-			lastError = "-"
-		}
-		view.Peers = append(view.Peers, inspect.SyncPeerSummaryView{
-			PeerID:     peer.ID,
-			Addr:       peer.Addr,
-			Status:     peerDebug.Status,
-			LastSync:   peerDebug.LastSuccess,
-			KnownZones: len(digests),
-			LastError:  lastError,
-			NextRetry:  peerDebug.NextRetry,
-		})
-	}
-	for _, digest := range digests {
-		zs := network.Zones[digest.Zone]
-		view.Zones = append(view.Zones, inspect.SyncZoneSummaryView{
-			Zone:        string(digest.Zone),
-			RootHex:     hex.EncodeToString(digest.RootHash),
-			Records:     len(zs.Records),
-			History:     inspect.ZoneHistoryCount(zs),
-			Delegations: len(zs.Delegations),
-			Revocations: len(zs.Revocations),
-		})
-	}
-	sort.SliceStable(view.Bootstrap, func(i, j int) bool {
-		return inspect.ZonePathLess(view.Bootstrap[i].PeerID, view.Bootstrap[j].PeerID)
-	})
-	sort.SliceStable(view.Discovered, func(i, j int) bool {
-		return inspect.ZonePathLess(view.Discovered[i].PeerID, view.Discovered[j].PeerID)
-	})
-	sort.SliceStable(view.Peers, func(i, j int) bool {
-		return inspect.ZonePathLess(view.Peers[i].PeerID, view.Peers[j].PeerID)
-	})
-	sort.SliceStable(view.Zones, func(i, j int) bool {
-		return inspect.ZonePathLess(view.Zones[i].Zone, view.Zones[j].Zone)
-	})
-	return view
-}
-
-func syncVerbosePeerView(peerID, configuredAddr, resolvedAddr, addr string, peerState syncPeerState, now time.Time) inspect.SyncVerbosePeerView {
-	return inspect.SyncVerbosePeerView{
-		PeerDebugView: inspect.BuildPeerDebugFromRuntime(inspect.PeerRuntimeDebugInput{
-			PeerID:         peerID,
-			ConfiguredAddr: configuredAddr,
-			ResolvedAddr:   resolvedAddr,
-			State:          peerState,
-			Now:            now,
-		}),
-		Addr: addr,
-	}
+	return options
 }
 
 func syncServe(ctx context.Context) error {
@@ -410,15 +303,6 @@ func (sr *SyncRuntime) transportConfig(deps *SyncTransportDeps) gossip.Config {
 		Clock:           sr.now,
 		Log:             deps.Log,
 	}
-}
-
-func isBootstrapPeer(config *syncConfigFile, peerID string) bool {
-	for _, peer := range config.Bootstrap {
-		if peer.ID == peerID {
-			return true
-		}
-	}
-	return false
 }
 
 func listenPortFromAddr(addr string) uint16 {

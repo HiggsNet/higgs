@@ -128,7 +128,7 @@ func derivePeerStatus(state *stateFile, peerID string, peerZone zone.ZonePath, n
 	if state == nil {
 		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{PeerID: peerID, PeerZone: peerZone, StateAvailable: false, Now: now, Config: cfg})
 	}
-	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, peerID, peerZone, now, cfg, false))
+	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(state.Network, testGossipCheckpointFromLegacyPeers(state.SyncPeers), state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, peerID, peerZone, now, cfg, false))
 }
 
 func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.PeerLifecycleConfig) []zone.ZonePath {
@@ -136,7 +136,7 @@ func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.Peer
 		return nil
 	}
 	hasOverlay := state.IPsecReconcile != nil && state.IPsecReconcile.DesiredLinks > 0
-	peers := derivePeerStatuses(state.ManagedZone, state.Network, state.SyncPeers, state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, inspect.NormalizePeerLifecycleConfig(cfg), hasOverlay)
+	peers := derivePeerStatuses(state.ManagedZone, state.Network, testGossipCheckpointFromLegacyPeers(state.SyncPeers), state.PeerCleanups, state.LinkInstances, state.IPsecReconcile, now, inspect.NormalizePeerLifecycleConfig(cfg), hasOverlay)
 	seen := make(map[zone.ZonePath]bool)
 	var out []zone.ZonePath
 	for _, peer := range peers {
@@ -147,6 +147,11 @@ func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.Peer
 	}
 	slices.Sort(out)
 	return out
+}
+
+func testGossipCheckpointFromLegacyPeers(peers map[string]syncPeerState) *corestate.GossipCheckpoint {
+	checkpoint, _ := projectLegacyGossipCheckpoint(peers)
+	return checkpoint
 }
 
 func UpdateRevocationLayerStatus(impact *inspect.RevocationImpact, layer string, status, reason, errStr string, now time.Time) {

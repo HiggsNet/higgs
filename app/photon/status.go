@@ -30,7 +30,6 @@ func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRunt
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
 	verified := common.State
-	peers := syncPeerReadView(common.Gossip)
 	input := inspect.StatusInput{
 		DaemonOnline:   daemonOnline,
 		GossipSource:   "checkpoint",
@@ -49,7 +48,7 @@ func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRunt
 		cfg = rt.Config.PeerLifecycle
 		hasOverlay = len(rt.Config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, peers, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, rt.Now(), cfg, hasOverlay)
+	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, rt.Now(), cfg, hasOverlay)
 	return inspect.BuildStatus(input)
 }
 

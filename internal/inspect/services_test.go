@@ -2,7 +2,9 @@ package inspect
 
 import (
 	"testing"
+	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
@@ -22,7 +24,7 @@ func TestBuildServiceInspectionIncludesLocalAndRemoteServices(t *testing.T) {
 		Value: []byte(`{"type":"socks5","endpoints":[{"region":"cn","address":"198.51.100.20","port":1080}],"active":false}`),
 	}
 
-	view := BuildServiceInspection(ServiceInspectionInput{Network: network, ManagedZone: local})
+	view := BuildServiceInspection(&corestate.VerifiedState{Network: network, ManagedZone: local}, time.Time{})
 	if len(view.Services) != 2 {
 		t.Fatalf("services = %d, want 2: %+v", len(view.Services), view.Services)
 	}
@@ -43,7 +45,7 @@ func TestBuildServiceInspectionReportsInvalidServiceRecord(t *testing.T) {
 		Value: []byte(`{"type":"socks5"}`),
 	}
 
-	view := BuildServiceInspection(ServiceInspectionInput{Network: network, ManagedZone: owner})
+	view := BuildServiceInspection(&corestate.VerifiedState{Network: network, ManagedZone: owner}, time.Time{})
 	if len(view.Services) != 1 || view.Services[0].Status != "invalid" || view.Services[0].Error == "" {
 		t.Fatalf("invalid service view = %+v", view.Services)
 	}

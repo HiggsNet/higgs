@@ -7,7 +7,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/pkg/core/zone"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 // debugPeers implements `photon debug peers`: it prints the derived lifecycle
@@ -56,11 +56,11 @@ func showPeers(filter string, verbose bool) error {
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := syncConfigFromAppConfig(rt.Config, common.State)
-	return inspecttext.WriteGossipPeers(os.Stdout, buildGossipPeerViews(common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), config, rt.Now()), filter, verbose)
+	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *Runtime, managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, runtime *linuxRuntimeState) inspect.PeerLifecycleDebugView {
-	if network == nil || runtime == nil {
+func buildPeerLifecycleDebugView(rt *Runtime, common corestate.View, runtime *linuxRuntimeState) inspect.PeerLifecycleDebugView {
+	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
 	now := rt.Now()
@@ -70,11 +70,8 @@ func buildPeerLifecycleDebugView(rt *Runtime, managedZone zone.ZonePath, network
 	}
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
-	statuses := derivePeerStatuses(managedZone, network, peers, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, now, cfg, hasOverlay)
-	return inspect.BuildPeerLifecycleDebug(inspect.PeerLifecycleDebugInput{
-		Config: cfg,
-		Peers:  statuses,
-	})
+	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, now, cfg, hasOverlay)
+	return inspect.BuildPeerLifecycleDebug(cfg, statuses)
 }
 
 func (d *DaemonService) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
@@ -85,5 +82,5 @@ func (d *DaemonService) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
 	if view.State == nil {
 		return nil
 	}
-	return buildGossipPeerViews(view.State.ManagedZone, view.State.Network, syncPeerReadView(view.Gossip), d.Sync.Config, d.Sync.now())
+	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.Sync.Config, d.peerObservabilitySnapshots(), d.Sync.now()))
 }

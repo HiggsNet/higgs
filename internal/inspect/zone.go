@@ -14,14 +14,6 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-type ZoneDetailInput struct {
-	Path           zone.ZonePath
-	State          *zone.ZoneState
-	Network        *zone.NetworkState
-	Now            time.Time
-	IncludeHistory bool
-}
-
 // ZonesView is the canonical summary projection used by list-oriented
 // consumers. ZoneDetail remains the richer single-zone representation.
 type ZonesView struct {
@@ -81,12 +73,6 @@ func zonesGlobalRoot(digests []corestate.ZoneDigest) []byte {
 	return photoncrypto.Hash(parts...)
 }
 
-type ZoneDebugInput struct {
-	Network *zone.NetworkState
-	Path    zone.ZonePath
-	Now     time.Time
-}
-
 type ZoneDetail struct {
 	Path            string           `json:"path"`
 	Parent          string           `json:"parent"`
@@ -105,19 +91,13 @@ type ZoneDetail struct {
 	MerkleRoot      string           `json:"merkle_root"`
 }
 
-type ZoneDebugView struct {
-	Detail           ZoneDetail
-	RootHash         string
-	VerifyResult     string
-	ActiveRevocation *RevocationView
-}
-
 // ZoneInspectionView is the canonical result for a zone inspection query.
-// Detail serves JSON consumers while Debug contains the derived validation
-// context used by the human presenter; both come from the same owner snapshot.
+// JSON and human presenters consume the same detail and validation fields.
 type ZoneInspectionView struct {
-	Detail ZoneDetail    `json:"detail"`
-	Debug  ZoneDebugView `json:"debug"`
+	Detail           ZoneDetail      `json:"detail"`
+	RootHash         string          `json:"root_hash"`
+	VerifyResult     string          `json:"verify_result"`
+	ActiveRevocation *RevocationView `json:"active_revocation,omitempty"`
 }
 
 type RecordView struct {
@@ -204,27 +184,24 @@ type RevocationView struct {
 	Signature             string `json:"signature"`
 }
 
-func BuildZoneDetail(input ZoneDetailInput) ZoneDetail {
-	zs := input.State
-	path := input.Path
-	if path == "" && zs != nil {
-		path = zs.Path
-	}
+func BuildZoneDetail(network *zone.NetworkState, path zone.ZonePath, now time.Time, includeHistory bool) ZoneDetail {
 	view := ZoneDetail{
 		Path:   string(path),
 		Parent: string(path.Parent()),
 	}
+	if network == nil {
+		return view
+	}
+	zs := network.Zones[path]
 	if zs == nil {
 		return view
 	}
-	if input.Network != nil {
-		view.Revoked = input.Network.IsZoneRevoked(path, input.Now)
-	}
+	view.Revoked = network.IsZoneRevoked(path, now)
 	view.Authority = BuildAuthority(zs.Authority)
 	view.AuthorityHash = AuthorityHashHex(zs.Authority)
 	view.ParentProof = BuildDelegations(zs.ParentProof)
 	view.Records = buildRecords(zs.Records, zs.RecordHistory)
-	if input.IncludeHistory {
+	if includeHistory {
 		view.RecordHistory = buildRecordHistory(zs.RecordHistory)
 	}
 	view.Delegations = buildDelegationMap(zs.Delegations)
@@ -244,32 +221,26 @@ func ZoneHistoryCount(zs *zone.ZoneState) int {
 	return countRecordHistory(zs.RecordHistory)
 }
 
-func BuildZoneDebug(input ZoneDebugInput) (ZoneDebugView, bool) {
-	if input.Network == nil {
-		return ZoneDebugView{}, false
+func BuildZoneInspection(network *zone.NetworkState, path zone.ZonePath, now time.Time, includeHistory bool) (ZoneInspectionView, bool) {
+	if network == nil {
+		return ZoneInspectionView{}, false
 	}
-	zs := input.Network.Zones[input.Path]
+	zs := network.Zones[path]
 	if zs == nil {
-		return ZoneDebugView{}, false
+		return ZoneInspectionView{}, false
 	}
 	verifyResult := "ok"
-	if err := photoncrypto.VerifyChain(input.Network, input.Path, input.Now); err != nil {
+	if err := photoncrypto.VerifyChain(network, path, now); err != nil {
 		verifyResult = err.Error()
 	}
 	var activeRevocation *RevocationView
-	if revocation := input.Network.ActiveRevocation(input.Path, input.Now); revocation != nil {
+	if revocation := network.ActiveRevocation(path, now); revocation != nil {
 		view := BuildRevocation(revocation)
 		activeRevocation = &view
 	}
-	return ZoneDebugView{
-		Detail: BuildZoneDetail(ZoneDetailInput{
-			Path:           input.Path,
-			State:          zs,
-			Network:        input.Network,
-			Now:            input.Now,
-			IncludeHistory: false,
-		}),
-		RootHash:         zoneDigestRootHex(input.Network, input.Path),
+	return ZoneInspectionView{
+		Detail:           BuildZoneDetail(network, path, now, includeHistory),
+		RootHash:         zoneDigestRootHex(network, path),
 		VerifyResult:     verifyResult,
 		ActiveRevocation: activeRevocation,
 	}, true

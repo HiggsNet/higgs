@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -26,7 +25,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 		if jsonOutput {
 			return inspecttext.WriteJSON(os.Stdout, view.Detail)
 		}
-		return inspecttext.WriteZoneDebug(os.Stdout, view.Debug)
+		return inspecttext.WriteZoneDebug(os.Stdout, view)
 	}
 	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
@@ -36,43 +35,15 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 		return fmt.Errorf("common state is not initialized")
 	}
 	network := common.State.Network
-	view, err := buildZoneInspectionView(network, path, rt.Now(), includeHistory)
-	if err != nil {
-		return err
+	configureValidation(network)
+	view, ok := inspect.BuildZoneInspection(network, path, rt.Now(), includeHistory)
+	if !ok {
+		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	if jsonOutput {
 		return inspecttext.WriteJSON(os.Stdout, view.Detail)
 	}
-	return inspecttext.WriteZoneDebug(os.Stdout, view.Debug)
-}
-
-func buildZoneInspectionView(network *zone.NetworkState, path zone.ZonePath, now time.Time, includeHistory bool) (inspect.ZoneInspectionView, error) {
-	debug, err := buildDebugZoneView(network, path, now)
-	if err != nil {
-		return inspect.ZoneInspectionView{}, err
-	}
-	return inspect.ZoneInspectionView{
-		Debug: debug,
-		Detail: inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path: path, State: network.Zones[path], Network: network, Now: now, IncludeHistory: includeHistory,
-		}),
-	}, nil
-}
-
-func buildDebugZoneView(network *zone.NetworkState, path zone.ZonePath, now time.Time) (inspect.ZoneDebugView, error) {
-	if network == nil {
-		return inspect.ZoneDebugView{}, fmt.Errorf("network is nil")
-	}
-	configureValidation(network)
-	view, ok := inspect.BuildZoneDebug(inspect.ZoneDebugInput{
-		Network: network,
-		Path:    path,
-		Now:     now,
-	})
-	if !ok {
-		return inspect.ZoneDebugView{}, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	return view, nil
+	return inspecttext.WriteZoneDebug(os.Stdout, view)
 }
 
 func debugRecords(path zone.ZonePath, prefix string, values bool) error {

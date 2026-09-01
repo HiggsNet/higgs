@@ -5,15 +5,10 @@ import (
 	"strings"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
-
-type ServiceInspectionInput struct {
-	Network     *zone.NetworkState
-	ManagedZone zone.ZonePath
-	Now         time.Time
-}
 
 type ServiceInspection struct {
 	ManagedZone zone.ZonePath
@@ -40,34 +35,37 @@ type ServiceEndpointView struct {
 	Port    uint16
 }
 
-func BuildServiceInspection(input ServiceInspectionInput) ServiceInspection {
-	view := ServiceInspection{ManagedZone: input.ManagedZone}
-	if input.Network == nil {
+func BuildServiceInspection(state *corestate.VerifiedState, now time.Time) ServiceInspection {
+	if state == nil {
+		return ServiceInspection{}
+	}
+	view := ServiceInspection{ManagedZone: state.ManagedZone}
+	if state.Network == nil {
 		return view
 	}
 
-	paths := make([]zone.ZonePath, 0, len(input.Network.Zones))
-	for path := range input.Network.Zones {
+	paths := make([]zone.ZonePath, 0, len(state.Network.Zones))
+	for path := range state.Network.Zones {
 		paths = append(paths, path)
 	}
 	SortZonePaths(paths)
 	for _, path := range paths {
-		if input.Network.IsZoneRevoked(path, input.Now) {
+		if state.Network.IsZoneRevoked(path, now) {
 			continue
 		}
-		state := input.Network.Zones[path]
-		if state == nil {
+		zoneState := state.Network.Zones[path]
+		if zoneState == nil {
 			continue
 		}
-		keys := make([]string, 0, len(state.Records))
-		for key := range state.Records {
+		keys := make([]string, 0, len(zoneState.Records))
+		for key := range zoneState.Records {
 			if strings.HasPrefix(key, photonservice.RecordKeyPrefix) {
 				keys = append(keys, key)
 			}
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			record := state.Records[key]
+			record := zoneState.Records[key]
 			if record == nil || record.Type != photonservice.RecordTypeSOCKS5 {
 				continue
 			}
@@ -75,7 +73,7 @@ func BuildServiceInspection(input ServiceInspectionInput) ServiceInspection {
 				ID:          strings.TrimPrefix(key, photonservice.RecordKeyPrefix),
 				Type:        photonservice.TypeSOCKS5,
 				Owner:       path,
-				Local:       path == input.ManagedZone,
+				Local:       path == state.ManagedZone,
 				Version:     record.Version,
 				UpdatedUnix: record.Timestamp,
 				RecordKey:   record.Key,

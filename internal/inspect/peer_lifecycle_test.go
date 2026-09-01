@@ -7,7 +7,7 @@ import (
 
 func TestBuildPeerLifecycleDebugNormalizesConfigAndCopiesPeers(t *testing.T) {
 	peers := []PeerStatusInfo{{PeerID: "node-a", State: PeerStateActive}}
-	view := BuildPeerLifecycleDebug(PeerLifecycleDebugInput{Peers: peers})
+	view := BuildPeerLifecycleDebug(PeerLifecycleConfig{}, peers)
 	peers[0].PeerID = "changed"
 
 	def := DefaultPeerLifecycleConfig()

@@ -300,7 +300,7 @@ join-smoke: build
 
 zone-sort-smoke:
 	$(GO_ENV) $(GO) test ./internal/inspect -run 'Test(SortZoneStringsGroupsDotAndHyphenSuffixes|BuildRecordsDebugGroupsZonesByDotAndHyphenSuffix)'
-	$(GO_ENV) $(GO) test ./app/photon -run '^TestSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
+	$(GO_ENV) $(GO) test ./internal/inspect -run '^TestBuildSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
 	@echo "Zone sort smoke passed"
 
 record-view-smoke:

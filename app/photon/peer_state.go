@@ -5,10 +5,11 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func peerLifecycleInput(network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,
 		PeerZone:         peerZone,
@@ -17,7 +18,10 @@ func peerLifecycleInput(network *zone.NetworkState, peers map[string]syncPeerSta
 		Now:              now,
 		Config:           cfg,
 	}
-	ps := peers[peerID]
+	var ps corestate.PeerCheckpoint
+	if checkpoint != nil {
+		ps = checkpoint.Peers[peerID]
+	}
 	input.LastSyncUnix = ps.LastSyncUnix
 	input.ObservedLastSeenUnix = ps.ObservedLastSeenUnix
 	if cleanup, ok := cleanups[peerID]; ok {
@@ -64,27 +68,29 @@ func peerLifecycleInput(network *zone.NetworkState, peers map[string]syncPeerSta
 	return input
 }
 
-// derivePeerStatuses computes status for all known peers (from SyncPeers,
-// LinkInstances and desired links). The result is sorted by peer id for stable
-// output.
-func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
+// derivePeerStatuses computes status for all known peers from the common
+// checkpoint plus Linux link/cleanup observations. The result is sorted by
+// peer id for stable output.
+func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
 	seen := make(map[string]bool)
 	var out []inspect.PeerStatusInfo
 
-	// Gather all candidate peers: SyncPeers, LinkInstances peer zones, desired
-	// link peer zones, and active state zones with ipsec records.
+	// Gather all candidate peers: checkpoint peers, LinkInstances peer zones,
+	// desired link peer zones, and active state zones with IPsec records.
 	addPeer := func(peerID string, peerZone zone.ZonePath) {
 		if peerID == "" || seen[peerID] {
 			return
 		}
 		seen[peerID] = true
-		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInput(network, peers, cleanups, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
+		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInput(network, checkpoint, cleanups, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
 		out = append(out, info)
 	}
 
-	for peerID := range peers {
-		// Derive zone from peer id: peer id is typically the zone FQDN.
-		addPeer(peerID, zone.ZonePath(peerID))
+	if checkpoint != nil {
+		for peerID := range checkpoint.Peers {
+			// Derive zone from peer id: peer id is typically the zone FQDN.
+			addPeer(peerID, zone.ZonePath(peerID))
+		}
 	}
 	for peerID := range cleanups {
 		addPeer(peerID, zone.ZonePath(peerID))
@@ -101,7 +107,7 @@ func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, p
 		}
 	}
 	// Scan active state for zones that have ipsec profile records but aren't
-	// in SyncPeers yet (eligible peers discovered via gossip).
+	// in the checkpoint yet (eligible peers discovered via gossip).
 	if network != nil {
 		for z, zs := range network.Zones {
 			if z == managedZone || z.IsRoot() {

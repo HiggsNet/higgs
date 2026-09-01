@@ -692,7 +692,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		services := buildServiceInspection(view.State, d.Sync.now())
+		services := inspect.BuildServiceInspection(view.State, d.Sync.now())
 		writeCanonicalView(conn, services)
 	case "route_view":
 		view := d.StateStore.common.ReadView()
@@ -752,7 +752,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := buildSyncStatusView(common.State.Network, syncPeerReadView(common.Gossip), d.Sync.Config, d.Sync.now(), request.Verbose)
+		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.Sync.Config, d.Sync.now(), request.Verbose))
 		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common, _ := d.StateStore.readCommonAndRuntime()
@@ -760,9 +760,9 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view, err := buildDebugPeerView(common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), d.Sync.Config, request.Zone, d.Sync.now())
-		if err != nil {
-			writeControlResponse(conn, controlError(err))
+		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.Sync.Config, d.peerObservabilitySnapshots(), d.Sync.now()), request.Zone)
+		if !ok {
+			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return
 		}
 		writeCanonicalView(conn, view)
@@ -773,9 +773,10 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		path := zone.ZonePath(request.Zone)
-		inspection, err := buildZoneInspectionView(common.State.Network, path, d.Sync.now(), request.History > 0)
-		if err != nil {
-			writeControlResponse(conn, controlError(err))
+		configureValidation(common.State.Network)
+		inspection, ok := inspect.BuildZoneInspection(common.State.Network, path, d.Sync.now(), request.History > 0)
+		if !ok {
+			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)))
 			return
 		}
 		writeCanonicalView(conn, inspection)
@@ -1050,7 +1051,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Sync.App, common.State.ManagedZone, common.State.Network, syncPeerReadView(common.Gossip), runtime))
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Sync.App, common, runtime))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":

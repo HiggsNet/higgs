@@ -242,14 +242,6 @@ func timeNow() time.Time {
 	return time.Now()
 }
 
-func globalRootHash(digests []corestate.ZoneDigest) []byte {
-	parts := make([][]byte, 0, len(digests)*2)
-	for _, digest := range digests {
-		parts = append(parts, []byte(digest.Zone), digest.RootHash)
-	}
-	return photoncrypto.Hash(parts...)
-}
-
 func minInt(a, b int) int {
 	if a < b {
 		return a

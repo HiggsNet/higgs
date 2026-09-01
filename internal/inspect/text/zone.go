@@ -135,7 +135,7 @@ func WriteZone(w io.Writer, detail inspect.ZoneDetail, filter string, verbose bo
 	return out.Err()
 }
 
-func WriteZoneDebug(w io.Writer, view inspect.ZoneDebugView) error {
+func WriteZoneDebug(w io.Writer, view inspect.ZoneInspectionView) error {
 	if w == nil {
 		return nil
 	}

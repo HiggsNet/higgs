@@ -95,7 +95,7 @@ func TestWriteZonesUsesSummaryAndVerboseTables(t *testing.T) {
 }
 
 func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
-	view := inspect.ZoneDebugView{
+	view := inspect.ZoneInspectionView{
 		Detail: inspect.ZoneDetail{
 			Path:            "node-a.catofes.",
 			RecordCount:     1,
@@ -135,7 +135,7 @@ func TestWriteZoneDebugPreservesLegacyLayout(t *testing.T) {
 }
 
 func TestWriteZoneDebugRevocationFields(t *testing.T) {
-	view := inspect.ZoneDebugView{
+	view := inspect.ZoneInspectionView{
 		Detail: inspect.ZoneDetail{Path: "node-a.catofes."},
 		ActiveRevocation: &inspect.RevocationView{
 			Parent:                "catofes.",

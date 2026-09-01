@@ -1047,6 +1047,21 @@ package dependency: app -> host -> gossip -> state -> zone
             均由 common runtime 覆盖。app 只保留 platform lifecycle suppression overlay 和 commit-before-publish 组合验收，且两者已改用
             `VerifiedState + GossipCheckpoint + linuxRuntimeState` fixture，不再保存或回读 aggregate state。object-pull 的 observed/signed
             endpoint 地址选择测试也已随 discovery input 下沉到 HostRuntime，删除 app 对 legacy discovery fixture 的最后两处依赖。
+          - sync status 已压平为 `corestate.View + SyncStatusOptions -> internal/inspect.BuildSyncStatus -> SyncStatusView`；在线 control、
+            离线 checkpoint CLI 与后续 HTTP presenter 共用一次投影，不再经过 `syncPeerReadView -> syncPeerState -> SyncStatusInput`。
+            app 只提供 bootstrap/listen/limits 查询选项。zone 排序与“checkpoint 不生成 ephemeral diagnostics”测试随实现迁入 inspect。
+          - 同类 peer 查询链也已收口：`internal/inspect` 直接合并 `VerifiedState + GossipCheckpoint + PeerObservabilityStore snapshot +
+            bootstrap options`，生成 debug peer 或 Observer `PeersView`。删除 app 的 peer-set、endpoint-input、gossip-peer/debug-view
+            连续包装；在线 control 现在也会带上真实 ephemeral diagnostics。service inspection 改为直接接收 `VerifiedState`，删除
+            `VerifiedState -> app wrapper -> ServiceInspectionInput -> view` 的单次壳。
+          - zone inspection 已收为 `BuildZoneInspection(network, path, now, history)` 一次投影；`ZoneInspectionView` 只保留一份 Detail，
+            JSON 与文本 presenter 共用，删除 `ZoneDebugInput/ZoneDebugView/ZoneDetailInput` 和 app 的两层 builder。status/peer lifecycle
+            也已直接读取 `GossipCheckpoint`，不再先转成 legacy `syncPeerState`；`PeerLifecycleDebugInput` 这种只复制已构建 statuses 的壳
+            同步删除。`DaemonStatusInput` 仍几乎逐字段复制到 View，但负责合并 IPsec/routing last-run，可在 platform runtime read model
+            收口时一并删除。
+          - `buildFirewallDebugView`、`buildBabelDebugView`、`buildStoredLinkInspection` 暂不按“重复构建”删除：它们目前负责把 Linux 私有
+            config/controller runtime 转成 platform-neutral inspect DTO，属于真实平台边界；应随 Linux runtime typed observation 下沉，
+            不能为了减少函数数量让 `internal/inspect` 反向依赖 app 私有类型。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

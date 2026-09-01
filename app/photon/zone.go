@@ -46,9 +46,7 @@ func buildZoneDetails(network *zone.NetworkState, now time.Time) []inspect.ZoneD
 		if zs == nil {
 			continue
 		}
-		details = append(details, inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path: path, State: zs, Network: network, Now: now, IncludeHistory: false,
-		}))
+		details = append(details, inspect.BuildZoneDetail(network, path, now, false))
 	}
 	return details
 }

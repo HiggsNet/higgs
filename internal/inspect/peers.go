@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -122,6 +123,10 @@ func BuildPeerView(id, configuredAddr string, endpoints []PeerEndpointView, stat
 		Endpoints:       endpoints,
 		PeerRuntimeView: BuildPeerRuntimeView(state, diagnostics),
 	}
+}
+
+func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndpointView, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics) PeerView {
+	return BuildPeerView(id, configuredAddr, endpoints, peerRuntimeStateFromCheckpoint(checkpoint), diagnostics)
 }
 
 func BuildPeerRuntimeView(state photonstate.PeerRuntimeState, diagnostics observability.PeerDiagnostics) PeerRuntimeView {
@@ -280,16 +285,6 @@ type PeerDebugInput struct {
 	Now         time.Time
 }
 
-type PeerRuntimeDebugInput struct {
-	PeerID         string
-	Source         string
-	ConfiguredAddr string
-	ResolvedAddr   string
-	State          photonstate.PeerRuntimeState
-	Diagnostics    observability.PeerDiagnostics
-	Now            time.Time
-}
-
 type PeerSyncFlowView struct {
 	ActivePullState     string
 	ActivePullLastEvent string
@@ -342,16 +337,46 @@ type PeerObjectPullStatsView struct {
 	LastError              string
 }
 
-func BuildPeerDebugFromRuntime(input PeerRuntimeDebugInput) PeerDebugView {
+func buildPeerDebugFromCheckpoint(peerID, source, configuredAddr, resolvedAddr string, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics, now time.Time) PeerDebugView {
 	return BuildPeerDebug(PeerDebugInput{
-		PeerID:           input.PeerID,
-		Source:           input.Source,
-		ConfiguredAddr:   input.ConfiguredAddr,
-		ResolvedAddr:     input.ResolvedAddr,
-		PeerRuntimeState: input.State,
-		Diagnostics:      input.Diagnostics,
-		Now:              input.Now,
+		PeerID:           peerID,
+		Source:           source,
+		ConfiguredAddr:   configuredAddr,
+		ResolvedAddr:     resolvedAddr,
+		PeerRuntimeState: peerRuntimeStateFromCheckpoint(checkpoint),
+		Diagnostics:      diagnostics,
+		Now:              now,
 	})
+}
+
+func peerRuntimeStateFromCheckpoint(checkpoint corestate.PeerCheckpoint) photonstate.PeerRuntimeState {
+	state := photonstate.PeerRuntimeState{
+		LastSyncUnix: checkpoint.LastSyncUnix, LastAttemptUnix: checkpoint.LastAttemptUnix,
+		BackoffUntilUnix: checkpoint.BackoffUntilUnix, LastRelayUnix: checkpoint.LastRelayUnix,
+		LastRelayCatalogRootHex: checkpoint.LastRelayCatalogRootHex, FailureCount: checkpoint.FailureCount,
+		DiscoveredAddr: checkpoint.DiscoveredEndpoint, DiscoveredAtUnix: checkpoint.DiscoveredAtUnix,
+		ObservedAddr: checkpoint.ObservedEndpoint, ObservedFirstSeenUnix: checkpoint.ObservedFirstSeenUnix,
+		ObservedLastSeenUnix: checkpoint.ObservedLastSeenUnix, ObservedLastSyncUnix: checkpoint.ObservedLastSyncUnix,
+		ObservedUntilUnix: checkpoint.ObservedUntilUnix, ObservedFailureCount: checkpoint.ObservedFailureCount,
+	}
+	if checkpoint.LastFailure != nil {
+		state.LastError = checkpoint.LastFailure.Error()
+	}
+	for _, grace := range checkpoint.ObservedGraceEndpoints {
+		state.ObservedGraceAddrs = append(state.ObservedGraceAddrs, photonstate.PeerObservedGraceAddrState{
+			Addr: grace.Endpoint, UntilUnix: grace.UntilUnix,
+		})
+	}
+	if len(checkpoint.RejectedObjects) > 0 {
+		state.RejectedDigests = make(map[string]photonstate.PeerRejectedDigest, len(checkpoint.RejectedObjects))
+		for path, rejected := range checkpoint.RejectedObjects {
+			state.RejectedDigests[string(path)] = photonstate.PeerRejectedDigest{
+				Zone: path, RootHashHex: hex.EncodeToString(rejected.RootHash), Reason: rejected.Reason,
+				RejectedAtUnix: rejected.UpdatedUnix, UntilUnix: rejected.UntilUnix,
+			}
+		}
+	}
+	return state
 }
 
 func BuildPeerDebug(input PeerDebugInput) PeerDebugView {

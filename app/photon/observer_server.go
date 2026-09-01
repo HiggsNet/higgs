@@ -196,9 +196,7 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 		if zs == nil {
 			return nil, observer.Errorf(http.StatusNotFound, "zone not found")
 		}
-		return inspect.BuildZoneDetail(inspect.ZoneDetailInput{
-			Path: zp, State: zs, Network: view.State.Network, Now: now, IncludeHistory: true,
-		}), nil
+		return inspect.BuildZoneDetail(view.State.Network, zp, now, true), nil
 	}
 	return inspect.BuildZonesView(view.State.Network, now), nil
 }
@@ -214,36 +212,16 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	}
 	now := d.Sync.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := syncPeerReadView(view.Gossip)
-	peerSet := inspectPeerSetInput(view.State.ManagedZone, view.State.Network, peers, d.Sync.Config, now)
-	for peerID := range observabilitySnapshots {
-		peerSet.RuntimeIDs = append(peerSet.RuntimeIDs, peerID)
-	}
-	ids := inspect.BuildPeerIDs(peerSet)
-	items := make(map[string]inspect.PeerView, len(ids))
-	for _, peerID := range ids {
-		peer := peers[peerID]
-		observed := observabilitySnapshots[peerID]
-		items[peerID] = inspect.BuildPeerView(
-			peerID,
-			bootstrapAddrForPeer(d.Sync.Config, peerID),
-			inspectPeerEndpoints(peerID, peer, observed, d.Sync.Config, view.State.Network, now),
-			peer,
-			observed,
-		)
-	}
+	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.Sync.Config, observabilitySnapshots, now))
 	if peerFilter != "" {
-		peer, ok := items[peerFilter]
-		if !ok {
-			return nil, observer.Errorf(http.StatusNotFound, "peer not found")
+		for _, peer := range peers.Peers {
+			if peer.PeerID == peerFilter {
+				return peer, nil
+			}
 		}
-		return peer, nil
+		return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 	}
-	response := make([]inspect.PeerView, 0, len(ids))
-	for _, peerID := range ids {
-		response = append(response, items[peerID])
-	}
-	return inspect.PeersView{Peers: response}, nil
+	return peers, nil
 }
 
 func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
