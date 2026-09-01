@@ -1,16 +1,13 @@
 package main
 
 import (
-	"context"
 	"slices"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photonservice "github.com/HiggsNet/photon/pkg/service"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -64,22 +61,6 @@ func revokeIPAMAssignmentWithRuntime(rt *Runtime, path zone.ZonePath, prefix str
 	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, "")
 }
 
-func pullObjectTCP(addr string, req *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	return (photonlinux.GossipObjectPullClient{}).Exchange(context.Background(), addr, req)
-}
-
-func objectPullLookup(getState func() *stateFile) func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-	return func(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-		state := getState()
-		var network *zone.NetworkState
-		if state != nil {
-			network = state.Network
-		}
-		response := gossip.BuildObjectPullResponse(network, req, time.Now())
-		return response
-	}
-}
-
 func derivePeerStatus(state *stateFile, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig) inspect.PeerStatusInfo {
 	if state == nil {
 		return inspect.BuildPeerLifecycleStatus(inspect.PeerLifecycleInput{PeerID: peerID, PeerZone: peerZone, StateAvailable: false, Now: now, Config: cfg})
@@ -108,20 +89,4 @@ func peerLifecycleCleanupZones(state *stateFile, now time.Time, cfg inspect.Peer
 func testGossipCheckpointFromLegacyPeers(peers map[string]syncPeerState) *corestate.GossipCheckpoint {
 	checkpoint, _ := projectLegacyGossipCheckpoint(peers)
 	return checkpoint
-}
-
-func UpdateRevocationLayerStatus(impact *inspect.RevocationImpact, layer string, status, reason, errStr string, now time.Time) {
-	if impact == nil || impact.Layers == nil {
-		return
-	}
-	entry := impact.Layers[layer]
-	if entry == nil {
-		entry = &inspect.RevocationLayerStatus{}
-		impact.Layers[layer] = entry
-	}
-	entry.Status, entry.Reason, entry.Error, entry.UnixTime = status, reason, errStr, now.Unix()
-}
-
-func publishSOCKS5ServiceWithRuntime(rt *Runtime, region, address string, port uint16) error {
-	return publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: region, Address: address, Port: port}})
 }

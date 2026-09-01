@@ -71,7 +71,7 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	if err := rt.SaveState(state); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishSOCKS5ServiceWithRuntime(rt, "cn-east", "fd42:1::20", 3128); err != nil {
+	if err := publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	state, _ = rt.LoadState()
@@ -93,7 +93,7 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 
 func TestPublishSOCKS5ServiceRejectsUnownedAddress(t *testing.T) {
 	rt, _ := buildRouteTestRuntime(t)
-	if err := publishSOCKS5ServiceWithRuntime(rt, "cn", "fd42:1::20", 3128); err == nil {
+	if err := publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 3128}}); err == nil {
 		t.Fatal("expected unowned address error")
 	}
 }

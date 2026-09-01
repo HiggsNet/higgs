@@ -1041,7 +1041,10 @@ package dependency: app -> host -> gossip -> state -> zone
             完全重复后已删除；endpoint publish 已按真实边界拆开：app `SyncRuntime` 只从配置选择/采集本机候选地址并记录 reflector
             错误，`pkg/core/host.PlanGossipEndpointIntent` 统一负责 identity admission、record grace/refresh/clear/no-op 和 typed protocol
             intent，公共语义测试已下沉，app 仅保留采集结果接线测试。sync debug/status 中重复验证 inspect DTO 字段映射的测试也已删除，
-            offline checkpoint 不冒充 ephemeral diagnostics、unknown peer 和 zone 排序的 app 边界测试保留。
+            offline checkpoint 不冒充 ephemeral diagnostics、unknown peer 和 zone 排序的 app 边界测试保留。object-pull 的 TCP server
+            ownership、Linux client exchange、executor 地址/错误/deadline 语义已有 HostRuntime/photonlinux 直接覆盖，app 重复测试和人工
+            `stateFile -> objectPullLookup` 已删除；app 只保留 daemon 组装 executor 经生产 `objectPullResponse` 完成拉取、不可达传播，
+            以及 UDP/TCP 共用端口的 composition 覆盖。
           - `daemon_discovery_test.go` 中仍经 `stateFile -> legacy checkpoint projection` 验证公共 planner 的四组测试已改为
             `pkg/core/host` typed input；observed path grace、无 checkpoint 变化时修复 address book、无 verified zone 的 bootstrap
             均由 common runtime 覆盖。app 只保留 platform lifecycle suppression overlay 和 commit-before-publish 组合验收，且两者已改用

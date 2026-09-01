@@ -182,36 +182,6 @@ func TestComputeRevocationImpactNilState(t *testing.T) {
 	}
 }
 
-// TestCleanupRevokedPeerCache verifies that runtime-relevant fields are cleared
-// for revoked peers while keeping the entry for diagnostics.
-// TestUpdateRevocationLayerStatus verifies layer status updates.
-func TestUpdateRevocationLayerStatus(t *testing.T) {
-	impact := inspect.RevocationImpact{
-		Layers: make(map[string]*inspect.RevocationLayerStatus),
-	}
-	// Initialize all layers as pending, similar to ComputeRevocationImpact.
-	for _, layer := range []string{inspect.RevocationLayerIPsec, inspect.RevocationLayerRouting, inspect.RevocationLayerFirewall, inspect.RevocationLayerGossip} {
-		impact.Layers[layer] = &inspect.RevocationLayerStatus{Status: inspect.RevocationStatusPending}
-	}
-	now := time.Unix(4140, 0)
-	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerFirewall, inspect.RevocationStatusRemoved, "deleted 3 rules", "", now)
-	status := impact.Layers[inspect.RevocationLayerFirewall]
-	if status == nil || status.Status != inspect.RevocationStatusRemoved || status.Reason != "deleted 3 rules" || status.UnixTime != now.Unix() {
-		t.Fatalf("layer status = %+v, want removed/deleted 3 rules", status)
-	}
-
-	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerIPsec, inspect.RevocationStatusError, "", "timeout", now)
-	if !impact.HasPendingCleanup() {
-		// routing and gossip should still be pending
-		t.Fatalf("expected pending cleanup, but routing/gossip are not pending")
-	}
-	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerRouting, inspect.RevocationStatusRemoved, "", "", now)
-	UpdateRevocationLayerStatus(&impact, inspect.RevocationLayerGossip, inspect.RevocationStatusRemoved, "", "", now)
-	if impact.HasPendingCleanup() {
-		t.Fatalf("expected no pending cleanup after all layers resolved")
-	}
-}
-
 // TestDaemonFlushRevocationCleanup verifies that the daemon's
 // flushRevocationCleanup correctly clears peer cache after revocation.
 func TestDaemonFlushRevocationCleanup(t *testing.T) {

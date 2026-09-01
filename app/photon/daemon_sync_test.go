@@ -110,6 +110,15 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 }
 
+func TestObjectPullTCPAddrUsesGossipPort(t *testing.T) {
+	if got := objectPullTCPAddr("192.0.2.1:33434"); got != "192.0.2.1:33434" {
+		t.Fatalf("objectPullTCPAddr = %q, want 192.0.2.1:33434", got)
+	}
+	if got := objectPullTCPAddr("[2001:db8::1]:33434"); got != "[2001:db8::1]:33434" {
+		t.Fatalf("objectPullTCPAddr v6 = %q, want [2001:db8::1]:33434", got)
+	}
+}
+
 // The timer fallback remains app-specific while daemon scheduling still owns
 // the periodic bootstrap trigger around HostRuntime's bounded event queue.
 func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
