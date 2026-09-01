@@ -1081,7 +1081,10 @@ package dependency: app -> host -> gossip -> state -> zone
             common/checkpoint/Linux owner，`currentState()` 间接读取从 97 处降至 0；测试专用 `currentState`、`setState`、
             `readCommittedForTest`、`writeDebugLinks` 及 BIRD observation aggregate wrapper 已删除。现存 `composeLinuxStateView`
             只供旧 schema/CLI aggregate fixture 和分区数据库兼容加载测试使用；下一批按这些真实旧边界拆分 fixture，不能再让在线
-            daemon/controller 行为测试依赖 aggregate checkpoint 逆投影，也不能把兼容 helper 移回生产代码。
+            daemon/controller 行为测试依赖 aggregate checkpoint 逆投影，也不能把兼容 helper 移回生产代码。peer lifecycle 单元 fixture
+            已直接改成 `VerifiedState + GossipCheckpoint + linuxRuntimeState`，删除 `derivePeerStatus(stateFile)`、
+            `peerLifecycleCleanupZones` 和 `testGossipCheckpointFromLegacyPeers`；offline/revoked cleanup 测试直接修改 checkpoint/runtime owner，
+            daemon 恢复集成测试也通过 Store checkpoint API 注入成功同步，不再先构造 legacy `syncPeerState`。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

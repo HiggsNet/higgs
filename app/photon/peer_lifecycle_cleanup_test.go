@@ -11,64 +11,60 @@ import (
 )
 
 func TestApplyPeerLifecycleCleanupDeletesOfflineCacheAndKeepsSuppression(t *testing.T) {
-	state, _, _, _ := buildPeerStateTestNetwork(t)
-	normalizeSyncPeers(state)
+	state, _, _, _ := buildPeerStateTestOwners(t)
 	now := time.Unix(200_000, 0)
 	cfg := inspect.DefaultPeerLifecycleConfig()
-	state.SyncPeers["node-b.catofes."] = syncPeerState{
+	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
 		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
 	}
 
-	checkpoint := testGossipCheckpoint(state.SyncPeers)
-	removed, changed := applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now, cfg)
+	removed, changed := applyPeerLifecycleCleanup(state.verified.Network, state.checkpoint.Peers, state.runtime.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := checkpoint.Peers["node-b.catofes."]; ok {
+	if _, ok := state.checkpoint.Peers["node-b.catofes."]; ok {
 		t.Fatal("offline SyncPeers cache entry was retained")
 	}
-	cleanup, ok := state.PeerCleanups["node-b.catofes."]
+	cleanup, ok := state.runtime.PeerCleanups["node-b.catofes."]
 	if !ok || cleanup.Reason != peerCleanupReasonOffline {
 		t.Fatalf("cleanup marker = %+v present=%t", cleanup, ok)
 	}
-	if got := peerLifecycleExcludedPeers(state.PeerCleanups, checkpoint, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
+	if got := peerLifecycleExcludedPeers(state.runtime.PeerCleanups, state.checkpoint, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
 		t.Fatalf("excluded reason = %q", got)
 	}
 }
 
 func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
-	state, parentKey, _, _ := buildPeerStateTestNetwork(t)
-	normalizeSyncPeers(state)
+	state, parentKey, _, _ := buildPeerStateTestOwners(t)
 	now := time.Unix(300_000, 0)
 	cfg := inspect.DefaultPeerLifecycleConfig()
-	state.SyncPeers["node-b.catofes."] = syncPeerState{LastSyncUnix: now.Unix()}
-	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", parentKey, now)
+	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{LastSyncUnix: now.Unix()}
+	addRevocationToParent(t, state.verified.Network, "catofes.", "node-b.catofes.", parentKey, now)
 
-	checkpoint := testGossipCheckpoint(state.SyncPeers)
-	removed, changed := applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now, cfg)
+	removed, changed := applyPeerLifecycleCleanup(state.verified.Network, state.checkpoint.Peers, state.runtime.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 0 {
 		t.Fatalf("initial cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := checkpoint.Peers["node-b.catofes."]; !ok {
+	if _, ok := state.checkpoint.Peers["node-b.catofes."]; !ok {
 		t.Fatal("revoked diagnostic entry was removed before retention elapsed")
 	}
-	marker := state.PeerCleanups["node-b.catofes."]
+	marker := state.runtime.PeerCleanups["node-b.catofes."]
 	if marker.Reason != peerCleanupReasonRevoked || marker.CleanupUnix != now.Unix() {
 		t.Fatalf("revoked cleanup marker = %+v", marker)
 	}
 
-	removed, changed = applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now.Add(cfg.CleanupAfter-time.Second), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.verified.Network, state.checkpoint.Peers, state.runtime.PeerCleanups, now.Add(cfg.CleanupAfter-time.Second), cfg)
 	if changed || len(removed) != 0 {
 		t.Fatalf("early cleanup = changed:%t removed:%v", changed, removed)
 	}
-	removed, changed = applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now.Add(cfg.CleanupAfter), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.verified.Network, state.checkpoint.Peers, state.runtime.PeerCleanups, now.Add(cfg.CleanupAfter), cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("expired cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := checkpoint.Peers["node-b.catofes."]; ok {
+	if _, ok := state.checkpoint.Peers["node-b.catofes."]; ok {
 		t.Fatal("revoked SyncPeers entry survived cleanup_after")
 	}
-	if _, ok := state.PeerCleanups["node-b.catofes."]; ok {
+	if _, ok := state.runtime.PeerCleanups["node-b.catofes."]; ok {
 		t.Fatal("revoked cleanup marker survived completed retention")
 	}
 }
@@ -92,13 +88,16 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	normalizeSyncPeers(state)
-	state.SyncPeers["node-b.catofes."] = syncPeerState{LastSyncUnix: now.Unix()}
 	rt := &Runtime{Config: config, StatePath: t.TempDir() + "/photon.db", Clock: func() time.Time { return now }}
 	if err := rt.SaveState(state); err != nil {
 		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
+	}); err != nil {
+		t.Fatalf("seed peer checkpoint: %v", err)
+	}
 	service.notifyStateChanged()
 	_, initial := service.StateStore.readCommonAndRuntime()
 	if len(initial.LinkInstances) != 1 {
