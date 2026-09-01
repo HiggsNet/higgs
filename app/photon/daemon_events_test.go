@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -200,9 +201,6 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
@@ -248,14 +246,27 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 
 func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t *testing.T) {
 	state, config := buildTestNetworkState(t)
+	state.ManagedZone = "node-b.catofes."
+	config.PeerID = string(state.ManagedZone)
 	now := time.Unix(4000, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	if err := initializeLinuxState(boltStore, &corestate.CommitCandidate{
+		Verified: verifiedStateForTest(state),
+		Gossip:   testGossipCheckpoint(state.SyncPeers),
+	}, 0, linuxRuntimeStateFromLegacy(state)); err != nil {
+		_ = boltStore.Close()
+		t.Fatalf("initializeLinuxState: %v", err)
+	}
+	if err := boltStore.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
@@ -270,9 +281,7 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	if err := external.Network.Put(externalRecord); err != nil {
 		t.Fatalf("Put(external): %v", err)
 	}
-	if err := rt.SaveState(external); err != nil {
-		t.Fatalf("SaveState(external): %v", err)
-	}
+	replacePersistedCommonForTest(t, rt, external)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,
@@ -555,9 +564,6 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
 	// First publish: records are created, state is flushed.
@@ -600,9 +606,6 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	rt := &Runtime{
 		StatePath: filepath.Join(dir, "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	config := &syncConfigFile{
 		PeerID:                 "node-b.catofes.",
@@ -659,9 +662,6 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 

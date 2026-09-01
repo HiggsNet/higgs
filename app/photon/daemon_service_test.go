@@ -203,9 +203,6 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 		StatePath: statePath,
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
@@ -282,9 +279,6 @@ func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(dataDir, "photon.db"),
 		Clock:     func() time.Time { return time.Unix(4300, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 

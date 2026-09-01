@@ -13,18 +13,13 @@ import (
 func newDaemonStateStoreTestFixture(t *testing.T, commit corestate.CommitFunc) (*DaemonStateStore, zone.ZonePath) {
 	t.Helper()
 	rt, managed := buildIPAMTestRuntime(t)
-	legacy, err := rt.LoadState()
+	view, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	candidate, _, err := projectLegacyCommonState(legacy, rt.Config.TrustedRootPublicKey)
-	if err != nil {
-		t.Fatalf("projectLegacyCommonState: %v", err)
-	}
-	common := corestate.NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, commit)
+	common := corestate.NewStoreWithCheckpoint(view.State, view.Gossip, commit)
 	store, err := newDaemonStateStore(common, &linuxRuntimeState{
-		IdentityKeyPath: legacy.IdentityKeyPath,
-		EndpointACLs:    map[string]endpointACL{"admin": {Name: "admin"}},
+		EndpointACLs: map[string]endpointACL{"admin": {Name: "admin"}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewDaemonStateStore: %v", err)

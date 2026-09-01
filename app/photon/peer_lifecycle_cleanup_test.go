@@ -88,10 +88,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &Runtime{Config: config, StatePath: t.TempDir() + "/photon.db", Clock: func() time.Time { return now }}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	rt := &Runtime{Config: config, Clock: func() time.Time { return now }}
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},

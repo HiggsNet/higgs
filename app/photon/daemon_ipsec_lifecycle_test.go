@@ -33,9 +33,6 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
 	service.notifyStateChanged()
@@ -98,9 +95,6 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -183,9 +177,6 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
@@ -245,9 +236,6 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -332,9 +320,6 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now.Add(time.Minute) },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
@@ -383,9 +368,6 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -433,9 +415,6 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -468,9 +447,6 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
@@ -576,9 +552,6 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &ipsec.DryRunDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
@@ -708,9 +681,6 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -767,9 +737,6 @@ func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -806,9 +773,6 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},

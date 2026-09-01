@@ -278,9 +278,6 @@ func TestDaemonControlRoutingReload(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	service.routingDirty = false
 	ctx := t.Context()

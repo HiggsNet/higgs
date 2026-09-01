@@ -151,9 +151,6 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	firstRev := service.StateStore.Meta().Revision
 	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
@@ -191,9 +188,6 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
@@ -356,9 +350,6 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
 	driver := &staleCommitIPsecDriver{}
@@ -400,9 +391,6 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	started := make(chan struct{})
@@ -482,9 +470,6 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	service.notifyStateChanged()
 
@@ -554,9 +539,6 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
@@ -619,9 +601,6 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)

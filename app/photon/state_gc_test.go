@@ -93,10 +93,7 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	}
 	appConfig := defaultAppConfig()
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
-	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	rt := &Runtime{Config: appConfig}
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 
 	preview, err := service.handleStateGCEvent(false)

@@ -1101,6 +1101,11 @@ package dependency: app -> host -> gossip -> state -> zone
             `SaveState` 写入无消费者的 legacy buckets 后误认为改动了 daemon 持久化 owner。随后完成一次全仓库包级函数反向引用扫描，删除
             无调用方的 route/IPAM fixture 转发壳、endpoint/persistence/gossip transport/aggregate replacement 测试 helper，以及生产中的
             `addGossipErrorFields`、`postSyncEvent`；排除测试入口和接口方法后，当前没有只剩定义自身一次引用的未导出 Go 函数。
+          - 提交后的下一批继续清理“写盘但无消费者”的测试准备：`daemon_state_composition_test` 不再执行
+            `typed owner -> LoadState aggregate -> projectLegacyCommonState -> typed owner` 往返；state GC、peer lifecycle、daemon config/control/event
+            与 IPsec reconcile/lifecycle 的纯内存 service 测试删除共 28 次未绑定 BoltStore 的 `SaveState`。外部磁盘 owner 与 daemon 内存
+            owner 分叉的 record 测试改为正式初始化 common/Linux buckets，并通过当前 common revision 提交外部记录；direct recovery 关闭重开并验证
+            Linux runtime 持久化的用例保留 legacy seed，避免把真正的旧库迁移覆盖误删成冗余准备。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
