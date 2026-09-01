@@ -218,7 +218,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.LinkInstances) != 0 {
 		t.Fatalf("initial link instances = %+v, want none", latest.LinkInstances)
 	}
@@ -253,7 +253,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest = service.currentState()
+	_, latest = service.StateStore.readCommonAndRuntime()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances after reload = %d, want 1", len(latest.LinkInstances))
 	}

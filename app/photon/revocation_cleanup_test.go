@@ -12,6 +12,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/observability"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -253,12 +254,13 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	service.flushRevocationCleanup()
 
 	// Verify peer cache is cleared.
-	peer := service.currentState().SyncPeers["node-b.catofes."]
-	if peer.DiscoveredAddr != "" || peer.ObservedAddr != "" {
-		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredAddr, peer.ObservedAddr)
+	view := service.StateStore.common.ReadView()
+	peer := view.Gossip.Peers["node-b.catofes."]
+	if peer.DiscoveredEndpoint != "" || peer.ObservedEndpoint != "" {
+		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredEndpoint, peer.ObservedEndpoint)
 	}
-	if peer.LastError != "zone revoked" {
-		t.Fatalf("last error = %q, want 'zone revoked'", peer.LastError)
+	if peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
+		t.Fatalf("last failure = %+v, want zone revoked", peer.LastFailure)
 	}
 }
 
@@ -459,11 +461,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Now revoke node-b.catofes.
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	parent := latest.Network.Zones["catofes."]
+	common, current := service.StateStore.readCommonAndRuntime()
+	parent := common.State.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -473,32 +472,21 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 		Reason:                "test revoke cleanup",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	// Re-add the sync peer state that was lost during LoadState.
-	latest.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {
-			DiscoveredAddr:       "192.0.2.1:33434",
-			ObservedAddr:         "192.0.2.1:33434",
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
-		},
-	}
-	if err := rt.SaveState(latest); err != nil {
-		t.Fatalf("SaveState(revoke): %v", err)
-	}
-	service.setState(latest)
+	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
 	// Verify peer cache was cleared after notifyStateChanged.
-	current := service.currentState()
-	peer := current.SyncPeers["node-b.catofes."]
-	if peer.DiscoveredAddr != "" {
-		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredAddr)
+	common, current = service.StateStore.readCommonAndRuntime()
+	peer := common.Gossip.Peers["node-b.catofes."]
+	if peer.DiscoveredEndpoint != "" {
+		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredEndpoint)
 	}
-	if peer.ObservedAddr != "" {
-		t.Fatalf("observed addr should be cleared: %s", peer.ObservedAddr)
+	if peer.ObservedEndpoint != "" {
+		t.Fatalf("observed addr should be cleared: %s", peer.ObservedEndpoint)
 	}
-	if peer.LastError != "zone revoked" {
-		t.Fatalf("last error = %q, want 'zone revoked'", peer.LastError)
+	if peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
+		t.Fatalf("last failure = %+v, want zone revoked", peer.LastFailure)
 	}
 	// Verify link instance was torn down.
 	if len(current.LinkInstances) != 0 {
@@ -564,7 +552,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	})
 
 	service.notifyStateChanged()
-	current := service.currentState()
+	common, current := service.StateStore.readCommonAndRuntime()
 	if len(current.LinkInstances) != 1 {
 		t.Fatalf("initial link instances = %d, want 1", len(current.LinkInstances))
 	}
@@ -572,13 +560,12 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
 		t.Fatalf("initial firewall authorized prefixes = %v, want node-b route", initialFirewall.Prefixes.MeshAuthorizedV4)
 	}
-	latest := service.currentState()
-	initialBirdCfg := readBirdConfigForNetns(t, latest, "photontesth2")
+	initialBirdCfg := readBirdConfigForNetns(t, current, "photontesth2")
 	if !strings.Contains(initialBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
 	}
 
-	parent := latest.Network.Zones["catofes."]
+	parent := common.State.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -588,18 +575,20 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		Reason:                "combined revocation smoke",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	latest.SyncPeers = map[string]syncPeerState{
+	common.Gossip.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredAddr:       "192.0.2.1:33434",
-			ObservedAddr:         "192.0.2.1:33434",
+			DiscoveredEndpoint:   "192.0.2.1:33434",
+			ObservedEndpoint:     "192.0.2.1:33434",
 			ObservedLastSeenUnix: now.Unix(),
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
 		},
 	}
-	if err := rt.SaveState(latest); err != nil {
-		t.Fatalf("SaveState(revoked): %v", err)
-	}
-	service.setState(latest)
+	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	installTestLinuxDrivers(service, testLinuxDrivers{
+		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
+		birdProcess:       &fakeBirdProcessManager{running: false},
+		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },
+	})
 
 	var order []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
@@ -621,19 +610,18 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
 	}
 
-	current = service.currentState()
+	common, current = service.StateStore.readCommonAndRuntime()
 	if len(current.LinkInstances) != 0 {
 		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
 	}
 	if len(ipsecDriver.Terminated) == 0 || len(ipsecDriver.Unloaded) == 0 || len(ipsecDriver.DeletedIFs) == 0 {
 		t.Fatalf("ipsec teardown incomplete: terminated=%v unloaded=%v deleted_ifs=%v", ipsecDriver.Terminated, ipsecDriver.Unloaded, ipsecDriver.DeletedIFs)
 	}
-	if peer := current.SyncPeers["node-b.catofes."]; peer.DiscoveredAddr != "" || peer.ObservedAddr != "" || peer.LastError != "zone revoked" {
+	if peer := common.Gossip.Peers["node-b.catofes."]; peer.DiscoveredEndpoint != "" || peer.ObservedEndpoint != "" || peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 
-	latest = service.currentState()
-	revokedBirdCfg := readBirdConfigForNetns(t, latest, "photontesth2")
+	revokedBirdCfg := readBirdConfigForNetns(t, current, "photontesth2")
 	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)
 	}
@@ -652,12 +640,12 @@ func prefixIn(prefixes []netip.Prefix, want string) bool {
 	return slices.Contains(prefixes, prefix)
 }
 
-func readBirdConfigForNetns(t *testing.T, state *stateFile, netns string) string {
+func readBirdConfigForNetns(t *testing.T, runtime *linuxRuntimeState, netns string) string {
 	t.Helper()
-	if state == nil || state.BirdInstances == nil || state.BirdInstances[netns] == nil {
+	if runtime == nil || runtime.BirdInstances == nil || runtime.BirdInstances[netns] == nil {
 		t.Fatalf("missing BIRD instance for netns %s", netns)
 	}
-	path := state.BirdInstances[netns].ConfigPath
+	path := runtime.BirdInstances[netns].ConfigPath
 	if path == "" {
 		t.Fatalf("empty BIRD config path for netns %s", netns)
 	}

@@ -55,7 +55,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -162,7 +162,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -231,7 +231,8 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 
 	// Verify the route announcement record was auto-published.
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	rec := service.currentState().Network.Zones["node-a.catofes."].Records[key]
+	common := service.StateStore.common.ReadView()
+	rec := common.State.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected auto-published announcement for 10.0.0.0/24")
 	}
@@ -247,7 +248,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 
 	// Verify the BIRD export filter includes the auto-announced prefix.
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -343,7 +344,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")

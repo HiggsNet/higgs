@@ -2,51 +2,17 @@ package main
 
 import (
 	"context"
-	"io"
 	"slices"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/routing/bird"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
-
-func (d *DaemonService) setState(state *stateFile) {
-	if d == nil {
-		return
-	}
-	replacement := newTestDaemonService(d.Sync.App, state, d.Sync.Config, d.Interval)
-	d.StateStore = replacement.StateStore
-}
-
-func (d *DaemonService) currentState() *stateFile {
-	if d == nil || d.StateStore == nil {
-		return nil
-	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
-	if common.State == nil {
-		return nil
-	}
-	state := composeLinuxStateView(common, runtime)
-	return state
-}
-
-func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
-	if store == nil || fn == nil {
-		return
-	}
-	common, runtime := store.readCommonAndRuntime()
-	if common.State == nil {
-		return
-	}
-	fn(composeLinuxStateView(common, runtime))
-}
 
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 	plan, err := sr.ipsecProtocolPlan(verifiedStateForTest(state), linuxRuntimeStateFromLegacy(state))
@@ -83,31 +49,6 @@ func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone})
 	}
 	return nil
-}
-
-func writeDebugLinks(w io.Writer, rt *Runtime, state *stateFile, filter string) error {
-	runtime := linuxRuntimeStateFromLegacy(state)
-	view := buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, nil)
-	view.Filter = filter
-	return inspecttext.WriteLinksDebug(w, view)
-}
-
-func (d *DaemonService) recordBirdHealthObservationUnavailable(netnsName string, overlays []string) {
-	if d == nil || d.StateStore == nil {
-		return
-	}
-	readCommittedForTest(d.StateStore, func(state *stateFile) {
-		d.recordBirdHealthObservationUnavailableForLinks(state.LinkInstances, state.IPsecReconcile, netnsName, overlays)
-	})
-}
-
-func (d *DaemonService) recordBirdHealthObservation(netnsName string, overlays []string, observed *bird.BirdObservedState) {
-	if d == nil || d.StateStore == nil {
-		return
-	}
-	readCommittedForTest(d.StateStore, func(state *stateFile) {
-		d.recordBirdHealthObservationForLinks(state.LinkInstances, state.IPsecReconcile, netnsName, overlays, observed)
-	})
 }
 
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {

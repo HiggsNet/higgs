@@ -80,7 +80,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	if pm.started {
 		t.Fatalf("managed BIRD should not restart while crash backoff is active")
 	}
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state")
@@ -151,7 +151,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
 		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
 	}
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("bird instance = %+v, want running", inst)
@@ -210,7 +210,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
 		t.Fatalf("bird instance = %+v, want running with no error", inst)
@@ -402,7 +402,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("routingDirty should be cleared after flush")
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}

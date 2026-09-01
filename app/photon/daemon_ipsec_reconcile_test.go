@@ -199,7 +199,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 
 	service.notifyStateChanged()
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
 	}
@@ -215,9 +215,8 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		}
 	}
 
-	service.setState(latest)
 	service.notifyStateChanged()
-	reloaded := service.currentState()
+	_, reloaded := service.StateStore.readCommonAndRuntime()
 	if len(reloaded.LinkInstances) != 1 {
 		t.Fatalf("second link instances len = %d, want 1", len(reloaded.LinkInstances))
 	}
@@ -489,7 +488,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service := newTestDaemonService(rt, state, config, time.Second)
 	service.notifyStateChanged()
 
-	latest := service.currentState()
+	common, latest := service.StateStore.readCommonAndRuntime()
 	var inst linkInstanceState
 	for _, v := range latest.LinkInstances {
 		inst = v
@@ -499,8 +498,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	}
 
 	// Simulate peer publishing generation 2 port record.
-	state = latest
-	zs := state.Network.Zones["node-b.catofes."]
+	zs := common.State.Network.Zones["node-b.catofes."]
 	zs.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, "node-b.catofes.", ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
 		Version: 1,
 		Mode:    ipsec.PortModeFixed,
@@ -511,13 +509,10 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState(rotate): %v", err)
-	}
-	service.setState(state)
+	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
 	service.notifyStateChanged()
 
-	rotated := service.currentState()
+	_, rotated := service.StateStore.readCommonAndRuntime()
 	for _, v := range rotated.LinkInstances {
 		inst = v
 	}
@@ -598,8 +593,8 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	latest := service.currentState()
-	if latest.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || latest.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
+	common, latest := service.StateStore.readCommonAndRuntime()
+	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")
 	}
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {

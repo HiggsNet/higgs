@@ -410,19 +410,19 @@ func testIPsecLinkGroup() ipsec.LinkGroupSpec {
 	}
 }
 
-func singleDesiredSpec(t *testing.T, state *stateFile) ipsec.TransportLinkSpec {
+func singleDesiredSpec(t *testing.T, managedZone zone.ZonePath, runtime *linuxRuntimeState) ipsec.TransportLinkSpec {
 	t.Helper()
-	if state == nil || state.IPsecReconcile == nil || len(state.IPsecReconcile.Desired) != 1 {
-		t.Fatalf("desired snapshot = %+v, want one desired link", state.IPsecReconcile)
+	if runtime == nil || runtime.IPsecReconcile == nil || len(runtime.IPsecReconcile.Desired) != 1 {
+		t.Fatalf("desired snapshot = %+v, want one desired link", runtime)
 	}
-	desired := state.IPsecReconcile.Desired[0]
+	desired := runtime.IPsecReconcile.Desired[0]
 	localTunnel := netip.MustParseAddr("10.44.0.1")
 	peerTunnel := netip.MustParseAddr("10.44.0.2")
-	if desired.PeerZone < state.ManagedZone {
+	if desired.PeerZone < managedZone {
 		localTunnel, peerTunnel = peerTunnel, localTunnel
 	}
 	return ipsec.TransportLinkSpec{
-		LocalZone:       state.ManagedZone,
+		LocalZone:       managedZone,
 		PeerZone:        desired.PeerZone,
 		OverlayID:       desired.GroupID,
 		Provider:        ipsec.ProviderStrongSwan,
@@ -641,9 +641,9 @@ func testDaemonIPsecAppConfig(dataDir, advertiseAddr string, group ipsec.LinkGro
 	return config
 }
 
-func assertGossipedIPsecRecords(t *testing.T, state *stateFile, peer zone.ZonePath) {
+func assertGossipedIPsecRecords(t *testing.T, network *zone.NetworkState, peer zone.ZonePath) {
 	t.Helper()
-	zs := state.Network.Zones[peer]
+	zs := network.Zones[peer]
 	if zs == nil {
 		t.Fatalf("zone %s missing after gossip", peer)
 	}
@@ -654,17 +654,17 @@ func assertGossipedIPsecRecords(t *testing.T, state *stateFile, peer zone.ZonePa
 	}
 }
 
-func assertSingleLinkUpFromSA(t *testing.T, state *stateFile, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
+func assertSingleLinkUpFromSA(t *testing.T, runtime *linuxRuntimeState, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
 	t.Helper()
-	if state.IPsecReconcile == nil || len(state.IPsecReconcile.Actions) != 1 || state.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
-		t.Fatalf("reconcile = %+v, want adopt", state.IPsecReconcile)
+	if runtime.IPsecReconcile == nil || len(runtime.IPsecReconcile.Actions) != 1 || runtime.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
+		t.Fatalf("reconcile = %+v, want adopt", runtime.IPsecReconcile)
 	}
-	inst := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	inst := runtime.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != sa.Endpoint {
 		t.Fatalf("instance = %+v, want up endpoint %s", inst, sa.Endpoint)
 	}
-	if len(state.IPsecReconcile.ActualSAs) != 1 || state.IPsecReconcile.ActualSAs[0].ReqID != sa.ReqID || state.IPsecReconcile.ActualSAs[0].RemoteIdentity != sa.RemoteIdentity {
-		t.Fatalf("actual SAs = %+v, want reqid=%d remote_id=%s", state.IPsecReconcile.ActualSAs, sa.ReqID, sa.RemoteIdentity)
+	if len(runtime.IPsecReconcile.ActualSAs) != 1 || runtime.IPsecReconcile.ActualSAs[0].ReqID != sa.ReqID || runtime.IPsecReconcile.ActualSAs[0].RemoteIdentity != sa.RemoteIdentity {
+		t.Fatalf("actual SAs = %+v, want reqid=%d remote_id=%s", runtime.IPsecReconcile.ActualSAs, sa.ReqID, sa.RemoteIdentity)
 	}
 }
 
@@ -990,14 +990,14 @@ func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.Zone
 	})
 }
 
-func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.TransportLinkSpec) {
+func assertDaemonSystemLinkUp(t *testing.T, runtime *linuxRuntimeState, spec ipsec.TransportLinkSpec) {
 	t.Helper()
-	inst := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	inst := runtime.LinkInstances[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp {
 		t.Fatalf("link instance = %+v, want up", inst)
 	}
-	if state.IPsecReconcile == nil || len(state.IPsecReconcile.ActualSAs) == 0 {
-		t.Fatalf("ipsec reconcile = %+v, want observed SAs", state.IPsecReconcile)
+	if runtime.IPsecReconcile == nil || len(runtime.IPsecReconcile.ActualSAs) == 0 {
+		t.Fatalf("ipsec reconcile = %+v, want observed SAs", runtime.IPsecReconcile)
 	}
 	ikeName := inst.IKEName
 	if ikeName == "" {
@@ -1007,7 +1007,7 @@ func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.Transpo
 	if childName == "" {
 		childName = ipsec.ChildSAName(spec)
 	}
-	for _, sa := range state.IPsecReconcile.ActualSAs {
+	for _, sa := range runtime.IPsecReconcile.ActualSAs {
 		// StrongSwan may append a rekey suffix (e.g. "-2") to IKE/child names.
 		nameMatches := sa.Name == ikeName || strings.HasPrefix(sa.Name, ikeName+"-")
 		childMatches := sa.ChildSA == childName || strings.HasPrefix(sa.ChildSA, childName+"-")
@@ -1018,19 +1018,19 @@ func assertDaemonSystemLinkUp(t *testing.T, state *stateFile, spec ipsec.Transpo
 			return
 		}
 	}
-	t.Fatalf("actual SAs = %+v, want established SA for %s", state.IPsecReconcile.ActualSAs, spec.TransportID)
+	t.Fatalf("actual SAs = %+v, want established SA for %s", runtime.IPsecReconcile.ActualSAs, spec.TransportID)
 }
 
-func daemonSystemDesiredSpec(t *testing.T, state *stateFile, group ipsec.LinkGroupSpec, now time.Time) ipsec.TransportLinkSpec {
+func daemonSystemDesiredSpec(t *testing.T, verified *corestate.VerifiedState, runtime *linuxRuntimeState, group ipsec.LinkGroupSpec, now time.Time) ipsec.TransportLinkSpec {
 	t.Helper()
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
-		t.Fatalf("PlanTransportLinks(%s): %v", state.ManagedZone, err)
+		t.Fatalf("PlanTransportLinks(%s): %v", verified.ManagedZone, err)
 	}
 	if len(plan.Desired) != 1 {
-		t.Fatalf("desired for %s = %+v, skips=%+v, want one", state.ManagedZone, plan.Desired, plan.Skipped)
+		t.Fatalf("desired for %s = %+v, skips=%+v, want one", verified.ManagedZone, plan.Desired, plan.Skipped)
 	}
-	return injectIPsecKeyMaterial(verifiedStateForTest(state), state.IPsecTransportKey, plan.Desired)[0]
+	return injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)[0]
 }
 
 func freeDaemonTestUDPAddr(t *testing.T) string {
@@ -1047,22 +1047,23 @@ func freeDaemonTestUDPAddr(t *testing.T) string {
 	return addr
 }
 
-func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *DaemonService, groupA, groupB ipsec.LinkGroupSpec) (*stateFile, *stateFile) {
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *DaemonService, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, *linuxRuntimeState, corestate.View, *linuxRuntimeState) {
 	t.Helper()
-	var lastA, lastB *stateFile
+	var commonA, commonB corestate.View
+	var runtimeA, runtimeB *linuxRuntimeState
 	for {
-		lastA = serviceA.currentState()
-		lastB = serviceB.currentState()
-		if lastA != nil && lastB != nil && daemonRunGossipStrongSwanReady(lastA, groupA) && daemonRunGossipStrongSwanReady(lastB, groupB) {
-			return lastA, lastB
+		commonA, runtimeA = serviceA.StateStore.readCommonAndRuntime()
+		commonB, runtimeB = serviceB.StateStore.readCommonAndRuntime()
+		if daemonRunGossipStrongSwanReady(commonA.State, runtimeA, groupA) && daemonRunGossipStrongSwanReady(commonB.State, runtimeB, groupB) {
+			return commonA, runtimeA, commonB, runtimeB
 		}
 		select {
 		case <-ctx.Done():
-			if lastA != nil {
-				t.Logf("last node-a reconcile = %+v instances=%+v", lastA.IPsecReconcile, lastA.LinkInstances)
+			if runtimeA != nil {
+				t.Logf("last node-a reconcile = %+v instances=%+v", runtimeA.IPsecReconcile, runtimeA.LinkInstances)
 			}
-			if lastB != nil {
-				t.Logf("last node-b reconcile = %+v instances=%+v", lastB.IPsecReconcile, lastB.LinkInstances)
+			if runtimeB != nil {
+				t.Logf("last node-b reconcile = %+v instances=%+v", runtimeB.IPsecReconcile, runtimeB.LinkInstances)
 			}
 			t.Fatalf("timeout waiting for daemon gossip StrongSwan up")
 		default:
@@ -1087,26 +1088,26 @@ func newDaemonTestStrongSwanDriver(t *testing.T, viciSocket string, client ipsec
 	}
 }
 
-func daemonRunGossipStrongSwanReady(state *stateFile, group ipsec.LinkGroupSpec) bool {
-	if state == nil || state.IPsecReconcile == nil || len(state.IPsecReconcile.ActualSAs) == 0 || len(state.LinkInstances) == 0 {
+func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, runtime *linuxRuntimeState, group ipsec.LinkGroupSpec) bool {
+	if verified == nil || runtime == nil || runtime.IPsecReconcile == nil || len(runtime.IPsecReconcile.ActualSAs) == 0 || len(runtime.LinkInstances) == 0 {
 		return false
 	}
-	if state.ManagedZone == "node-a.catofes." {
-		if zs := state.Network.Zones["node-b.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
+	if verified.ManagedZone == "node-a.catofes." {
+		if zs := verified.Network.Zones["node-b.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
 			return false
 		}
 	}
-	if state.ManagedZone == "node-b.catofes." {
-		if zs := state.Network.Zones["node-a.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
+	if verified.ManagedZone == "node-b.catofes." {
+		if zs := verified.Network.Zones["node-a.catofes."]; zs == nil || zs.Records[ipsec.RecordKeyTransportKey] == nil {
 			return false
 		}
 	}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: time.Now()})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: time.Now()})
 	if err != nil || len(plan.Desired) != 1 {
 		return false
 	}
-	spec := injectIPsecKeyMaterial(verifiedStateForTest(state), state.IPsecTransportKey, plan.Desired)[0]
-	inst, ok := state.LinkInstances[ipsec.LinkInstanceID(spec)]
+	spec := injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)[0]
+	inst, ok := runtime.LinkInstances[ipsec.LinkInstanceID(spec)]
 	return ok && inst.ActualState == ipsec.LinkStateUp
 }
 

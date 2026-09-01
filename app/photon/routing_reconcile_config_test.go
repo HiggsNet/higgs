@@ -45,7 +45,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -342,7 +342,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		t.Fatalf("external mode should call client.Status")
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
@@ -376,7 +376,7 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	latest := service.currentState()
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 0 {
 		t.Fatalf("BirdInstances len = %d, want 0", len(latest.BirdInstances))
 	}

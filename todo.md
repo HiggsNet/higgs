@@ -1073,8 +1073,12 @@ package dependency: app -> host -> gossip -> state -> zone
             authoritative mutation、route auto-announce、revocation、startup authority、routing/BIRD、firewall、IPsec 与 daemon event 测试
             已直接断言 common View 或 Linux runtime snapshot。observer fixture 也已改为显式接收
             `VerifiedState + GossipCheckpoint + linuxRuntimeState`，通用 `snapshotTestDaemonState` 删除；aggregate 重组只保留在
-            `legacy_runtime_test.go` 的 `currentState/readCommittedForTest`。首批单点 common/Linux 调用迁移后，`currentState()` 间接读取
-            从 97 处降至 91 处；下一批按 controller 文件分组继续拆除，不能把这些兼容 helper 移回生产代码。
+            `legacy_runtime_test.go` 的 `currentState/readCommittedForTest`。peer lifecycle、routing config/BIRD/smoke/upstream、daemon reload、
+            双节点 sync、daemon events、BIRD root smoke、revocation/IPsec reconcile 及双节点 IPsec smoke 已全部改为分别读取和重建
+            common/checkpoint/Linux owner，`currentState()` 间接读取从 97 处降至 0；测试专用 `currentState`、`setState`、
+            `readCommittedForTest`、`writeDebugLinks` 及 BIRD observation aggregate wrapper 已删除。现存 `composeLinuxStateView`
+            只供旧 schema/CLI aggregate fixture 和分区数据库兼容加载测试使用；下一批按这些真实旧边界拆分 fixture，不能再让在线
+            daemon/controller 行为测试依赖 aggregate checkpoint 逆投影，也不能把兼容 helper 移回生产代码。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

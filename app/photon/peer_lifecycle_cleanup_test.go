@@ -100,17 +100,18 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 	}
 	service := newTestDaemonService(rt, state, syncConfig, time.Second)
 	service.notifyStateChanged()
-	if snapshot := service.currentState(); len(snapshot.LinkInstances) != 1 {
-		t.Fatalf("initial links = %+v, want one", snapshot.LinkInstances)
+	_, initial := service.StateStore.readCommonAndRuntime()
+	if len(initial.LinkInstances) != 1 {
+		t.Fatalf("initial links = %+v, want one", initial.LinkInstances)
 	}
 
 	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
 	service.notifyStateChanged()
-	cleaned := service.currentState()
+	common, cleaned := service.StateStore.readCommonAndRuntime()
 	if len(cleaned.LinkInstances) != 0 || cleaned.IPsecReconcile.DesiredLinks != 0 {
 		t.Fatalf("cleaned links = %+v desired=%d", cleaned.LinkInstances, cleaned.IPsecReconcile.DesiredLinks)
 	}
-	if _, ok := cleaned.SyncPeers["node-b.catofes."]; ok {
+	if _, ok := common.Gossip.Peers["node-b.catofes."]; ok {
 		t.Fatal("offline peer cache was not removed")
 	}
 	if _, ok := cleaned.PeerCleanups["node-b.catofes."]; !ok {
@@ -122,7 +123,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		t.Fatalf("record successful sync: %v", err)
 	}
 	service.notifyStateChanged()
-	recovered := service.currentState()
+	_, recovered := service.StateStore.readCommonAndRuntime()
 	if _, ok := recovered.PeerCleanups["node-b.catofes."]; ok {
 		t.Fatal("successful sync did not clear lifecycle suppression")
 	}

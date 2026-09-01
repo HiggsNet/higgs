@@ -100,12 +100,12 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	if serviceA.hostRuntime.Gossip.Session(configB.PeerID) != nil || serviceB.hostRuntime.Gossip.Session(configA.PeerID) != nil {
 		t.Fatal("completed two-node sync retained an active session")
 	}
-	latestA := serviceA.currentState()
-	latestB := serviceB.currentState()
-	if latestA.Network.Zones["node-b.catofes."] == nil || latestA.Network.Zones["node-b.catofes."].Records["event-loop-test"] == nil {
+	latestA := serviceA.StateStore.common.ReadView()
+	latestB := serviceB.StateStore.common.ReadView()
+	if latestA.State.Network.Zones["node-b.catofes."] == nil || latestA.State.Network.Zones["node-b.catofes."].Records["event-loop-test"] == nil {
 		t.Fatal("record from B did not appear on A")
 	}
-	if latestB.Network.Zones["node-a.catofes."] == nil || latestB.Network.Zones["node-a.catofes."].Records["event-loop-test"] == nil {
+	if latestB.State.Network.Zones["node-a.catofes."] == nil || latestB.State.Network.Zones["node-a.catofes."].Records["event-loop-test"] == nil {
 		t.Fatal("record from A did not appear on B")
 	}
 }

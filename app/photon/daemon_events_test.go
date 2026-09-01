@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"net"
 	"path/filepath"
 	"strings"
@@ -159,8 +160,8 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
-	rotatedState := service.currentState()
-	rotated, err := ipsec.ParsePortRecord(rotatedState.Network.Zones[rotatedState.ManagedZone].Records[ipsec.RecordKeyPorts])
+	rotatedState := service.StateStore.common.ReadView()
+	rotated, err := ipsec.ParsePortRecord(rotatedState.State.Network.Zones[rotatedState.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
 	}
@@ -241,15 +242,15 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 			t.Fatalf("record_put event failed: %v", err)
 		}
 	}
-	latest := service.currentState()
-	record := latest.Network.Zones["node-b.catofes."].Records["identity"]
+	latest := service.StateStore.common.ReadView()
+	record := latest.State.Network.Zones["node-b.catofes."].Records["identity"]
 	if record == nil {
 		t.Fatal("identity record missing")
 	}
 	if record.Version != writes {
 		t.Fatalf("latest version = %d, want %d", record.Version, writes)
 	}
-	if history := latest.Network.Zones["node-b.catofes."].RecordHistory["identity"]; len(history) != writes-1 {
+	if history := latest.State.Network.Zones["node-b.catofes."].RecordHistory["identity"]; len(history) != writes-1 {
 		t.Fatalf("history length = %d, want %d", len(history), writes-1)
 	}
 }
@@ -294,8 +295,8 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	if result.Error != nil {
 		t.Fatalf("handleEvent(record_put): %v", result.Error)
 	}
-	latest := service.currentState()
-	records := latest.Network.Zones["node-b.catofes."].Records
+	latest := service.StateStore.common.ReadView()
+	records := latest.State.Network.Zones["node-b.catofes."].Records
 	if records["external"] != nil {
 		t.Fatalf("out-of-band disk record replaced daemon committed authority")
 	}
@@ -389,8 +390,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest := service.currentState()
-	parent := latest.Network.Zones[zone.ZonePath("catofes.")]
+	latest := service.StateStore.common.ReadView()
+	parent := latest.State.Network.Zones[zone.ZonePath("catofes.")]
 	if parent == nil || parent.Revocations["node-b.catofes."] == nil {
 		t.Fatalf("node-b revocation was not persisted")
 	}
@@ -530,8 +531,8 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		}
 	}
 
-	latest := service.currentState()
-	catofes := latest.Network.Zones[zone.ZonePath("catofes.")]
+	latest := service.StateStore.common.ReadView()
+	catofes := latest.State.Network.Zones[zone.ZonePath("catofes.")]
 	if catofes.Records["admin-note"] == nil {
 		t.Fatalf("record_put result missing after concurrent admin events")
 	}
@@ -638,14 +639,6 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if committed.Admission == nil || !committed.Admission.Pending || committed.Admission.PendingSinceUnix != now.Unix() {
 		t.Fatalf("committed admission = %+v, want pending startup diagnosis", committed.Admission)
 	}
-	if current := service.currentState(); current == state || current.Admission == nil || !current.Admission.Pending {
-		t.Fatalf("current admission = %+v, want committed state", current.Admission)
-	}
-	reloaded := service.currentState()
-	if reloaded.Admission == nil || !reloaded.Admission.Pending {
-		t.Fatalf("persisted admission = %+v, want pending", reloaded.Admission)
-	}
-
 	changed, err = service.prepareStartupState()
 	if err != nil {
 		t.Fatalf("prepareStartupState(second): %v", err)
@@ -685,7 +678,8 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
 	}
-	first := service.currentState().Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	firstView := service.StateStore.common.ReadView()
+	first := firstView.State.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if first == nil {
 		t.Fatal("first endpoint record missing")
 	}
@@ -716,11 +710,15 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if !syncNow {
 		t.Fatalf("syncNow = false, want true after refresh interval")
 	}
-	third := service.currentState().Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	thirdView := service.StateStore.common.ReadView()
+	third := thirdView.State.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if third.Version != first.Version+1 {
 		t.Fatalf("third version = %d, want %d (refreshed)", third.Version, first.Version+1)
 	}
-	refreshed := endpointRecordFromState(t, service.currentState(), state.ManagedZone)
+	var refreshed gossip.EndpointRecord
+	if err := json.Unmarshal(third.Value, &refreshed); err != nil {
+		t.Fatalf("Unmarshal(endpoint record): %v", err)
+	}
 	if refreshed.UpdatedAt != 2800 {
 		t.Fatalf("refreshed updated_at = %d, want 2800", refreshed.UpdatedAt)
 	}
