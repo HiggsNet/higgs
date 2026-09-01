@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -23,15 +24,15 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after create: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after create: %v", err)
 	}
 	key, err := routing.NormalizeIPAMPoolKey("10.0.0.0/16")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("pool record not found at key %s", key)
 	}
@@ -59,11 +60,11 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 		t.Fatalf("revokeIPAMPool failed: %v", err)
 	}
 
-	state, err = rt.LoadState()
+	common, _, err = loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after revoke: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
-	rec = state.Network.Zones[managed].Records[key]
+	rec = common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("revoke record not found at key %s", key)
 	}
@@ -88,15 +89,15 @@ func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after assign: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after assign: %v", err)
 	}
 	key, err := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMAssignmentKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("assignment record not found at key %s", key)
 	}
@@ -121,11 +122,11 @@ func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 
-	state, err = rt.LoadState()
+	common, _, err = loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after revoke: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
-	rec = state.Network.Zones[managed].Records[key]
+	rec = common.State.Network.Zones[managed].Records[key]
 	if err := json.Unmarshal(rec.Value, &assignment); err != nil {
 		t.Fatalf("unmarshal revoke: %v", err)
 	}
@@ -144,15 +145,15 @@ func TestIPAMCanonicalizesPrefix(t *testing.T) {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
 	key, err := routing.NormalizeIPAMPoolKey("10.0.1.1/16")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("record not found at key %s", key)
 	}
@@ -236,17 +237,11 @@ func TestIPAMMissingCapability(t *testing.T) {
 }
 
 func TestCreateIPAMPoolRejectsOwnerMismatch(t *testing.T) {
-	rt, managed := buildIPAMTestRuntime(t)
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	removeIPAMPoolForTest(state.Network, "catofes.", "10.0.0.0/16")
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	rt, managed := buildIPAMTestRuntimeWithNetwork(t, true, func(network *zone.NetworkState) {
+		removeIPAMPoolForTest(network, "catofes.", "10.0.0.0/16")
+	})
 
-	err = createIPAMPoolWithRuntime(rt, managed, "10.0.1.0/24", managed)
+	err := createIPAMPoolWithRuntime(rt, managed, "10.0.1.0/24", managed)
 	if err == nil {
 		t.Fatalf("createIPAMPoolWithRuntime succeeded, want owner mismatch")
 	}
@@ -256,17 +251,11 @@ func TestCreateIPAMPoolRejectsOwnerMismatch(t *testing.T) {
 }
 
 func TestAssignIPAMRejectsImplicitAncestorPool(t *testing.T) {
-	rt, managed := buildIPAMTestRuntime(t)
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	removeIPAMPoolForTest(state.Network, "catofes.", "10.0.0.0/16")
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	rt, managed := buildIPAMTestRuntimeWithNetwork(t, true, func(network *zone.NetworkState) {
+		removeIPAMPoolForTest(network, "catofes.", "10.0.0.0/16")
+	})
 
-	err = assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, "")
+	err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, "")
 	if err == nil {
 		t.Fatalf("assignIPAMWithRuntime succeeded, want pool mismatch")
 	}
@@ -458,16 +447,16 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 		t.Fatalf("assignIPAM shared failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after assign: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after assign: %v", err)
 	}
 	key, err := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMAssignmentKey: %v", err)
 	}
 	key += "#node.pek.catofes"
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("assignment record not found")
 	}
@@ -484,11 +473,11 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 
-	state, err = rt.LoadState()
+	common, _, err = loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after revoke: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
-	rec = state.Network.Zones[managed].Records[key]
+	rec = common.State.Network.Zones[managed].Records[key]
 	if err := json.Unmarshal(rec.Value, &assignment); err != nil {
 		t.Fatalf("unmarshal revoke: %v", err)
 	}
@@ -553,15 +542,15 @@ func ipamDiagnosticsContain(values []inspect.IPAMGetDiagnosticRow, want string) 
 
 func buildIPAMTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildIPAMTestRuntimeWithCapability(t, true)
+	return buildIPAMTestRuntimeWithNetwork(t, true, nil)
 }
 
 func buildIPAMTestRuntimeWithoutIPAMCapability(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildIPAMTestRuntimeWithCapability(t, false)
+	return buildIPAMTestRuntimeWithNetwork(t, false, nil)
 }
 
-func buildIPAMTestRuntimeWithCapability(t *testing.T, ipamCap bool) (*Runtime, zone.ZonePath) {
+func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zone.NetworkState)) (*Runtime, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -645,23 +634,34 @@ func buildIPAMTestRuntimeWithCapability(t *testing.T, ipamCap bool) (*Runtime, z
 	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
 	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/16", parent)
 	addUnsignedIPAMPoolForTest(ns, parent, "10.0.0.0/16", managed)
+	if mutate != nil {
+		mutate(ns)
+	}
 	configureValidation(ns)
 	if err := photoncrypto.VerifyChain(ns, managed, time.Unix(1000, 0)); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
-	}
-
-	state := &stateFile{
-		ManagedZone:    managed,
-		ZonePrivateKey: zonePriv,
-		Network:        ns,
 	}
 
 	config := defaultAppConfig()
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
 	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	candidate := &corestate.CommitCandidate{
+		Verified: &corestate.VerifiedState{
+			ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
+		},
+		Gossip: &corestate.GossipCheckpoint{},
+	}
+	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
+		_ = store.Close()
+		t.Fatalf("initializeLinuxState: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
 	}
 	return rt, managed
 }

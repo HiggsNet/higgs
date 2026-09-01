@@ -44,12 +44,12 @@ func TestLookupRecordDetail(t *testing.T) {
 	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek"}`), "policy.json"); err != nil {
 		t.Fatalf("putRecordDirect: %v", err)
 	}
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
 
-	record, err := lookupRecordDetailFromNetwork(state.Network, managed, "site/name", 0)
+	record, err := lookupRecordDetailFromNetwork(common.State.Network, managed, "site/name", 0)
 	if err != nil {
 		t.Fatalf("lookupRecordDetail: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestLookupRecordDetail(t *testing.T) {
 	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek-3"}`), "policy.json"); err != nil {
 		t.Fatalf("putRecordDirect third version: %v", err)
 	}
-	state, err = rt.LoadState()
+	common, _, err = loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after history writes: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after history writes: %v", err)
 	}
-	record, err = lookupRecordDetailFromNetwork(state.Network, managed, "site/name", 2)
+	record, err = lookupRecordDetailFromNetwork(common.State.Network, managed, "site/name", 2)
 	if err != nil {
 		t.Fatalf("lookupRecordDetail with history: %v", err)
 	}
@@ -85,13 +85,13 @@ func TestLookupRecordDetail(t *testing.T) {
 		t.Fatalf("history versions = %#v, want latest history first", history)
 	}
 
-	if _, err := lookupRecordDetailFromNetwork(state.Network, managed, "missing", 0); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(common.State.Network, managed, "missing", 0); err == nil {
 		t.Fatal("lookupRecordDetail missing record error = nil")
 	}
-	if _, err := lookupRecordDetailFromNetwork(state.Network, zone.ZonePath("missing."), "site/name", 0); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(common.State.Network, zone.ZonePath("missing."), "site/name", 0); err == nil {
 		t.Fatal("lookupRecordDetail missing zone error = nil")
 	}
-	if _, err := lookupRecordDetailFromNetwork(state.Network, managed, "site/name", -1); err == nil {
+	if _, err := lookupRecordDetailFromNetwork(common.State.Network, managed, "site/name", -1); err == nil {
 		t.Fatal("lookupRecordDetail negative history error = nil")
 	}
 }

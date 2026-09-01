@@ -64,9 +64,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 		t.Fatalf("LoadState(older disk): %v", err)
 	}
 	removeIPAMPoolForTest(olderDisk.Network, managed.Parent(), "10.0.0.0/16")
-	if err := rt.SaveState(olderDisk); err != nil {
-		t.Fatalf("SaveState(older disk): %v", err)
-	}
+	replacePersistedCommonForTest(t, rt, olderDisk)
 
 	service := newTestDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, verifiedStateForTest(committed)), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
@@ -112,9 +110,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	}), rt.Now().Add(time.Second)); err != nil {
 		t.Fatalf("withdraw committed route: %v", err)
 	}
-	if err := rt.SaveState(activeDisk); err != nil {
-		t.Fatalf("SaveState(active disk): %v", err)
-	}
+	replacePersistedCommonForTest(t, rt, activeDisk)
 
 	service := newTestDaemonService(rt, state, syncConfigFromAppConfig(rt.Config, verifiedStateForTest(state)), time.Second)
 	before := service.StateStore.Meta()
@@ -153,9 +149,7 @@ func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing
 	}), rt.Now()); err != nil {
 		t.Fatalf("apply disk assignment: %v", err)
 	}
-	if err := rt.SaveState(disk); err != nil {
-		t.Fatalf("SaveState(disk assignment): %v", err)
-	}
+	replacePersistedCommonForTest(t, rt, disk)
 
 	service := newTestDaemonService(rt, committed, syncConfigFromAppConfig(rt.Config, verifiedStateForTest(committed)), time.Second)
 	before := service.StateStore.Meta()
@@ -262,6 +256,31 @@ func applyAuthoritativeTestIntentAs(state *stateFile, managedZone zone.ZonePath,
 	}
 	state.Network = store.ReadView().State.Network
 	return nil
+}
+
+// replacePersistedCommonForTest intentionally makes the detached disk owner
+// differ from a daemon's in-memory common owner. These tests exercise that
+// conflict boundary, so write the current common schema instead of reviving
+// the legacy aggregate buckets.
+func replacePersistedCommonForTest(t *testing.T, rt *Runtime, state *stateFile) {
+	t.Helper()
+	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+	candidate, revision, _, found, err := store.LoadCommon()
+	if err != nil || !found {
+		t.Fatalf("LoadCommon = found %v err %v", found, err)
+	}
+	verified := verifiedStateForTest(state)
+	verified.TrustedRootPublicKey = append([]byte(nil), candidate.Verified.TrustedRootPublicKey...)
+	if err := store.CommitCommon(context.Background(), &corestate.CommitCandidate{
+		Verified: verified,
+		Gossip:   candidate.Gossip,
+	}, corestate.ChangeSet{VerifiedRevision: revision + 1, NetworkChanged: true}); err != nil {
+		t.Fatalf("CommitCommon: %v", err)
+	}
 }
 
 func TestUnavailableMutationControlFailsClosedWithoutDiskWrite(t *testing.T) {

@@ -57,25 +57,23 @@ func TestServiceCLIExposesTableAndLocalViews(t *testing.T) {
 }
 
 func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
-	rt, managed := buildRouteTestRuntime(t)
-	state, err := rt.LoadState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	putServiceIPAMRecord(t, state.Network.Zones[zone.RootZone], "ipam/pools/fd42::_16", routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{
-		Version: 1, Prefix: "fd42::/16", DelegatedTo: zone.RootZone, Active: true,
+	managed := zone.ZonePath("pek.catofes.")
+	rt, managed := buildRouteTestRuntimeWithNetwork(t, true, func(network *zone.NetworkState) {
+		putServiceIPAMRecord(t, network.Zones[zone.RootZone], "ipam/pools/fd42::_16", routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{
+			Version: 1, Prefix: "fd42::/16", DelegatedTo: zone.RootZone, Active: true,
+		})
+		putServiceIPAMRecord(t, network.Zones[zone.RootZone], "ipam/assignments/fd42:1::_64", routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{
+			Version: 1, Prefix: "fd42:1::/64", AssignedTo: managed, Active: true,
+		})
 	})
-	putServiceIPAMRecord(t, state.Network.Zones[zone.RootZone], "ipam/assignments/fd42:1::_64", routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{
-		Version: 1, Prefix: "fd42:1::/64", AssignedTo: managed, Active: true,
-	})
-	if err := rt.SaveState(state); err != nil {
-		t.Fatal(err)
-	}
 	if err := publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	state, _ = rt.LoadState()
-	record := state.Network.Zones[managed].Records["services/socks5"]
+	common, _, err := loadOfflineOwnerViews(rt)
+	if err != nil {
+		t.Fatalf("loadOfflineOwnerViews after publish: %v", err)
+	}
+	record := common.State.Network.Zones[managed].Records["services/socks5"]
 	parsed, err := photonservice.ParseSOCKS5Record(record)
 	if err != nil || !parsed.IsActive() || record.Version != 1 {
 		t.Fatalf("published record = %#v, parsed = %#v, error = %v", record, parsed, err)
@@ -83,8 +81,11 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	if err := withdrawSOCKS5ServiceWithRuntime(rt); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
-	state, _ = rt.LoadState()
-	record = state.Network.Zones[managed].Records["services/socks5"]
+	common, _, err = loadOfflineOwnerViews(rt)
+	if err != nil {
+		t.Fatalf("loadOfflineOwnerViews after withdraw: %v", err)
+	}
+	record = common.State.Network.Zones[managed].Records["services/socks5"]
 	parsed, err = photonservice.ParseSOCKS5Record(record)
 	if err != nil || parsed.IsActive() || record.Version != 2 {
 		t.Fatalf("withdrawn record = %#v, parsed = %#v, error = %v", record, parsed, err)

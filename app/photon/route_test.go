@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -24,15 +25,15 @@ func TestAnnounceAndWithdrawRouteDirect(t *testing.T) {
 		t.Fatalf("announceRoute failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after announce: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after announce: %v", err)
 	}
 	key, err := routing.NormalizeRouteAnnouncementKey("10.0.1.0/24")
 	if err != nil {
 		t.Fatalf("NormalizeRouteAnnouncementKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("announcement record not found at key %s", key)
 	}
@@ -57,11 +58,11 @@ func TestAnnounceAndWithdrawRouteDirect(t *testing.T) {
 		t.Fatalf("withdrawRoute failed: %v", err)
 	}
 
-	state, err = rt.LoadState()
+	common, _, err = loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState after withdraw: %v", err)
+		t.Fatalf("loadOfflineOwnerViews after withdraw: %v", err)
 	}
-	rec = state.Network.Zones[managed].Records[key]
+	rec = common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("withdrawal record not found at key %s", key)
 	}
@@ -83,15 +84,15 @@ func TestAnnounceRouteCanonicalizesPrefix(t *testing.T) {
 		t.Fatalf("announceRoute failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
 	key, err := routing.NormalizeRouteAnnouncementKey("10.0.1.1/24")
 	if err != nil {
 		t.Fatalf("NormalizeRouteAnnouncementKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("record not found at key %s", key)
 	}
@@ -130,15 +131,15 @@ func TestReannounceAfterWithdraw(t *testing.T) {
 		t.Fatalf("re-announce failed: %v", err)
 	}
 
-	state, err := rt.LoadState()
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
 	key, err := routing.NormalizeRouteAnnouncementKey(prefix)
 	if err != nil {
 		t.Fatalf("NormalizeRouteAnnouncementKey: %v", err)
 	}
-	rec := state.Network.Zones[managed].Records[key]
+	rec := common.State.Network.Zones[managed].Records[key]
 	if rec == nil {
 		t.Fatalf("record not found at key %s", key)
 	}
@@ -380,15 +381,15 @@ func TestRouteUsesSharedAssignment(t *testing.T) {
 
 func buildRouteTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildRouteTestRuntimeWithWriteCapability(t, true)
+	return buildRouteTestRuntimeWithNetwork(t, true, nil)
 }
 
 func buildRouteTestRuntimeWithoutWriteCapability(t *testing.T) (*Runtime, zone.ZonePath) {
 	t.Helper()
-	return buildRouteTestRuntimeWithWriteCapability(t, false)
+	return buildRouteTestRuntimeWithNetwork(t, false, nil)
 }
 
-func buildRouteTestRuntimeWithWriteCapability(t *testing.T, writeCap bool) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntimeWithNetwork(t *testing.T, writeCap bool, mutate func(*zone.NetworkState)) (*Runtime, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -472,23 +473,34 @@ func buildRouteTestRuntimeWithWriteCapability(t *testing.T, writeCap bool) (*Run
 	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/8", zone.RootZone)
 	addUnsignedIPAMPoolForTest(ns, zone.RootZone, "10.0.0.0/16", parent)
 	addUnsignedRouteAssignmentForTest(ns, parent, "10.0.0.0/16", managed)
+	if mutate != nil {
+		mutate(ns)
+	}
 	configureValidation(ns)
 	if err := photoncrypto.VerifyChain(ns, managed, time.Unix(1000, 0)); err != nil {
 		t.Fatalf("VerifyChain: %v", err)
-	}
-
-	state := &stateFile{
-		ManagedZone:    managed,
-		ZonePrivateKey: zonePriv,
-		Network:        ns,
 	}
 
 	config := defaultAppConfig()
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
 	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	candidate := &corestate.CommitCandidate{
+		Verified: &corestate.VerifiedState{
+			ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
+		},
+		Gossip: &corestate.GossipCheckpoint{},
+	}
+	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
+		_ = store.Close()
+		t.Fatalf("initializeLinuxState: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
 	}
 	return rt, managed
 }

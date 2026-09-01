@@ -2,15 +2,11 @@ package main
 
 import (
 	"crypto/ed25519"
-	"encoding/json"
 	"errors"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	"net"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -115,58 +111,6 @@ func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.G
 		ListenAddr: "127.0.0.1:0",
 	}
 	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config
-}
-
-func endpointRecordFromState(t *testing.T, state *stateFile, path zone.ZonePath) gossip.EndpointRecord {
-	t.Helper()
-	zs := state.Network.Zones[path]
-	if zs == nil {
-		t.Fatalf("zone %s missing", path)
-	}
-	record := zs.Records[gossip.EndpointRecordKeyUDP]
-	if record == nil {
-		t.Fatalf("endpoint record missing")
-	}
-	var er gossip.EndpointRecord
-	if err := json.Unmarshal(record.Value, &er); err != nil {
-		t.Fatalf("Unmarshal(endpoint record): %v", err)
-	}
-	return er
-}
-
-func prepareStatePersistence(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	dataDir := filepath.Join(dir, "data")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte("data_dir: "+dataDir+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(config): %v", err)
-	}
-	t.Setenv("PHOTON_CONFIG", configPath)
-}
-
-func putSignedEndpointRecord(t *testing.T, state *stateFile, ip string, port uint16, now time.Time, version uint64) {
-	t.Helper()
-	endpoints := []gossip.LocalEndpoint{
-		{IP: net.ParseIP(ip), Port: port, Scope: "global", Priority: 100, Source: gossip.SourceAdvertise},
-	}
-	record := &zone.Record{
-		Zone:      "node-b.catofes.",
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     endpointRecordBytes(endpoints, now),
-		Version:   version,
-		Timestamp: now.Unix(),
-	}
-	if err := photoncrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
-		t.Fatalf("SignRecord(endpoint): %v", err)
-	}
-	if err := state.Network.PutAt(record, now); err != nil {
-		t.Fatalf("PutAt(endpoint): %v", err)
-	}
 }
 
 func skipRestrictedSocket(t *testing.T, err error) {

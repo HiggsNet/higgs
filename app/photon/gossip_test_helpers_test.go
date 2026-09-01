@@ -26,23 +26,6 @@ func (datagram *testGossipDatagram) LocalAddr() *net.UDPAddr { return datagram.a
 func (*testGossipDatagram) SetReadDeadline(time.Time) error  { return nil }
 func (*testGossipDatagram) Close() error                     { return nil }
 
-func bindTestHostGossipTransport(t *testing.T, service *DaemonService, peerIDs ...string) *gossip.Transport {
-	t.Helper()
-	known := make(map[string]*net.UDPAddr, len(peerIDs))
-	for _, peerID := range peerIDs {
-		known[peerID] = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33435}
-	}
-	transport, err := gossip.NewTransport(gossip.Config{
-		PeerID: service.Sync.Config.PeerID, KnownPeers: known,
-		MaxMessageBytes: gossip.DefaultDatagramBudget,
-	}, &testGossipDatagram{addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	setTestGossipTransport(t, service, transport)
-	return transport
-}
-
 func setTestGossipTransport(t *testing.T, service *DaemonService, transport *gossip.Transport) {
 	t.Helper()
 	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {

@@ -252,18 +252,6 @@ func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheck
 	return out
 }
 
-func replaceTestDaemonState(store *DaemonStateStore, state *stateFile) {
-	if store == nil {
-		return
-	}
-	replacement := newTestDaemonStateStore(state)
-	store.writeMu.Lock()
-	store.common = replacement.common
-	store.runtime = replacement.runtime
-	store.writeMu.Unlock()
-	store.refreshMeta()
-}
-
 func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (uint64, bool, error) {
 	if store == nil {
 		return 0, false, fmt.Errorf("store is nil")

@@ -1087,8 +1087,20 @@ package dependency: app -> host -> gossip -> state -> zone
             daemon 恢复集成测试也通过 Store checkpoint API 注入成功同步，不再先构造 legacy `syncPeerState`。测试中的 XFRM match 与
             IPAM assign/revoke 已直接调用 `photonlinux.XFRMLinkStateMatchReason` 和正式 mutation API，删除隐藏 reason、tag/target 参数的
             一次包装；IPsec port rotate daemon event 也改用正式 `publishLocalProtocols` 初始化 common/runtime owner，不再保存、加载并
-            重塞 aggregate state。`legacy_runtime_test.go` 现只剩尚待整体迁移的 aggregate `publishIPsecRecords` 行为复刻，其调用者已
-            限定在 `ipsec_publish_test.go`，下一批按 Store commit/persistence/no-op/rotation 场景逐组改写。
+            重塞 aggregate state。`ipsec_publish_test.go` 的稳定发布、私钥落盘、字节级 no-op、旧 profile 更新、定时端口轮换、runtime
+            metadata 恢复、direct rotate 与 overlay intent 变化测试已改为真实 Bolt composition root，并统一走正式
+            `publishLocalProtocols`；harness 显式关闭独立的 endpoint protocol，避免宿主 IPv6 endpoint 在第二轮合法改变 IPsec family
+            被误判为 no-op 失败。endpoint timer role 更新和 fixed-mode direct rotate 也已退出 `Runtime.SaveState/LoadState`，该测试文件
+            不再调用旧 loader。旧 aggregate `publishIPsecRecords` 行为复刻及整个 `legacy_runtime_test.go` 已删除。route/service/record
+            普通 CLI/domain 测试的共享 fixture 也已改为直接原子初始化 common + Linux buckets，不再先写 legacy schema 再靠首次读取迁移；
+            三组测试统一从 `loadOfflineOwnerViews` 的 common owner 验证 record/version/history，service 所需初始 IPAM facts 在正式初始化前
+            注入 Network fixture，不再执行 `LoadState -> 修改 aggregate -> SaveState`。`ipam_test.go` 随后也完成相同切换：fixture 直接初始化
+            typed buckets，普通 create/assign/revoke 从 common owner 断言；owner/pool mismatch 场景通过初始化前的 Network mutator 构造，整个文件
+            不再使用 aggregate `LoadState/SaveState`。这一切换同时暴露并修正 `authoritative_mutation_test.go` 的旧测试假设：需要刻意制造
+            daemon 内存 owner 与磁盘 owner 分叉的用例，现在通过 `BoltStore.LoadCommon/CommitCommon` 写当前 schema 和推进正式 revision，不再把
+            `SaveState` 写入无消费者的 legacy buckets 后误认为改动了 daemon 持久化 owner。随后完成一次全仓库包级函数反向引用扫描，删除
+            无调用方的 route/IPAM fixture 转发壳、endpoint/persistence/gossip transport/aggregate replacement 测试 helper，以及生产中的
+            `addGossipErrorFields`、`postSyncEvent`；排除测试入口和接口方法后，当前没有只剩定义自身一次引用的未导出 Go 函数。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

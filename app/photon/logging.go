@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"log/syslog"
@@ -12,8 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 type logLevel string
@@ -322,27 +319,6 @@ func writeSyslogLine(level logLevel, line string) error {
 	default:
 		return writer.Info(line)
 	}
-}
-
-func addGossipErrorFields(fields map[string]any, err error) map[string]any {
-	if fields == nil {
-		fields = make(map[string]any)
-	}
-	var quotaErr *gossip.QuotaExceededError
-	if errors.As(err, &quotaErr) && quotaErr != nil {
-		fields["quota_requested_bytes"] = quotaErr.RequestedBytes
-		fields["quota_requested_objects"] = quotaErr.RequestedObjects
-		fields["quota_available_bytes"] = quotaErr.AvailableBytes
-		fields["quota_available_objects"] = quotaErr.AvailableObjects
-		fields["quota_byte_rate"] = quotaErr.ByteRate
-		fields["quota_byte_burst"] = quotaErr.ByteBurst
-		fields["quota_object_rate"] = quotaErr.ObjectRate
-		fields["quota_object_burst"] = quotaErr.ObjectBurst
-		if quotaErr.LastRefillUnixNano > 0 {
-			fields["quota_last_refill"] = time.Unix(0, quotaErr.LastRefillUnixNano).UTC().Format(time.RFC3339Nano)
-		}
-	}
-	return fields
 }
 
 type repeatedLogLimiter struct {

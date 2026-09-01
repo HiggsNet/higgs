@@ -138,10 +138,6 @@ func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Co
 	return err
 }
 
-func (d *DaemonService) postSyncEvent(event gossip.SyncEvent) error {
-	return d.hostRuntime.PostGossip(event)
-}
-
 func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
 	eventNow := d.Sync.now()
 	hostResult, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.currentGossipSuppressions())
