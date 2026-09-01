@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -19,11 +20,11 @@ func TestXFRMLinkStateMatchesCandidateRequiresLocalTunnelAddress(t *testing.T) {
 		InterfaceExists: true,
 		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::9999/64")},
 	}
-	if xfrmLinkStateMatchesCandidate(state, spec) {
+	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
 		t.Fatalf("candidate matched with wrong interface address")
 	}
 	state.Addresses = []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")}
-	if !xfrmLinkStateMatchesCandidate(state, spec) {
+	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); !matches {
 		t.Fatalf("candidate did not match expected interface address")
 	}
 }
@@ -41,15 +42,15 @@ func TestXFRMLinkStateMatchesCandidateRequiresKnownInterfaceFlags(t *testing.T) 
 		Multicast:       false,
 		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")},
 	}
-	if xfrmLinkStateMatchesCandidate(state, spec) {
+	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
 		t.Fatalf("candidate matched without multicast enabled")
 	}
 	state.Multicast = true
-	if !xfrmLinkStateMatchesCandidate(state, spec) {
+	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); !matches {
 		t.Fatalf("candidate did not match with expected flags and address")
 	}
 	state.InterfaceUp = false
-	if xfrmLinkStateMatchesCandidate(state, spec) {
+	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
 		t.Fatalf("candidate matched while interface was not up")
 	}
 }

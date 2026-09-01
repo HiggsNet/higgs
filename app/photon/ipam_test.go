@@ -84,7 +84,7 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 		t.Fatalf("assignment.AssignedTo = %q, want %q", assignment.AssignedTo, "node.pek.catofes.")
 	}
 
-	if err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestRevokeIPAMPoolWithoutRecordFails(t *testing.T) {
 func TestRevokeIPAMAssignmentWithoutRecordFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.2.0/24")
+	err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.2.0/24", "")
 	if err == nil {
 		t.Fatalf("revokeIPAMAssignment without record succeeded, want error")
 	}
@@ -208,13 +208,13 @@ func TestRevokeAlreadyRevokedPoolFails(t *testing.T) {
 
 func TestRevokeAlreadyRevokedAssignmentFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
-	if err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
 		t.Fatalf("first revoke failed: %v", err)
 	}
-	err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24")
+	err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", "")
 	if err == nil {
 		t.Fatalf("second revoke succeeded, want error")
 	}
@@ -266,7 +266,7 @@ func TestAssignIPAMRejectsImplicitAncestorPool(t *testing.T) {
 		t.Fatalf("SaveState: %v", err)
 	}
 
-	err = assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", managed, false)
+	err = assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, "")
 	if err == nil {
 		t.Fatalf("assignIPAMWithRuntime succeeded, want pool mismatch")
 	}
@@ -282,7 +282,7 @@ func TestListIPAMAssignments(t *testing.T) {
 	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes."); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func TestListIPAMAssignments(t *testing.T) {
 
 func TestIPAMGetExplainsPoolChainAndAssignment(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
@@ -364,7 +364,7 @@ func TestIPAMGetReportsUnassignedAddress(t *testing.T) {
 
 func TestIPAMGetReportsSharedAssignment(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.3.0/24", "node.pek.catofes.", true); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.3.0/24", "node.pek.catofes.", true, ""); err != nil {
 		t.Fatalf("assignIPAM shared failed: %v", err)
 	}
 
@@ -397,10 +397,10 @@ func TestBuildIPAMMineReport(t *testing.T) {
 	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", managed); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", managed, false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, ""); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.2.0/24", "node.pek.catofes.", false); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.2.0/24", "node.pek.catofes.", false, ""); err != nil {
 		t.Fatalf("assignIPAM other failed: %v", err)
 	}
 
@@ -454,7 +454,7 @@ func TestBuildIPAMMineReport(t *testing.T) {
 func TestSharedAssignmentRoundTrip(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := assignIPAMWithRuntime(rt, managed, "10.0.1.0/24", "node.pek.catofes.", true); err != nil {
+	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", true, ""); err != nil {
 		t.Fatalf("assignIPAM shared failed: %v", err)
 	}
 
@@ -480,7 +480,7 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 	}
 
 	// Revoke and verify Shared flag is preserved in the revocation record.
-	if err := revokeIPAMAssignmentWithRuntime(rt, managed, "10.0.1.0/24"); err != nil {
+	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 

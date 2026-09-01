@@ -344,7 +344,7 @@ func (d *observedIPsecDriver) FilterSAsWithMissingLinks(ctx context.Context, des
 		if err != nil {
 			return nil, nil, err
 		}
-		if xfrmLinkStateMatchesCandidate(state, spec) {
+		if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
 			continue
 		}
 		missing[ipsec.LinkInstanceID(spec)] = spec

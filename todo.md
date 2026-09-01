@@ -1084,7 +1084,11 @@ package dependency: app -> host -> gossip -> state -> zone
             daemon/controller 行为测试依赖 aggregate checkpoint 逆投影，也不能把兼容 helper 移回生产代码。peer lifecycle 单元 fixture
             已直接改成 `VerifiedState + GossipCheckpoint + linuxRuntimeState`，删除 `derivePeerStatus(stateFile)`、
             `peerLifecycleCleanupZones` 和 `testGossipCheckpointFromLegacyPeers`；offline/revoked cleanup 测试直接修改 checkpoint/runtime owner，
-            daemon 恢复集成测试也通过 Store checkpoint API 注入成功同步，不再先构造 legacy `syncPeerState`。
+            daemon 恢复集成测试也通过 Store checkpoint API 注入成功同步，不再先构造 legacy `syncPeerState`。测试中的 XFRM match 与
+            IPAM assign/revoke 已直接调用 `photonlinux.XFRMLinkStateMatchReason` 和正式 mutation API，删除隐藏 reason、tag/target 参数的
+            一次包装；IPsec port rotate daemon event 也改用正式 `publishLocalProtocols` 初始化 common/runtime owner，不再保存、加载并
+            重塞 aggregate state。`legacy_runtime_test.go` 现只剩尚待整体迁移的 aggregate `publishIPsecRecords` 行为复刻，其调用者已
+            限定在 `ipsec_publish_test.go`，下一批按 Store commit/persistence/no-op/rotation 场景逐组改写。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

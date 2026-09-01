@@ -119,27 +119,18 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+	driver := &countingIPsecDriver{}
+	service := newTestDaemonService(rt, state, config, time.Second)
+	installTestIPsecDrivers(service, driver, driver)
+	if _, err := service.publishLocalProtocols(false); err != nil {
+		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	sr := newSyncRuntime(config, nil, rt)
-	if err := sr.publishIPsecRecords(state); err != nil {
-		t.Fatalf("publishIPsecRecords: %v", err)
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState(published ports): %v", err)
-	}
-	first, err := ipsec.ParsePortRecord(state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	published := service.StateStore.common.ReadView()
+	first, err := ipsec.ParsePortRecord(published.State.Network.Zones[published.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
 	}
-	latest, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState: %v", err)
-	}
-	driver := &countingIPsecDriver{}
-	service := newTestDaemonService(rt, latest, config, time.Second)
-	installTestIPsecDrivers(service, driver, driver)
+	driver.listCalls = 0
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
 

@@ -1,11 +1,6 @@
 package main
 
-import (
-	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
-)
+import corestate "github.com/HiggsNet/photon/pkg/core/state"
 
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 	plan, err := sr.ipsecProtocolPlan(verifiedStateForTest(state), linuxRuntimeStateFromLegacy(state))
@@ -42,17 +37,4 @@ func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {
 		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": state.ManagedZone})
 	}
 	return nil
-}
-
-func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
-	matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec)
-	return matches
-}
-
-func assignIPAMWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool) error {
-	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, "")
-}
-
-func revokeIPAMAssignmentWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
-	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, "")
 }
