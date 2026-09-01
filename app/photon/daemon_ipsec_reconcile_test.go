@@ -376,15 +376,16 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	snapshot, rev := snapshotTestDaemonState(service.StateStore)
+	common, runtime := service.StateStore.readCommonAndRuntime()
+	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
-	if len(snapshot.LinkInstances) != 0 {
-		t.Fatalf("link instances = %+v, want stale result discarded", snapshot.LinkInstances)
+	if len(runtime.LinkInstances) != 0 {
+		t.Fatalf("link instances = %+v, want stale result discarded", runtime.LinkInstances)
 	}
-	if snapshot.IPsecReconcile != nil {
-		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", snapshot.IPsecReconcile)
+	if runtime.IPsecReconcile != nil {
+		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", runtime.IPsecReconcile)
 	}
 }
 

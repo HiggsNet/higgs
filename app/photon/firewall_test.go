@@ -919,12 +919,13 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	snapshot, rev := snapshotTestDaemonState(service.StateStore)
+	common, runtime := service.StateStore.readCommonAndRuntime()
+	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
-	if snapshot.FirewallReconcile != nil {
-		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", snapshot.FirewallReconcile)
+	if runtime.FirewallReconcile != nil {
+		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", runtime.FirewallReconcile)
 	}
 }
 
@@ -967,11 +968,11 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if snapshot.FirewallReconcile == nil || snapshot.FirewallReconcile.Instances["photontesth2"] == nil {
-		t.Fatalf("firewall reconcile state missing after recover: %+v", snapshot.FirewallReconcile)
+	_, runtime := service.StateStore.readCommonAndRuntime()
+	if runtime.FirewallReconcile == nil || runtime.FirewallReconcile.Instances["photontesth2"] == nil {
+		t.Fatalf("firewall reconcile state missing after recover: %+v", runtime.FirewallReconcile)
 	}
-	entry := snapshot.FirewallReconcile.Instances["photontesth2"]
+	entry := runtime.FirewallReconcile.Instances["photontesth2"]
 	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
 		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}

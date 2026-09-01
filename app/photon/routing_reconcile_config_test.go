@@ -288,12 +288,12 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !meta.Dirty.Routing {
 		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if len(snapshot.BirdInstances) != 0 {
-		t.Fatalf("bird instances = %+v, want stale result discarded", snapshot.BirdInstances)
+	_, runtime := service.StateStore.readCommonAndRuntime()
+	if len(runtime.BirdInstances) != 0 {
+		t.Fatalf("bird instances = %+v, want stale result discarded", runtime.BirdInstances)
 	}
-	if snapshot.RoutingReconcile != nil {
-		t.Fatalf("routing reconcile = %+v, want stale summary discarded", snapshot.RoutingReconcile)
+	if runtime.RoutingReconcile != nil {
+		t.Fatalf("routing reconcile = %+v, want stale summary discarded", runtime.RoutingReconcile)
 	}
 	logOutput := logs.String()
 	if !strings.Contains(logOutput, "event=stale_reconcile_result") ||

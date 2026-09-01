@@ -27,7 +27,6 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	rev := uint64(common.Revision)
 	verified := common.State
-	peers := syncPeerReadView(common.Gossip)
 	groups := append([]ipsec.LinkGroupSpec(nil), d.Sync.App.Config.IPsec.LinkGroups...)
 	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
 		return nil
@@ -41,7 +40,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			Now:                 now,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, peers, now, d.Sync.App.Config.PeerLifecycle),
+			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, common.Gossip, now, d.Sync.App.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -84,7 +83,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		Instances:             instances,
 		SAs:                   sas,
 		Now:                   now,
-		Revoked:               revokedLinkPeers(verified.Network, runtime.LinkInstances, peers, now),
+		Revoked:               revokedLinkPeers(verified.Network, runtime.LinkInstances, common.Gossip, now),
 		Roles:                 plan.Roles,
 		GroupSpecs:            groupSpecMap(groups),
 		GroupBackoff:          groupBackoffMap(groups),
@@ -789,11 +788,11 @@ func formatStateAddr(addr netip.Addr) string {
 	return addr.String()
 }
 
-func revokedLinkPeers(network *zone.NetworkState, instances map[string]linkInstanceState, peers map[string]syncPeerState, now time.Time) map[zone.ZonePath]bool {
+func revokedLinkPeers(network *zone.NetworkState, instances map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
 	// Phase 6.4.5: use the comprehensive revoked peer zone collector that
-	// covers both LinkInstances and SyncPeers, so that revocation is detected
+	// covers both LinkInstances and gossip checkpoint peers, so that revocation is detected
 	// even for peers that don't have an active link instance yet.
-	return collectRevokedPeerZones(network, instances, peers, now)
+	return collectRevokedPeerZones(network, instances, checkpoint, now)
 }
 
 func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *ipsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {

@@ -630,7 +630,8 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if state.Admission != nil {
 		t.Fatal("prepareStartupState mutated the detached constructor input")
 	}
-	committed, rev := snapshotTestDaemonState(service.StateStore)
+	common, committed := service.StateStore.readCommonAndRuntime()
+	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
 	}

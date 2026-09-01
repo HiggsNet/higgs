@@ -139,9 +139,9 @@ func hasPeerIPsecRecords(zs *zone.ZoneState) bool {
 }
 
 // collectRevokedPeerZones returns the set of peer zones that are currently
-// revoked, expanded from LinkInstances and SyncPeers. This is used to feed
+// revoked, expanded from LinkInstances and gossip checkpoint peers. This is used to feed
 // the revoked set into IPsec/routing/firewall reconcile.
-func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]linkInstanceState, peers map[string]syncPeerState, now time.Time) map[zone.ZonePath]bool {
+func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
 	out := make(map[zone.ZonePath]bool)
 	if network == nil {
 		return out
@@ -151,10 +151,12 @@ func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]li
 			out[inst.PeerZone] = true
 		}
 	}
-	for peerID := range peers {
-		zp := zone.ZonePath(peerID)
-		if network.IsZoneRevoked(zp, now) {
-			out[zp] = true
+	if checkpoint != nil {
+		for peerID := range checkpoint.Peers {
+			zp := zone.ZonePath(peerID)
+			if network.IsZoneRevoked(zp, now) {
+				out[zp] = true
+			}
 		}
 	}
 	return out

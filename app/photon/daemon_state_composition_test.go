@@ -44,8 +44,8 @@ func TestComposedDaemonStateStoreAppliesCommonIntentAndRefreshesReadView(t *test
 	if preview.Committed || store.Meta().Revision != 0 {
 		t.Fatalf("preview/meta = %+v/%+v", preview, store.Meta())
 	}
-	before, _ := snapshotTestDaemonState(store)
-	if _, ok := before.Network.Zones[managed].Records["apps/composed"]; ok {
+	before := store.common.ReadView()
+	if _, ok := before.State.Network.Zones[managed].Records["apps/composed"]; ok {
 		t.Fatal("preview appeared in composed read view")
 	}
 
@@ -56,11 +56,11 @@ func TestComposedDaemonStateStoreAppliesCommonIntentAndRefreshesReadView(t *test
 	if !result.Committed || result.Record == nil || result.Record.Version != 1 || store.Meta().Revision != 1 {
 		t.Fatalf("commit/meta = %+v/%+v", result, store.Meta())
 	}
-	after, _ := snapshotTestDaemonState(store)
-	if after.Network.Zones[managed].Records["apps/composed"] == nil {
-		t.Fatal("committed record missing from composed read view")
+	after, runtime := store.readCommonAndRuntime()
+	if after.State.Network.Zones[managed].Records["apps/composed"] == nil {
+		t.Fatal("committed record missing from common owner")
 	}
-	if after.EndpointACLs["admin"].Name != "admin" {
+	if runtime.EndpointACLs["admin"].Name != "admin" {
 		t.Fatal("common refresh discarded Linux runtime state")
 	}
 }
@@ -76,9 +76,9 @@ func TestComposedDaemonStateStorePersistenceFailureDoesNotRefresh(t *testing.T) 
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ApplyCommonLocalIntent error = %v", err)
 	}
-	after, _ := snapshotTestDaemonState(store)
-	if store.Meta().Revision != 0 || after.Network.Zones[managed].Records["apps/rejected"] != nil {
-		t.Fatalf("failed persistence changed composed view: revision=%d", store.Meta().Revision)
+	after := store.common.ReadView()
+	if store.Meta().Revision != 0 || after.State.Network.Zones[managed].Records["apps/rejected"] != nil {
+		t.Fatalf("failed persistence changed common owner: revision=%d", store.Meta().Revision)
 	}
 }
 
@@ -93,9 +93,9 @@ func TestComposedDaemonStateStoreCheckpointRefreshDoesNotAdvanceVerifiedRevision
 	if !result.Committed || result.Changes.VerifiedRevision != 0 || store.Meta().Revision != 0 {
 		t.Fatalf("checkpoint result/meta = %+v/%+v", result, store.Meta())
 	}
-	view, _ := snapshotTestDaemonState(store)
-	if got := view.SyncPeers["peer.catofes."].BackoffUntilUnix; got != 42 {
-		t.Fatalf("composed checkpoint backoff = %d", got)
+	view := store.common.ReadView()
+	if got := view.Gossip.Peers["peer.catofes."].BackoffUntilUnix; got != 42 {
+		t.Fatalf("checkpoint backoff = %d", got)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 	if revision, committed, err := store.commitRoutingIfRevision(0, nil, reconcile); err != nil || !committed || revision != 0 {
 		t.Fatalf("routing runtime commit = revision %d committed %v err %v", revision, committed, err)
 	}
-	after, _ := snapshotTestDaemonState(store)
+	_, after := store.readCommonAndRuntime()
 	if after.RoutingReconcile == nil || after.RoutingReconcile.LastError != "planned" || store.Meta().Revision != 0 {
 		t.Fatalf("published runtime/meta = %+v/%+v", after.RoutingReconcile, store.Meta())
 	}
@@ -142,7 +142,7 @@ func TestComposedDaemonStateStoreRuntimePersistenceFailureDoesNotPublish(t *test
 	if !errors.Is(err, wantErr) || committed {
 		t.Fatalf("runtime failure = committed %v err %v", committed, err)
 	}
-	after, _ := snapshotTestDaemonState(store)
+	_, after := store.readCommonAndRuntime()
 	if _, ok := after.EndpointACLs["blocked"]; ok {
 		t.Fatal("failed runtime persistence published candidate")
 	}

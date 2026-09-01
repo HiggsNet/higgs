@@ -8,6 +8,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -28,13 +29,19 @@ func newTestObserverServer() *observerServer {
 	return newObserverServer(d, cfg)
 }
 
-func updateTestObserverState(srv *observerServer, fn func(*stateFile)) {
+func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState)) {
 	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
 		return
 	}
-	state, _ := snapshotTestDaemonState(srv.daemon.StateStore)
-	fn(state)
-	replaceTestDaemonState(srv.daemon.StateStore, state)
+	common, runtime := srv.daemon.StateStore.readCommonAndRuntime()
+	fn(common.State, common.Gossip, runtime)
+	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
+	srv.daemon.StateStore.writeMu.Lock()
+	srv.daemon.StateStore.common = store
+	srv.daemon.StateStore.runtime = runtime
+	srv.daemon.StateStore.writeMu.Unlock()
+	srv.daemon.StateStore.refreshMeta()
+	srv.daemon.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
 }
 
 func newTestStateFile() *stateFile {

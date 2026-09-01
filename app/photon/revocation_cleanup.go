@@ -17,10 +17,10 @@ import (
 // The impact includes:
 //   - The revoked zone and its descendant subtree (zones under the revoked path)
 //   - LinkInstances whose peer zone is in the subtree
-//   - SyncPeers entries whose peer ID maps to a revoked zone
+//   - Gossip checkpoint entries whose peer ID maps to a revoked zone
 //   - Bootstrap peers that are configured but now revoked
 //   - IPAM prefixes assigned to revoked zones (from route authorization errors)
-func ComputeRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, peers map[string]syncPeerState, revokedZone zone.ZonePath, now time.Time) inspect.RevocationImpact {
+func ComputeRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, revokedZone zone.ZonePath, now time.Time) inspect.RevocationImpact {
 	impact := inspect.RevocationImpact{
 		RevokedZone: revokedZone,
 		Layers:      make(map[string]*inspect.RevocationLayerStatus),
@@ -53,11 +53,13 @@ func ComputeRevocationImpact(network *zone.NetworkState, links map[string]linkIn
 	}
 	sort.Strings(impact.AffectedLinkInstances)
 
-	// Affected SyncPeers.
-	for peerID := range peers {
-		zp := zone.ZonePath(peerID)
-		if revokedSet[zp] {
-			impact.AffectedSyncPeers = append(impact.AffectedSyncPeers, peerID)
+	// Affected gossip checkpoint peers.
+	if checkpoint != nil {
+		for peerID := range checkpoint.Peers {
+			zp := zone.ZonePath(peerID)
+			if revokedSet[zp] {
+				impact.AffectedSyncPeers = append(impact.AffectedSyncPeers, peerID)
+			}
 		}
 	}
 	inspect.SortZoneStrings(impact.AffectedSyncPeers)
@@ -119,19 +121,21 @@ func isConfiguredBootstrapPeerWithConfig(config *syncConfigFile, peerID string) 
 
 // peerNeedsRevocationCleanup reports whether the typed checkpoint cleanup
 // would change the runtime-owned fields of one peer.
-func peerNeedsRevocationCleanup(peer syncPeerState) bool {
-	return peer.DiscoveredAddr != "" ||
+func peerNeedsRevocationCleanup(peer corestate.PeerCheckpoint) bool {
+	return peer.DiscoveredEndpoint != "" ||
 		peer.DiscoveredAtUnix != 0 ||
-		peer.ObservedAddr != "" ||
+		peer.ObservedEndpoint != "" ||
 		peer.ObservedFirstSeenUnix != 0 ||
 		peer.ObservedLastSeenUnix != 0 ||
 		peer.ObservedLastSyncUnix != 0 ||
 		peer.ObservedUntilUnix != 0 ||
 		peer.ObservedFailureCount != 0 ||
-		peer.ObservedGraceAddrs != nil ||
+		peer.ObservedGraceEndpoints != nil ||
 		peer.BackoffUntilUnix != 0 ||
 		peer.FailureCount != 0 ||
-		peer.LastError != "zone revoked"
+		peer.LastFailure == nil ||
+		peer.LastFailure.Code != corestate.PeerFailureLegacy ||
+		peer.LastFailure.Message != "zone revoked"
 }
 
 func collectAllRevokedZones(network *zone.NetworkState, now time.Time) map[zone.ZonePath]bool {
@@ -190,7 +194,7 @@ func mergePurgePlan(common corestate.PurgeRevokedPlan, runtime *linuxRuntimeStat
 
 // AllRevocationImpact computes impact for all currently-revoked zones and
 // returns a combined result for debug/diagnostic output.
-func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, peers map[string]syncPeerState, config *syncConfigFile, now time.Time) []inspect.RevocationImpact {
+func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, config *syncConfigFile, now time.Time) []inspect.RevocationImpact {
 	if network == nil {
 		return nil
 	}
@@ -206,7 +210,7 @@ func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstan
 	inspect.SortZonePaths(zones)
 	var out []inspect.RevocationImpact
 	for _, z := range zones {
-		impact := ComputeRevocationImpact(network, links, peers, z, now)
+		impact := ComputeRevocationImpact(network, links, checkpoint, z, now)
 		// Supplement configured_but_revoked with actual config.
 		if config != nil {
 			if isConfiguredBootstrapPeerWithConfig(config, string(z)) {

@@ -29,8 +29,23 @@ func (d *DaemonService) currentState() *stateFile {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	state, _ := snapshotTestDaemonState(d.StateStore)
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	if common.State == nil {
+		return nil
+	}
+	state := composeLinuxStateView(common, runtime)
 	return state
+}
+
+func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
+	if store == nil || fn == nil {
+		return
+	}
+	common, runtime := store.readCommonAndRuntime()
+	if common.State == nil {
+		return
+	}
+	fn(composeLinuxStateView(common, runtime))
 }
 
 func (sr *SyncRuntime) publishIPsecRecords(state *stateFile) error {

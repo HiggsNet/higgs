@@ -1057,7 +1057,6 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "revocation_view":
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
-		peers := syncPeerReadView(view.Gossip)
 		d.StateStore.mu.RLock()
 		if view.State == nil || d.StateStore.runtime == nil {
 			d.StateStore.mu.RUnlock()
@@ -1067,9 +1066,9 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		var impacts []inspect.RevocationImpact
 		if request.Zone != "" {
-			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, zone.ZonePath(request.Zone), d.Sync.now())}
+			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, zone.ZonePath(request.Zone), d.Sync.now())}
 		} else {
-			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, peers, d.Sync.Config, d.Sync.now())
+			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, d.Sync.Config, d.Sync.now())
 		}
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
@@ -1771,10 +1770,12 @@ func (d *DaemonService) flushRevocationCleanup() {
 		return
 	}
 	needsStateCleanup := false
-	for peerID, peer := range syncPeerReadView(view.Gossip) {
-		if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
-			needsStateCleanup = true
-			break
+	if view.Gossip != nil {
+		for peerID, peer := range view.Gossip.Peers {
+			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
+				needsStateCleanup = true
+				break
+			}
 		}
 	}
 	d.noteReconcileFlush("revocation_cleanup")

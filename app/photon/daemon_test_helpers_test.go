@@ -191,14 +191,6 @@ func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {
 	return store
 }
 
-func snapshotTestDaemonState(store *DaemonStateStore) (*stateFile, uint64) {
-	common, runtime := store.readCommonAndRuntime()
-	if common.State == nil {
-		return nil, 0
-	}
-	return composeLinuxStateView(common, runtime), uint64(common.Revision)
-}
-
 func buildSignedRecordAt(state *stateFile, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
 	configureValidation(state.Network)
 	zs := state.Network.Zones[path]
@@ -251,6 +243,10 @@ func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheck
 		projected, _ := projectLegacyGossipCheckpoint(map[string]syncPeerState{"fixture-peer.invalid.": peer})
 		if checkpoint, ok := projected.Peers["fixture-peer.invalid."]; ok {
 			out.Peers[peerID] = checkpoint
+		} else {
+			// Preserve membership even when the legacy entry contains no hints;
+			// several migration tests exercise presence-only peer cleanup.
+			out.Peers[peerID] = corestate.PeerCheckpoint{}
 		}
 	}
 	return out
@@ -268,30 +264,22 @@ func replaceTestDaemonState(store *DaemonStateStore, state *stateFile) {
 	store.refreshMeta()
 }
 
-func readCommittedForTest(store *DaemonStateStore, fn func(*stateFile)) {
-	if store == nil || fn == nil {
-		return
-	}
-	state, _ := snapshotTestDaemonState(store)
-	fn(state)
-}
-
 func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (uint64, bool, error) {
 	if store == nil {
 		return 0, false, fmt.Errorf("store is nil")
 	}
-	_, revision := snapshotTestDaemonState(store)
+	revision := uint64(store.common.VerifiedRevision())
 	return store.commitRuntimeIfRevision(revision, fn)
 }
 
 func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64, error) {
-	state, _ := snapshotTestDaemonState(store)
-	if state == nil {
+	view := store.common.ReadView()
+	if view.State == nil {
 		return 0, fmt.Errorf("state is nil")
 	}
-	path := state.ManagedZone
-	for candidate, zs := range state.Network.Zones {
-		if zs != nil && authorityHasPrivateKey(zs.Authority, state.ZonePrivateKey) {
+	path := view.State.ManagedZone
+	for candidate, zs := range view.State.Network.Zones {
+		if zs != nil && authorityHasPrivateKey(zs.Authority, view.State.IdentityPrivateKey) {
 			path = candidate
 			break
 		}

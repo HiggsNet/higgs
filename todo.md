@@ -1062,6 +1062,19 @@ package dependency: app -> host -> gossip -> state -> zone
           - `buildFirewallDebugView`、`buildBabelDebugView`、`buildStoredLinkInspection` 暂不按“重复构建”删除：它们目前负责把 Linux 私有
             config/controller runtime 转成 platform-neutral inspect DTO，属于真实平台边界；应随 Linux runtime typed observation 下沉，
             不能为了减少函数数量让 `internal/inspect` 反向依赖 app 私有类型。
+          - IPsec planner、peer lifecycle cleanup、revocation inspection/cleanup 已直接读取 `GossipCheckpoint`，删除生产
+            `syncPeerReadView` 和 `linux_state_view.go`；`syncPeerState` 现只属于旧 schema DTO、单向迁移、数据库 dump 与 legacy test fixture，
+            不再作为在线 planner/inspect 输入。checkpoint 的 `LastFailure` 清理判定使用 typed code/message，不再先转成字符串 error。
+          - 清理 `state_clone.go` 时必须区分两类 clone：`cloneSyncPeerState/cloneSyncPeers` 随 aggregate `stateFile` 和 legacy 普通测试
+            调用方清零后删除；`cloneLinuxRuntimeState` 当前承担 DaemonStateStore copy-on-write candidate、持久化前 detached snapshot 和
+            offline owner view 的真实隔离，不能直接删除。待 Linux runtime state owner 下沉后审计每个调用方：多余 startup/offline clone
+            删除，仍需要的 snapshot/candidate deep-copy 迁入 Linux owner 私有实现，不继续留在 `app/photon`。
+          - aggregate snapshot 测试审计继续推进：删除只验证兼容拼装自身的 `linux_state_view_test.go`；daemon state composition、
+            authoritative mutation、route auto-announce、revocation、startup authority、routing/BIRD、firewall、IPsec 与 daemon event 测试
+            已直接断言 common View 或 Linux runtime snapshot。observer fixture 也已改为显式接收
+            `VerifiedState + GossipCheckpoint + linuxRuntimeState`，通用 `snapshotTestDaemonState` 删除；aggregate 重组只保留在
+            `legacy_runtime_test.go` 的 `currentState/readCommittedForTest`。首批单点 common/Linux 调用迁移后，`currentState()` 间接读取
+            从 97 处降至 91 处；下一批按 controller 文件分组继续拆除，不能把这些兼容 helper 移回生产代码。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

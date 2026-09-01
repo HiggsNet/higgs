@@ -18,6 +18,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/observability"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -29,9 +30,9 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
 	ns.Zones["node-a.catofes."].Records["site/name"] = &zone.Record{Key: "site/name"}
 	ns.Zones["branch.node-a.catofes."] = zone.NewZoneState("branch.node-a.catofes.", nil)
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.ManagedZone = "node-a.catofes."
-		state.Network = ns
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		verified.ManagedZone = "node-a.catofes."
+		verified.Network = ns
 	})
 
 	control := controlViewRequestViaPipe[[]inspect.ZoneDetail](t, srv.daemon, controlRequest{Method: "zones_view"})
@@ -70,8 +71,8 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	srv := newTestObserverServer()
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.SyncPeers["peer-a.catofes."] = syncPeerState{
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		checkpoint.Peers["peer-a.catofes."] = corestate.PeerCheckpoint{
 			LastSyncUnix: 123,
 			FailureCount: 2,
 		}
@@ -169,8 +170,8 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", authority)
 	zs.Records["identity"] = active
 	zs.RecordHistory["identity"] = []*zone.Record{old}
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		verified.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
 			"node-a.catofes.": zs,
 		}}
 	})
@@ -258,16 +259,20 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		t.Fatalf("SignRecord(endpoint): %v", err)
 	}
 	zs.Records[gossip.EndpointRecordKeyUDP] = endpointRecord
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.Network = zone.NewNetworkState()
-		state.Network.Zones["node-b.catofes."] = zs
-		state.SyncPeers["node-b.catofes."] = syncPeerState{
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		verified.Network = zone.NewNetworkState()
+		verified.Network.Zones["node-b.catofes."] = zs
+		checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
 			LastSyncUnix:       900,
 			LastRelayUnix:      920,
-			DiscoveredAddr:     "203.0.113.20:33434",
-			ObservedAddr:       "198.51.100.9:33434",
-			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "198.51.100.8:33434", UntilUnix: 1100}},
-			RejectedDigests:    map[string]rejectedDigestState{"bad": {Zone: "node-b.catofes.", Reason: "verify_failed"}},
+			DiscoveredEndpoint: "203.0.113.20:33434",
+			ObservedEndpoint:   "198.51.100.9:33434",
+			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{{
+				Endpoint: "198.51.100.8:33434", UntilUnix: 1100,
+			}},
+			RejectedObjects: map[zone.ZonePath]corestate.RejectedObject{
+				"node-b.catofes.": {Reason: "verify_failed"},
+			},
 		}
 	})
 	srv.daemon.hostRuntime.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
@@ -333,11 +338,11 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.ManagedZone = "node-a.catofes."
-		state.Network = zone.NewNetworkState()
-		addObserverEndpointZone(t, state.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
-		addObserverEndpointZone(t, state.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		verified.ManagedZone = "node-a.catofes."
+		verified.Network = zone.NewNetworkState()
+		addObserverEndpointZone(t, verified.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
+		addObserverEndpointZone(t, verified.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
@@ -373,13 +378,13 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	now := time.Unix(1000, 0)
 	srv.daemon.Sync.App.Clock = func() time.Time { return now }
 	srv.daemon.Sync.Config.PeerID = "node-a.catofes."
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.ManagedZone = "node-a.catofes."
-		state.Network = zone.NewNetworkState()
-		addObserverEndpointZone(t, state.Network, "zeta.other.", "127.0.0.1", 33439, now)
-		addObserverEndpointZone(t, state.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
-		addObserverEndpointZone(t, state.Network, "alpha.catofes.", "127.0.0.1", 33436, now)
-		addObserverEndpointZone(t, state.Network, "branch.alpha.catofes.", "127.0.0.1", 33437, now)
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		verified.ManagedZone = "node-a.catofes."
+		verified.Network = zone.NewNetworkState()
+		addObserverEndpointZone(t, verified.Network, "zeta.other.", "127.0.0.1", 33439, now)
+		addObserverEndpointZone(t, verified.Network, "node-b.catofes.", "127.0.0.1", 33435, now)
+		addObserverEndpointZone(t, verified.Network, "alpha.catofes.", "127.0.0.1", 33436, now)
+		addObserverEndpointZone(t, verified.Network, "branch.alpha.catofes.", "127.0.0.1", 33437, now)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
@@ -439,8 +444,8 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		},
 	}
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.LinkInstances = map[string]linkInstanceState{
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
+		runtime.LinkInstances = map[string]linkInstanceState{
 			"link-1": {
 				ID:              "link-1",
 				GroupID:         "blue",
@@ -454,7 +459,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				InitiatorRole:   "primary",
 			},
 		}
-		state.IPsecReconcile = &ipsecReconcileState{
+		runtime.IPsecReconcile = &ipsecReconcileState{
 			LastRunUnix:  123,
 			DesiredLinks: 1,
 			Desired: []desiredLinkState{{
@@ -477,7 +482,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				RemoteIdentity: "node-b.catofes.",
 			}},
 		}
-		state.BirdInstances = map[string]*BirdInstanceState{
+		runtime.BirdInstances = map[string]*BirdInstanceState{
 			"phx-blue": {State: "running"},
 		}
 	})
@@ -517,8 +522,8 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	srv := newTestObserverServer()
-	updateTestObserverState(srv, func(state *stateFile) {
-		state.LinkInstances = map[string]linkInstanceState{
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
+		runtime.LinkInstances = map[string]linkInstanceState{
 			"link-1": {
 				ID:            "link-1",
 				GroupID:       "blue",
@@ -528,7 +533,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 				Endpoint:      "198.51.100.10:4500",
 			},
 		}
-		state.IPsecReconcile = &ipsecReconcileState{
+		runtime.IPsecReconcile = &ipsecReconcileState{
 			Desired: []desiredLinkState{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",

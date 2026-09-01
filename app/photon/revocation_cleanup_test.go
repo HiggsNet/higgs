@@ -88,7 +88,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), "node-b.catofes.", now)
 	if impact.RevokedZone != "node-b.catofes." {
 		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
 	}
@@ -153,7 +153,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), "node-b.catofes.", now)
 	// The leaf should be in the subtree.
 	found := slices.Contains(impact.RevokedSubtree, leafZone)
 	if !found {
@@ -376,8 +376,8 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 	}
 	state.Unlock()
 
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if got := snapshot.SyncPeers["node-b.catofes."].DiscoveredAddr; got != "" {
+	view := service.StateStore.common.ReadView()
+	if got := view.Gossip.Peers["node-b.catofes."].DiscoveredEndpoint; got != "" {
 		t.Fatalf("committed discovered addr = %q, want cleared", got)
 	}
 	if _, ok := service.hostRuntime.Observability.Snapshot("node-b.catofes.", now); ok {
@@ -401,7 +401,7 @@ func TestAllRevocationImpact(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, nil, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), nil, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}
@@ -415,7 +415,7 @@ func TestAllRevocationImpactEmpty(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	now := time.Unix(4140, 0)
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, nil, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), nil, now)
 	if impacts != nil {
 		t.Fatalf("expected nil impacts, got %d", len(impacts))
 	}
@@ -691,7 +691,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		},
 	}
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, state.SyncPeers, config, now)
+	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), config, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}

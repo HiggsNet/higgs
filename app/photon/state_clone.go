@@ -4,6 +4,32 @@ import (
 	"maps"
 )
 
+func cloneLinuxRuntimeState(runtime *linuxRuntimeState) *linuxRuntimeState {
+	if runtime == nil {
+		return &linuxRuntimeState{}
+	}
+	return &linuxRuntimeState{
+		IdentityKeyPath:   runtime.IdentityKeyPath,
+		PeerCleanups:      clonePeerCleanups(runtime.PeerCleanups),
+		IPsecTransportKey: cloneIPsecTransportKeyState(runtime.IPsecTransportKey),
+		IPsecPortRecord:   cloneIPsecPortRecordState(runtime.IPsecPortRecord),
+		LinkInstances:     cloneLinkInstances(runtime.LinkInstances),
+		IPsecReconcile:    cloneIPsecReconcileState(runtime.IPsecReconcile),
+		RoutingReconcile:  cloneRoutingReconcileState(runtime.RoutingReconcile),
+		FirewallReconcile: cloneFirewallReconcileState(runtime.FirewallReconcile),
+		EndpointACLs:      cloneEndpointACLs(runtime.EndpointACLs),
+		BirdInstances:     cloneBirdInstances(runtime.BirdInstances),
+		Admission:         cloneAdmissionState(runtime.Admission),
+	}
+}
+
+func clonePeerCleanups(in map[string]peerLifecycleCleanupState) map[string]peerLifecycleCleanupState {
+	if in == nil {
+		return nil
+	}
+	return maps.Clone(in)
+}
+
 func cloneRoutingReconcileState(in *routingReconcileState) *routingReconcileState {
 	if in == nil {
 		return nil

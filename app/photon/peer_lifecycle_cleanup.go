@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -14,7 +15,7 @@ const (
 	peerCleanupReasonRevoked = "zone_revoked"
 )
 
-func peerLifecycleLastActiveUnix(peer syncPeerState) int64 {
+func peerLifecycleLastActiveUnix(peer corestate.PeerCheckpoint) int64 {
 	lastActive := peer.LastSyncUnix
 	if peer.ObservedLastSeenUnix > 0 && peer.ObservedLastSeenUnix > lastActive {
 		lastActive = peer.ObservedLastSeenUnix
@@ -22,7 +23,7 @@ func peerLifecycleLastActiveUnix(peer syncPeerState) int64 {
 	return lastActive
 }
 
-func peerLifecycleCleanupDue(peer syncPeerState, now time.Time, cfg inspect.PeerLifecycleConfig) bool {
+func peerLifecycleCleanupDue(peer corestate.PeerCheckpoint, now time.Time, cfg inspect.PeerLifecycleConfig) bool {
 	lastActive := peerLifecycleLastActiveUnix(peer)
 	if lastActive == 0 {
 		return false
@@ -34,16 +35,18 @@ func peerLifecycleCleanupDue(peer syncPeerState, now time.Time, cfg inspect.Peer
 // peerLifecycleExcludedPeers returns local data-plane suppressions. A marked
 // peer remains available to gossip so a successful sync can clear the marker,
 // but IPsec must not recreate its owner-managed link from stale Zone records.
-func peerLifecycleExcludedPeers(cleanups map[string]peerLifecycleCleanupState, peers map[string]syncPeerState, now time.Time, cfg inspect.PeerLifecycleConfig) map[zone.ZonePath]string {
+func peerLifecycleExcludedPeers(cleanups map[string]peerLifecycleCleanupState, checkpoint *corestate.GossipCheckpoint, now time.Time, cfg inspect.PeerLifecycleConfig) map[zone.ZonePath]string {
 	out := make(map[zone.ZonePath]string)
 	for peerID, cleanup := range cleanups {
 		if cleanup.Reason == peerCleanupReasonOffline {
 			out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
 		}
 	}
-	for peerID, peer := range peers {
-		if peerLifecycleCleanupDue(peer, now, cfg) {
-			out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
+	if checkpoint != nil {
+		for peerID, peer := range checkpoint.Peers {
+			if peerLifecycleCleanupDue(peer, now, cfg) {
+				out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
+			}
 		}
 	}
 	return out
@@ -53,9 +56,9 @@ func peerLifecycleExcludedPeers(cleanups map[string]peerLifecycleCleanupState, p
 // cleanups must be initialized maps so changes remain visible to the caller.
 // Revoked peers retain diagnostics for one cleanup_after window; offline peers
 // are removed immediately and receive a local data-plane suppression marker.
-func applyPeerLifecycleCleanup(network *zone.NetworkState, peers map[string]syncPeerState, cleanups map[string]peerLifecycleCleanupState, now time.Time, cfg inspect.PeerLifecycleConfig) (removed []string, changed bool) {
+func applyPeerLifecycleCleanup(network *zone.NetworkState, peers map[string]corestate.PeerCheckpoint, cleanups map[string]peerLifecycleCleanupState, now time.Time, cfg inspect.PeerLifecycleConfig) (removed []string, changed bool) {
 	if peers == nil {
-		peers = make(map[string]syncPeerState)
+		peers = make(map[string]corestate.PeerCheckpoint)
 	}
 	if cleanups == nil {
 		return nil, false
@@ -145,7 +148,6 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	now := d.Sync.now()
 	d.StateStore.writeMu.Lock()
 	view := d.StateStore.common.ReadView()
-	peers := syncPeerReadView(view.Gossip)
 	d.StateStore.mu.RLock()
 	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
 	d.StateStore.mu.RUnlock()
@@ -155,6 +157,10 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	}
 	if cleanups == nil {
 		cleanups = make(map[string]peerLifecycleCleanupState)
+	}
+	var peers map[string]corestate.PeerCheckpoint
+	if view.Gossip != nil {
+		peers = view.Gossip.Peers
 	}
 	removed, changed := applyPeerLifecycleCleanup(view.State.Network, peers, cleanups, now, cfg)
 	if !changed {

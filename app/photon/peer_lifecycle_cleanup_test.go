@@ -19,18 +19,19 @@ func TestApplyPeerLifecycleCleanupDeletesOfflineCacheAndKeepsSuppression(t *test
 		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
 	}
 
-	removed, changed := applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now, cfg)
+	checkpoint := testGossipCheckpoint(state.SyncPeers)
+	removed, changed := applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := state.SyncPeers["node-b.catofes."]; ok {
+	if _, ok := checkpoint.Peers["node-b.catofes."]; ok {
 		t.Fatal("offline SyncPeers cache entry was retained")
 	}
 	cleanup, ok := state.PeerCleanups["node-b.catofes."]
 	if !ok || cleanup.Reason != peerCleanupReasonOffline {
 		t.Fatalf("cleanup marker = %+v present=%t", cleanup, ok)
 	}
-	if got := peerLifecycleExcludedPeers(state.PeerCleanups, state.SyncPeers, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
+	if got := peerLifecycleExcludedPeers(state.PeerCleanups, checkpoint, now, cfg)["node-b.catofes."]; got != peerCleanupReasonOffline {
 		t.Fatalf("excluded reason = %q", got)
 	}
 }
@@ -43,11 +44,12 @@ func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
 	state.SyncPeers["node-b.catofes."] = syncPeerState{LastSyncUnix: now.Unix()}
 	addRevocationToParent(t, state, "catofes.", "node-b.catofes.", parentKey, now)
 
-	removed, changed := applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now, cfg)
+	checkpoint := testGossipCheckpoint(state.SyncPeers)
+	removed, changed := applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now, cfg)
 	if !changed || len(removed) != 0 {
 		t.Fatalf("initial cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := state.SyncPeers["node-b.catofes."]; !ok {
+	if _, ok := checkpoint.Peers["node-b.catofes."]; !ok {
 		t.Fatal("revoked diagnostic entry was removed before retention elapsed")
 	}
 	marker := state.PeerCleanups["node-b.catofes."]
@@ -55,15 +57,15 @@ func TestApplyPeerLifecycleCleanupRetainsThenDeletesRevokedCache(t *testing.T) {
 		t.Fatalf("revoked cleanup marker = %+v", marker)
 	}
 
-	removed, changed = applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now.Add(cfg.CleanupAfter-time.Second), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now.Add(cfg.CleanupAfter-time.Second), cfg)
 	if changed || len(removed) != 0 {
 		t.Fatalf("early cleanup = changed:%t removed:%v", changed, removed)
 	}
-	removed, changed = applyPeerLifecycleCleanup(state.Network, state.SyncPeers, state.PeerCleanups, now.Add(cfg.CleanupAfter), cfg)
+	removed, changed = applyPeerLifecycleCleanup(state.Network, checkpoint.Peers, state.PeerCleanups, now.Add(cfg.CleanupAfter), cfg)
 	if !changed || len(removed) != 1 || removed[0] != "node-b.catofes." {
 		t.Fatalf("expired cleanup = changed:%t removed:%v", changed, removed)
 	}
-	if _, ok := state.SyncPeers["node-b.catofes."]; ok {
+	if _, ok := checkpoint.Peers["node-b.catofes."]; ok {
 		t.Fatal("revoked SyncPeers entry survived cleanup_after")
 	}
 	if _, ok := state.PeerCleanups["node-b.catofes."]; ok {

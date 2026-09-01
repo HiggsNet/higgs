@@ -172,7 +172,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 |---|---|---|
 | `keygen.go` | Ed25519 key 文件生成 | `internal/photoncli/keygen`，底层复用 crypto |
 | `link_outputs.go` | Linux link runtime 到 health/routing output | `internal/photonlinux/linkstate` 或 IPsec controller 输出 DTO |
-| `linux_state_view.go` | gossip checkpoint 到旧 peer read model、typed Linux runtime clone | 生产 aggregate 合成桥已删除，clone 直接复制 runtime 字段；剩余 peer read projection 后续归 inspect/host，文件随调用方迁移后删除 |
+| `linux_state_view.go` | 已删除 | gossip checkpoint 的生产调用方已直接读取公共 typed owner；Linux runtime clone 并入 `state_clone.go`，旧 peer read model 只留在 legacy migration 测试 fixture |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
 | `observer_config.go` | Observer 配置 | 模型进 observer；Linux YAML 进 Linux config |
@@ -211,7 +211,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
    已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；`state_gc --direct` 也只提交 Linux runtime owner，不再保存聚合状态。
 2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
-4. **删除聚合 stateFile**：先替换 protocol projection，再替换 controller input、inspect/observer 和离线 CLI read path；随后删除 `linux_state_view.go`、`daemon_state_store.go`、aggregate clone 和旧 state loader。
+4. **删除聚合 stateFile**：protocol projection 与 `linux_state_view.go` 已清理；observer 和普通 state composition 测试已改用 typed owners，aggregate 重组仅保留在明确的 legacy test helper。继续替换 controller input、离线 CLI read path 和其余 legacy fixture，随后删除 `daemon_state_store.go`、aggregate clone 和旧 state loader。
 5. **收口 CLI/展示**：`debug_*.go`、`status.go`、`zone.go`、`db.go` 最终只做参数解析、control/read model 调用和 presenter 输出。
 
 迁移过程中不再为单个调用点增加新的 stateFile wrapper。需要过渡时只允许 detached typed DTO，并在同一任务中写明删除条件。

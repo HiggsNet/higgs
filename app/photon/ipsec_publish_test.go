@@ -223,8 +223,8 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest := service.currentState()
-	record := latest.Network.Zones[latest.ManagedZone].Records[ipsec.RecordKeyProfile]
+	latest := service.StateStore.common.ReadView()
+	record := latest.State.Network.Zones[latest.State.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if record.Version != oldRecord.Version+1 {
 		t.Fatalf("profile version = %d, want %d", record.Version, oldRecord.Version+1)
 	}

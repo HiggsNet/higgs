@@ -179,12 +179,12 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 		t.Fatalf("handle recovery import event: %v", result.Error)
 	}
 
-	reloaded := service.currentState()
+	reloaded := service.StateStore.common.ReadView()
 	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
 	}
-	if reloaded.Network.Zones[zone.RootZone].Records[key] == nil {
+	if reloaded.State.Network.Zones[zone.RootZone].Records[key] == nil {
 		t.Fatalf("daemon import missing IPAM pool record %s", key)
 	}
 }

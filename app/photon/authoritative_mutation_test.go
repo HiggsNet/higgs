@@ -40,8 +40,8 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 		t.Fatalf("revision changed on rejection: before=%d after=%d", beforeRevision, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if snapshot.Network.Zones[managed].Records[key] != nil {
+	view := service.StateStore.common.ReadView()
+	if view.State.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("rejected assignment entered committed state")
 	}
 	disk, err := rt.LoadState()
@@ -83,8 +83,8 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	committedAfter := service.currentState()
-	if committedAfter.Network.Zones[managed].Records[key] == nil {
+	committedAfter := service.StateStore.common.ReadView()
+	if committedAfter.State.Network.Zones[managed].Records[key] == nil {
 		t.Fatal("accepted assignment was not published by the common store")
 	}
 }
@@ -208,8 +208,8 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 		t.Fatalf("dry-run revision changed: before=%d after=%d", before, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.2.0/24")
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if snapshot.Network.Zones[managed].Records[key] != nil {
+	view := service.StateStore.common.ReadView()
+	if view.State.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("dry-run record entered committed state")
 	}
 }
@@ -306,8 +306,8 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 		t.Fatalf("ipam_mutate response = %+v", response)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.8.0/24")
-	snapshot, _ := snapshotTestDaemonState(service.StateStore)
-	if snapshot.Network.Zones[managed].Records[key] == nil {
+	view := service.StateStore.common.ReadView()
+	if view.State.Network.Zones[managed].Records[key] == nil {
 		t.Fatal("typed control mutation did not enter committed state")
 	}
 }

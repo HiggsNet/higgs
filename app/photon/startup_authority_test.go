@@ -32,19 +32,15 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 		t.Fatal("prepareStartupState did not refresh cached managed authority")
 	}
 
-	committed, _ := snapshotTestDaemonState(service.StateStore)
-	if got := committed.Network.Zones[managed].Authority.Epoch; got != 2 {
+	committed := service.StateStore.common.ReadView()
+	if got := committed.State.Network.Zones[managed].Authority.Epoch; got != 2 {
 		t.Fatalf("managed authority epoch = %d, want 2", got)
 	}
-	if !authorityHasPermission(committed.Network.Zones[managed].Authority, zone.PermAllocateIP) {
+	if !authorityHasPermission(committed.State.Network.Zones[managed].Authority, zone.PermAllocateIP) {
 		t.Fatal("managed authority missing allocate-ip after startup refresh")
 	}
-	if err := photoncrypto.VerifyChain(committed.Network, managed, now); err != nil {
+	if err := photoncrypto.VerifyChain(committed.State.Network, managed, now); err != nil {
 		t.Fatalf("VerifyChain(managed): %v", err)
-	}
-	reloaded := service.currentState()
-	if got := reloaded.Network.Zones[managed].Authority.Epoch; got != 2 {
-		t.Fatalf("persisted managed authority epoch = %d, want 2", got)
 	}
 }
 

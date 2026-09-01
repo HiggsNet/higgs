@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -118,9 +119,47 @@ func composeLinuxStateView(common corestate.View, runtime *linuxRuntimeState) *s
 		}
 		configureValidation(view.Network)
 	}
-	view.SyncPeers = syncPeerReadView(common.Gossip)
+	view.SyncPeers = legacySyncPeerFixture(common.Gossip)
 	applyLinuxRuntimeReadView(view, runtime)
 	return view
+}
+
+// legacySyncPeerFixture rebuilds the removed aggregate migration shape for
+// tests that intentionally exercise old-schema loading. Production consumers
+// must read GossipCheckpoint directly.
+func legacySyncPeerFixture(checkpoint *corestate.GossipCheckpoint) map[string]syncPeerState {
+	peers := make(map[string]syncPeerState)
+	if checkpoint == nil {
+		return peers
+	}
+	for peerID, item := range checkpoint.Peers {
+		peer := syncPeerState{
+			LastSyncUnix: item.LastSyncUnix, LastAttemptUnix: item.LastAttemptUnix,
+			BackoffUntilUnix: item.BackoffUntilUnix, LastRelayUnix: item.LastRelayUnix,
+			LastRelayCatalogRootHex: item.LastRelayCatalogRootHex, FailureCount: item.FailureCount,
+			DiscoveredAddr: item.DiscoveredEndpoint, DiscoveredAtUnix: item.DiscoveredAtUnix,
+			ObservedAddr: item.ObservedEndpoint, ObservedFirstSeenUnix: item.ObservedFirstSeenUnix,
+			ObservedLastSeenUnix: item.ObservedLastSeenUnix, ObservedLastSyncUnix: item.ObservedLastSyncUnix,
+			ObservedUntilUnix: item.ObservedUntilUnix, ObservedFailureCount: item.ObservedFailureCount,
+		}
+		if item.LastFailure != nil {
+			peer.LastError = item.LastFailure.Error()
+		}
+		for _, grace := range item.ObservedGraceEndpoints {
+			peer.ObservedGraceAddrs = append(peer.ObservedGraceAddrs, observedGraceAddrState{Addr: grace.Endpoint, UntilUnix: grace.UntilUnix})
+		}
+		if len(item.RejectedObjects) > 0 {
+			peer.RejectedDigests = make(map[string]rejectedDigestState, len(item.RejectedObjects))
+			for path, rejected := range item.RejectedObjects {
+				peer.RejectedDigests[string(path)] = rejectedDigestState{
+					Zone: path, RootHashHex: hex.EncodeToString(rejected.RootHash), Reason: rejected.Reason,
+					RejectedAtUnix: rejected.UpdatedUnix, UntilUnix: rejected.UntilUnix,
+				}
+			}
+		}
+		peers[peerID] = peer
+	}
+	return peers
 }
 
 func applyLinuxRuntimeReadView(view *stateFile, runtime *linuxRuntimeState) {
