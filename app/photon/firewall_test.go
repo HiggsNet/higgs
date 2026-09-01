@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,10 +53,7 @@ func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
 			"overlay": {Backend: firewall.BackendNone, Generation: 1, LastRunUnix: 100, PolicyHash: "same"},
 		},
 	}
-	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	rt := &Runtime{Config: defaultAppConfig()}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	rev := service.StateStore.Meta().Revision
 	next := cloneFirewallReconcileState(state.FirewallReconcile)
@@ -770,12 +766,8 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 		},
 	}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(7000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(7000, 0) },
 	}
 	driver := &captureFirewallOwnerDriver{}
 	service := newTestDaemonService(rt, state, config, time.Second)
@@ -807,12 +799,8 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(7020, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(7020, 0) },
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	driver := &blockingFirewallDriver{
@@ -895,12 +883,8 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(7010, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(7010, 0) },
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
@@ -941,12 +925,8 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(7000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return time.Unix(7000, 0) },
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 

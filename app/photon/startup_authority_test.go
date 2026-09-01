@@ -21,11 +21,32 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	state.Network.Zones[managed.Parent()].Delegations[managed] = cloneDelegationForJoinBundle(snapshot.Delegations[managed])
 	config.DisableEndpointPublish = true
 
-	rt := &Runtime{StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState(inconsistent): %v", err)
+	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
+	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
 	}
-	service := newTestDaemonService(rt, state, config, defaultDaemonInterval)
+	t.Cleanup(func() { _ = boltStore.Close() })
+	if err := initializeLinuxState(boltStore, &corestate.CommitCandidate{
+		Verified: state,
+		Gossip:   &corestate.GossipCheckpoint{},
+	}, 0, &linuxRuntimeState{}); err != nil {
+		_ = boltStore.Close()
+		t.Fatalf("initializeLinuxState: %v", err)
+	}
+	startup, found, err := loadAndRestoreLinuxState(boltStore, nil)
+	if err != nil || !found {
+		_ = boltStore.Close()
+		t.Fatalf("loadAndRestoreLinuxState = found %v err %v", found, err)
+	}
+	t.Cleanup(startup.Common.Close)
+	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
+	if err != nil {
+		startup.Common.Close()
+		_ = boltStore.Close()
+		t.Fatalf("newPersistedDaemonStateStore: %v", err)
+	}
+	service := newDaemonServiceWithStore(rt, stateStore, config, defaultDaemonInterval)
 	if changed, err := service.prepareStartupState(); err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	} else if !changed {
@@ -42,9 +63,23 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	if err := photoncrypto.VerifyChain(committed.State.Network, managed, now); err != nil {
 		t.Fatalf("VerifyChain(managed): %v", err)
 	}
+	service.StateStore.common.Close()
+	if err := boltStore.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
+	}
+	reopened, _, err := loadOfflineOwnerViews(rt)
+	if err != nil {
+		t.Fatalf("loadOfflineOwnerViews(reopened): %v", err)
+	}
+	if got := reopened.State.Network.Zones[managed].Authority.Epoch; got != 2 {
+		t.Fatalf("reopened managed authority epoch = %d, want 2", got)
+	}
+	if !authorityHasPermission(reopened.State.Network.Zones[managed].Authority, zone.PermAllocateIP) {
+		t.Fatal("reopened managed authority missing allocate-ip")
+	}
 }
 
-func buildManagedAuthorityRefreshState(t *testing.T) (*stateFile, *syncConfigFile, ed25519.PrivateKey) {
+func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, *syncConfigFile, ed25519.PrivateKey) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -86,7 +121,7 @@ func buildManagedAuthorityRefreshState(t *testing.T) (*stateFile, *syncConfigFil
 	network.Zones["catofes."] = zone.NewZoneState("catofes.", managedAuthority)
 	network.Zones["catofes."].ParentProof = []*zone.Delegation{cloneDelegationForJoinBundle(delegation)}
 	configureValidation(network)
-	state := &stateFile{ManagedZone: "catofes.", ZonePrivateKey: managedPriv, Network: network}
+	state := &corestate.VerifiedState{ManagedZone: "catofes.", IdentityPrivateKey: managedPriv, Network: network}
 	config := &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}
 	return state, config, rootPriv
 }

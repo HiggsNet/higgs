@@ -646,23 +646,9 @@ func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zo
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
 	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
-	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
-	if err != nil {
-		t.Fatalf("OpenBoltStore: %v", err)
-	}
-	candidate := &corestate.CommitCandidate{
-		Verified: &corestate.VerifiedState{
-			ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
-		},
-		Gossip: &corestate.GossipCheckpoint{},
-	}
-	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
-		_ = store.Close()
-		t.Fatalf("initializeLinuxState: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close BoltStore: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
+		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
+	}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 	return rt, managed
 }
 

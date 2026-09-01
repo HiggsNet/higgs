@@ -14,6 +14,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -254,34 +255,23 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
-	if err != nil {
-		t.Fatalf("OpenBoltStore: %v", err)
-	}
-	if err := initializeLinuxState(boltStore, &corestate.CommitCandidate{
-		Verified: verifiedStateForTest(state),
-		Gossip:   testGossipCheckpoint(state.SyncPeers),
-	}, 0, linuxRuntimeStateFromLegacy(state)); err != nil {
-		_ = boltStore.Close()
-		t.Fatalf("initializeLinuxState: %v", err)
-	}
-	if err := boltStore.Close(); err != nil {
-		t.Fatalf("Close BoltStore: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
 	service := newTestDaemonService(rt, state, config, time.Second)
 
-	external, err := rt.LoadState()
+	external, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState(external): %v", err)
+		t.Fatalf("loadOfflineOwnerViews(external): %v", err)
 	}
-	externalRecord, err := buildSignedRecordAt(external, "node-b.catofes.", "external", []byte("kept"), "policy.string", now)
-	if err != nil {
-		t.Fatalf("buildSignedRecordAt(external): %v", err)
+	externalRecord := &zone.Record{
+		Zone: "node-b.catofes.", Key: "external", Value: []byte("kept"), Type: "policy.string", Timestamp: now.Unix(),
 	}
-	if err := external.Network.Put(externalRecord); err != nil {
+	if err := photoncrypto.SignRecord(externalRecord, external.State.IdentityPrivateKey); err != nil {
+		t.Fatalf("SignRecord(external): %v", err)
+	}
+	if err := external.State.Network.Put(externalRecord); err != nil {
 		t.Fatalf("Put(external): %v", err)
 	}
-	replacePersistedCommonForTest(t, rt, external)
+	replacePersistedCommonForTest(t, rt, external.State)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,
@@ -326,11 +316,12 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if _, err := initRootStateInRuntime(rootRT); err != nil {
 		t.Fatalf("initRootStateInRuntime: %v", err)
 	}
-	rootState, err := rootRT.LoadState()
+	rootState, rootRuntime, err := loadOfflineOwnerViews(rootRT)
 	if err != nil {
-		t.Fatalf("LoadState(root): %v", err)
+		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
-	service := newTestDaemonService(rootRT, rootState, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newTestDaemonServiceFromOwners(rootRT, rootState.State, rootState.Gossip, rootRuntime,
+		&syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -349,8 +340,9 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	}
 
 	catofesKey := &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}
-	joinState := &stateFile{Network: zone.NewNetworkState()}
-	service = newTestDaemonService(rootRT, joinState, &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service = newTestDaemonServiceFromOwners(rootRT, &corestate.VerifiedState{Network: zone.NewNetworkState()},
+		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
+		&syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{
 		Type:       daemonEventJoinAccept,
 		JoinBundle: result.JoinBundle,
@@ -460,11 +452,12 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if _, err := initRootStateInRuntime(rt); err != nil {
 		t.Fatalf("initRootStateInRuntime: %v", err)
 	}
-	state, err := rt.LoadState()
+	state, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState(root): %v", err)
+		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
-	service := newTestDaemonService(rt, state, &syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, state.State, state.Gossip, runtime,
+		&syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -474,7 +467,9 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleDelegateIssueEvent(catofes): %v", err)
 	}
-	service = newTestDaemonService(rt, &stateFile{Network: zone.NewNetworkState()}, &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service = newTestDaemonServiceFromOwners(rt, &corestate.VerifiedState{Network: zone.NewNetworkState()},
+		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
+		&syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
 		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
 	}

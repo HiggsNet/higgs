@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/netip"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -211,12 +210,8 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 
@@ -237,8 +232,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.T) {
 	state, config := buildTestNetworkState(t)
 	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
+		Config: defaultAppConfig(),
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	before := service.StateStore.Meta().Revision
@@ -322,12 +316,8 @@ func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t
 	}
 
 	rt := &Runtime{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: defaultAppConfig(),
+		Clock:  func() time.Time { return now },
 	}
 	service := newTestDaemonService(rt, state, config, time.Second)
 	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
@@ -405,12 +395,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	// Set up a sync peer with observed path.
@@ -504,12 +490,8 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	}}
 
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config: appConfig,
+		Clock:  func() time.Time { return now },
 	}
 
 	ipsecDriver := &observedIPsecDriver{}

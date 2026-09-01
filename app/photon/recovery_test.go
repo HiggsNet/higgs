@@ -161,15 +161,12 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime(catofes): %v", err)
 	}
-	state, err := rt.LoadState()
+	state, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
-		t.Fatalf("LoadState(catofes): %v", err)
+		t.Fatalf("loadOfflineOwnerViews(catofes): %v", err)
 	}
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		t.Fatalf("SyncConfig(catofes): %v", err)
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	config := syncConfigFromAppConfig(rt.Config, state.State)
+	service := newTestDaemonServiceFromOwners(rt, state.State, state.Gossip, runtime, config, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:     daemonEventRecoveryImportZone,

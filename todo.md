@@ -1106,6 +1106,20 @@ package dependency: app -> host -> gossip -> state -> zone
             与 IPsec reconcile/lifecycle 的纯内存 service 测试删除共 28 次未绑定 BoltStore 的 `SaveState`。外部磁盘 owner 与 daemon 内存
             owner 分叉的 record 测试改为正式初始化 common/Linux buckets，并通过当前 common revision 提交外部记录；direct recovery 关闭重开并验证
             Linux runtime 持久化的用例保留 legacy seed，避免把真正的旧库迁移覆盖误删成冗余准备。
+          - authoritative mutation 测试已退出 aggregate `LoadState/cloneStateFile`：common/checkpoint/Linux runtime 直接从 typed offline owner
+            构造 daemon，测试 intent 作用于 detached `VerifiedState`，磁盘断言直接读取 common View；刻意制造 older/external disk owner 时
+            `replacePersistedCommonForTest` 也只接收 `VerifiedState`。daemon record 外部写测试直接用 identity private key 签名并提交当前 schema，
+            不再为了 `buildSignedRecordAt(stateFile)` 重新拼 aggregate。多 signer routing smoke 仍使用的 `applyAuthoritativeTestIntentAs(stateFile)`
+            留到 routing fixture owner 化时一起删除。
+          - daemon admin/recovery event 测试中的 `initRoot/join accept/recovery import` 已直接从正式 owner 恢复或构造 pending empty
+            `VerifiedState + GossipCheckpoint + linuxRuntimeState`，`daemon_events_test.go` 与 recovery import 不再通过 `LoadState/SyncConfig(stateFile)`
+            组装 service。startup authority 测试原先声称“持久化修复”却只写 legacy seed、运行无 callback 的内存 Store；现改为真实 Bolt
+            composition root，修复后关闭重开并验证 authority epoch 与 allocate-ip 权限确已进入 common owner。
+          - debug routes/route 的离线回退测试改为直接初始化当前 common/Linux Bolt partitions，不再用 legacy `Runtime.SaveState`；Babel
+            “必须在线 daemon”用例删除完全不会被读取的 routing 数据库准备。两节点 daemon event-loop 组合测试以及 firewall/revocation 的纯内存
+            reconcile/cleanup 测试也删除无持久化 callback、无磁盘消费者的 `SaveState` 和假 `StatePath`，由测试 service 的 typed owners 直接承载状态。
+            需要验证真实离线重开路径的 5 处 fixture 统一使用 `seedPartitionedStateDB`：只表达“空库原子写入 typed common/Linux partitions
+            并关闭”，不包装需要继续持有 handle、锁冲突或已存在数据库提交等其他 BoltStore 生命周期。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

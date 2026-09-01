@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/urfave/cli/v3"
 )
 
@@ -190,13 +191,12 @@ func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config:         appConfig,
+		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
+		Clock:          func() time.Time { return now },
+		DisableControl: true,
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	var buf strings.Builder
 	if err := debugRoutesWithRuntime(rt, &buf); err != nil {
@@ -231,13 +231,12 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+		Config:         appConfig,
+		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
+		Clock:          func() time.Time { return now },
+		DisableControl: true,
 	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
+	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	var buf strings.Builder
 	if err := debugRouteWithRuntime(rt, "10.0.0.0/24", &buf); err != nil {
@@ -263,16 +262,12 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 }
 
 func TestDebugBabelRequiresOnlineDaemon(t *testing.T) {
-	state, _ := buildTestNetworkStateForRouting(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(4000, 0) },
-	}
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
+		Config:         appConfig,
+		Clock:          func() time.Time { return time.Unix(4000, 0) },
+		DisableControl: true,
 	}
 
 	var buf strings.Builder

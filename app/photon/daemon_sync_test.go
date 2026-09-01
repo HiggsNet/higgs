@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -48,14 +47,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
-	rtA := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "node-a.db"), Clock: func() time.Time { return now }}
-	rtB := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "node-b.db"), Clock: func() time.Time { return now }}
-	if err := rtA.SaveState(stateA); err != nil {
-		t.Fatalf("SaveState(A): %v", err)
-	}
-	if err := rtB.SaveState(stateB); err != nil {
-		t.Fatalf("SaveState(B): %v", err)
-	}
+	rtA := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rtB := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
 	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
 	setTestGossipTransport(t, serviceA, transportA)
