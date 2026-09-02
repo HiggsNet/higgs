@@ -177,7 +177,7 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal old profile: %v", err)
 	}
-	oldRecord, err := buildSignedRecordAt(state, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	oldRecord, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("build old profile: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal old profile: %v", err)
 	}
-	oldRecord, err := buildSignedRecordAt(state, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	oldRecord, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("build old profile: %v", err)
 	}

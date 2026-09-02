@@ -1147,6 +1147,12 @@ package dependency: app -> host -> gossip -> state -> zone
             继续改为直接操作各自 owner：ACL/BIRD/link/cleanup 放入 Linux runtime，peer backoff/failure 放入 gossip checkpoint，Network/identity
             留在 VerifiedState。由 aggregate helper 隐式拆分 service 的调用从 90 降到 80；剩余大头集中在 routing/IPsec/firewall fixture，
             应在这些 fixture 本身返回 typed owners 时成组迁移，不新增只负责 `stateFile -> owners` 换壳的 helper。
+          - routing 基础 fixture 已直接返回 `VerifiedState + GossipCheckpoint + linuxRuntimeState + config`，原
+            `buildTestNetworkStateForRouting` 被删除且没有保留 aggregate wrapper；routing config/BIRD/cutover、upstream、debug offline、control
+            与 deny-first 组合测试全部消费真实 owners。测试 record signer 也收窄为显式 `Network + signer`，IPAM pool/assignment/announcement
+            helper 不再要求整个 `stateFile`。纯配置 interval/shutdown 和 record control 测试也直接使用空或标准 owners，aggregate service
+            helper 调用由 80 进一步降到 59；剩余 routing 引用属于另外两组 smoke fixture 及少量专测 aggregate copy-on-write 的输入，
+            后续应分别判断而非与基础 fixture 混回一起。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

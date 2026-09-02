@@ -11,7 +11,7 @@ import (
 )
 
 func TestReconcileRoutingGeneratesConfig(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -32,7 +32,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -108,7 +108,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 }
 
 func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -129,7 +129,7 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: true}
 	client := &fakeBirdClient{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -152,7 +152,7 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 }
 
 func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -173,7 +173,7 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -201,7 +201,7 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 }
 
 func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4010, 0)
 
 	appConfig := defaultAppConfig()
@@ -224,7 +224,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		startedCh: make(chan struct{}),
 		unblock:   make(chan struct{}),
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -266,12 +266,12 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !meta.Dirty.Routing {
 		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
-	_, runtime := service.StateStore.readCommonAndRuntime()
-	if len(runtime.BirdInstances) != 0 {
-		t.Fatalf("bird instances = %+v, want stale result discarded", runtime.BirdInstances)
+	_, currentRuntime := service.StateStore.readCommonAndRuntime()
+	if len(currentRuntime.BirdInstances) != 0 {
+		t.Fatalf("bird instances = %+v, want stale result discarded", currentRuntime.BirdInstances)
 	}
-	if runtime.RoutingReconcile != nil {
-		t.Fatalf("routing reconcile = %+v, want stale summary discarded", runtime.RoutingReconcile)
+	if currentRuntime.RoutingReconcile != nil {
+		t.Fatalf("routing reconcile = %+v, want stale summary discarded", currentRuntime.RoutingReconcile)
 	}
 	logOutput := logs.String()
 	if !strings.Contains(logOutput, "event=stale_reconcile_result") ||
@@ -282,7 +282,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 }
 
 func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -303,7 +303,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	}
 
 	client := &fakeBirdClient{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -324,7 +324,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 }
 
 func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -341,7 +341,7 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		Clock:  func() time.Time { return now },
 	}
 
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
@@ -357,7 +357,9 @@ func TestRoutingReconcileInterval(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+	)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
 		t.Fatalf("routingReconcileInterval = %s, want 30s", got)
 	}
@@ -368,7 +370,9 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newTestDaemonService(&Runtime{Config: appConfig}, &stateFile{}, &syncConfigFile{}, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)
 	}

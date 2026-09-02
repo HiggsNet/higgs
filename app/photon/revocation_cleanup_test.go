@@ -465,11 +465,11 @@ func (d *captureFirewallDriver) Apply(ctx context.Context, plan firewall.Firewal
 // IPsec, BIRD retracts the revoked route, and IPsec tears down the revoked
 // peer link without recreating it.
 func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
@@ -496,7 +496,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
 		birdProcess:       &fakeBirdProcessManager{running: false},

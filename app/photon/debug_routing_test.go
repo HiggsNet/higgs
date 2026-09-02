@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/urfave/cli/v3"
 )
 
@@ -185,7 +184,7 @@ protocol babel photon_babel_main {
 }
 
 func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
-	state, _ := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, _ := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -196,7 +195,7 @@ func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
 		Clock:          func() time.Time { return now },
 		DisableControl: true,
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
 
 	var buf strings.Builder
 	if err := debugRoutesWithRuntime(rt, &buf); err != nil {
@@ -225,7 +224,7 @@ func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
 }
 
 func TestDebugRouteExplainsPrefix(t *testing.T) {
-	state, _ := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, _ := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -236,7 +235,7 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 		Clock:          func() time.Time { return now },
 		DisableControl: true,
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
 
 	var buf strings.Builder
 	if err := debugRouteWithRuntime(rt, "10.0.0.0/24", &buf); err != nil {

@@ -300,7 +300,7 @@ func TestBuildSignedRecordReturnsErrorWithoutLocalSigner(t *testing.T) {
 	state.ManagedZone = "node-a.catofes."
 	state.ZonePrivateKey = nil
 
-	_, err := buildSignedRecordAt(state, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
+	_, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
 	if err == nil || !strings.Contains(err.Error(), "no local signing key") {
 		t.Fatalf("buildSignedRecordAt error = %v, want missing signer", err)
 	}

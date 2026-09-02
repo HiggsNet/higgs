@@ -15,7 +15,7 @@ import (
 )
 
 func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -29,7 +29,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	state.LinkInstances = map[string]linkInstanceState{
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-1": {
 			ID:                  "link-1",
 			GroupID:             "main",
@@ -65,7 +65,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	client := &fakeBirdClient{status: &bird.BirdObservedState{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
 	}}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.health = manager
 	installTestBirdDrivers(service, &fakeBirdProcessManager{running: false}, func(socketPath string, timeout time.Duration) birdClient {
 		return client

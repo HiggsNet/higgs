@@ -274,11 +274,11 @@ func TestPrepareControlSocketPathPreservesRegularFile(t *testing.T) {
 }
 
 func TestDaemonControlRoutingReload(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.routingDirty = false
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
@@ -293,7 +293,7 @@ func TestDaemonControlRoutingReload(t *testing.T) {
 }
 
 func TestDaemonControlBirdDump(t *testing.T) {
-	state, config := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
@@ -308,7 +308,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	client := &fakeBirdClient{raw: map[string]string{
 		"show route table all where source = RTS_BABEL all": "Table photon_photontesth24:\n10.0.0.0/24 unicast\n",
 	}}
-	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(&Runtime{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		if socketPath != "/run/photon/bird-photontesth2.ctl" {
 			t.Fatalf("socketPath = %q, want /run/photon/bird-photontesth2.ctl", socketPath)
@@ -476,22 +476,24 @@ func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
 }
 
 func TestDaemonControlRecordGet(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	record, err := buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	record, err := buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, "node-b.catofes.", "site/name", []byte(`{"name":"node-b"}`), "policy.json", time.Unix(1000, 0))
 	if err != nil {
 		t.Fatalf("buildSignedRecordAt: %v", err)
 	}
-	if err := state.Network.Put(record); err != nil {
+	if err := verified.Network.Put(record); err != nil {
 		t.Fatalf("Put(record): %v", err)
 	}
-	record, err = buildSignedRecordAt(state, "node-b.catofes.", "site/name", []byte(`{"name":"node-b-2"}`), "policy.json", time.Unix(1001, 0))
+	record, err = buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, "node-b.catofes.", "site/name", []byte(`{"name":"node-b-2"}`), "policy.json", time.Unix(1001, 0))
 	if err != nil {
 		t.Fatalf("buildSignedRecordAt(second): %v", err)
 	}
-	if err := state.Network.Put(record); err != nil {
+	if err := verified.Network.Put(record); err != nil {
 		t.Fatalf("Put(second record): %v", err)
 	}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig()}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
 
 	response := controlViewRequestViaPipe[*inspect.RecordDetailView](t, service, controlRequest{
 		Method:  "record_get",

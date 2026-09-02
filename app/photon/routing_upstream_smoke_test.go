@@ -22,7 +22,7 @@ import (
 // pipeline produces a valid BIRD config with multi-interface blocks and the
 // filter correctly includes the assigned prefixes.
 func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
-	state, syncConfig := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, syncConfig := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -76,7 +76,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		veth: fakeVM, upstreamRoutes: fakeRM, birdProcess: pm,
 		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return client },
@@ -166,7 +166,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 // TestUpstreamRoutingWithIPAMAssignment verifies that IPAM assignments for the
 // local zone produce static routes via the upstream interface.
 func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
-	state, _ := buildTestNetworkStateForRouting(t)
+	verified, _, _, _ := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	// Add an IPAM assignment for node-a.catofes.
@@ -179,7 +179,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 	assignmentValue, _ := json.Marshal(assignmentRec)
 	assignmentKey := routing.RecordKeyPrefixIPAMAssignments + strings.ReplaceAll(assignmentPrefix.String(), "/", "_")
-	if zs := state.Network.Zones["node-a.catofes."]; zs != nil {
+	if zs := verified.Network.Zones["node-a.catofes."]; zs != nil {
 		zs.Records[assignmentKey] = &zone.Record{
 			Zone:      "node-a.catofes.",
 			Key:       assignmentKey,
@@ -198,7 +198,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 	poolValue, _ := json.Marshal(poolRec)
 	poolKey := routing.RecordKeyPrefixIPAMPools + strings.ReplaceAll("10.42.0.0/16", "/", "_")
-	if zs := state.Network.Zones[zone.RootZone]; zs != nil {
+	if zs := verified.Network.Zones[zone.RootZone]; zs != nil {
 		zs.Records[poolKey] = &zone.Record{
 			Zone:      zone.RootZone,
 			Key:       poolKey,
@@ -217,7 +217,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 	catAssignmentValue, _ := json.Marshal(catAssignmentRec)
 	catAssignmentKey := routing.RecordKeyPrefixIPAMAssignments + strings.ReplaceAll("10.42.0.0/24", "/", "_")
-	if zs := state.Network.Zones["catofes."]; zs != nil {
+	if zs := verified.Network.Zones["catofes."]; zs != nil {
 		zs.Records[catAssignmentKey] = &zone.Record{
 			Zone:      "catofes.",
 			Key:       catAssignmentKey,
@@ -229,7 +229,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 
 	// Build AuthorizedRouteSet and verify the assignment is present.
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 		Overlays:  []string{"main"},
 		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 	}
-	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(state.Network), "photontesth2")
+	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(verified.Network), "photontesth2")
 	spec := buildBirdInstanceSpecForNetns(inst, routerID, "/tmp", ng, netnsCfg, ars, "node-a.catofes.")
 
 	// Verify the assignment prefix appears in static routes.
@@ -308,7 +308,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 }
 
 func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing.T) {
-	state, syncConfig := buildTestNetworkStateForRouting(t)
+	verified, checkpoint, runtime, syncConfig := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
 	appConfig := defaultAppConfig()
@@ -342,7 +342,7 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 		Clock:     func() time.Time { return now },
 	}
 	fakeRM := &fakeUpstreamRouteManager{}
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		veth: &fakeVethManager{}, upstreamRoutes: fakeRM, birdProcess: &fakeBirdProcessManager{running: false},
 		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },
@@ -365,7 +365,7 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	state, _, signers, _ := buildIPAMRoutingSmokeNetworkState(t)
-	addRouteAssignment(t, state, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
+	addRouteAssignment(t, state.Network, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)

@@ -16,14 +16,14 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
 	now := time.Now()
 
-	recordA, err := buildSignedRecordAt(stateA, "node-a.catofes.", "event-loop-test", []byte("from-a"), "policy.string", now)
+	recordA, err := buildSignedRecordAt(stateA.Network, stateA.ZonePrivateKey, "node-a.catofes.", "event-loop-test", []byte("from-a"), "policy.string", now)
 	if err != nil {
 		t.Fatalf("build record for A: %v", err)
 	}
 	if err := stateA.Network.Put(recordA); err != nil {
 		t.Fatalf("put record on A: %v", err)
 	}
-	recordB, err := buildSignedRecordAt(stateB, "node-b.catofes.", "event-loop-test", []byte("from-b"), "policy.string", now)
+	recordB, err := buildSignedRecordAt(stateB.Network, stateB.ZonePrivateKey, "node-b.catofes.", "event-loop-test", []byte("from-b"), "policy.string", now)
 	if err != nil {
 		t.Fatalf("build record for B: %v", err)
 	}

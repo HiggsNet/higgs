@@ -267,7 +267,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	}
 
 	// Revoke the assignment covering node-a's announcement.
-	revokeRouteAssignment(t, state, "catofes.", "10.0.0.0/16", "node-a.catofes.", now.Add(time.Second), signers["catofes."])
+	revokeRouteAssignment(t, state.Network, "catofes.", "10.0.0.0/16", "node-a.catofes.", now.Add(time.Second), signers["catofes."])
 
 	// After revocation the assignment and its authorized announcement should disappear.
 	ars, err = routing.BuildAuthorizedRouteSet(state.Network, now.Add(time.Second))
