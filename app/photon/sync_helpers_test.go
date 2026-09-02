@@ -11,11 +11,6 @@ import (
 	"time"
 )
 
-func buildTestNetworkState(t testing.TB) (*stateFile, *syncConfigFile) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	return composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime), config
-}
-
 func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile) {
 	t.Helper()
 

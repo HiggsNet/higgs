@@ -9,7 +9,7 @@ import (
 )
 
 func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
-	state := &stateFile{
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"instance-a": {
 				ID:               "instance-a",
@@ -30,7 +30,7 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 		},
 	}
 
-	got := buildLinkOutputs(state.LinkInstances, state.IPsecReconcile)
+	got := buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile)
 	if len(got) != 1 {
 		t.Fatalf("outputs = %d, want 1", len(got))
 	}
@@ -50,7 +50,7 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 }
 
 func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
-	state := &stateFile{
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"link-a": {
 				ID:                    "link-a",
@@ -71,7 +71,7 @@ func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
 		},
 	}
 
-	got := buildLinkOutputs(state.LinkInstances, state.IPsecReconcile)
+	got := buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile)
 	if len(got) != 2 {
 		t.Fatalf("outputs = %+v, want active and staged", got)
 	}

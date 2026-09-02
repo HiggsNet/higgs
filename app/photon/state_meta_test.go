@@ -4,11 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
 
 func TestSaveStateCommitsMetaAndNetworkInOneTransaction(t *testing.T) {
-	initial, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	initial := composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime)
 	path := filepath.Join(t.TempDir(), "photon.db")
 	if err := saveStateAt(path, initial); err != nil {
 		t.Fatalf("save initial state: %v", err)

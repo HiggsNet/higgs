@@ -12,8 +12,8 @@ import (
 )
 
 func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
+	verified.Network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 	now := time.Unix(1000, 0)
 	record := &zone.Record{
 		Zone:      "node-b.catofes.",
@@ -23,10 +23,10 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		Version:   1,
 		Timestamp: now.Unix(),
 	}
-	if err := photoncrypto.SignRecord(record, state.ZonePrivateKey); err != nil {
+	if err := photoncrypto.SignRecord(record, verified.IdentityPrivateKey); err != nil {
 		t.Fatalf("SignRecord: %v", err)
 	}
-	if err := state.Network.PutAt(record, now); err != nil {
+	if err := verified.Network.PutAt(record, now); err != nil {
 		t.Fatalf("PutAt: %v", err)
 	}
 
@@ -36,9 +36,8 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipRuntimeConfig{})
-	verified := verifiedStateForTest(state)
 	server := newTestDaemonServiceFromOwners(
-		&Runtime{}, verified, testGossipCheckpoint(nil), &linuxRuntimeState{}, &syncConfigFile{PeerID: "node-b.catofes."}, time.Second,
+		&Runtime{}, verified, checkpoint, &linuxRuntimeState{}, &syncConfigFile{PeerID: "node-b.catofes."}, time.Second,
 	)
 	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, server.objectPullResponse, 0, 0); err != nil {
 		_ = listener.Close()
@@ -61,10 +60,10 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 }
 
 func TestDaemonObjectPullWorkerReturnsErrorForUnreachable(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}}}
 	service := newTestDaemonServiceFromOwners(
-		&Runtime{}, verifiedStateForTest(state), testGossipCheckpoint(nil), &linuxRuntimeState{}, config, time.Second,
+		&Runtime{}, verified, checkpoint, runtime, config, time.Second,
 	)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err == nil {

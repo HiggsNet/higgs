@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"path/filepath"
 	"testing"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestRuntimeStatePathOverride(t *testing.T) {
@@ -41,7 +43,8 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	state := composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime)
 	config, err := rt.SyncConfig(state)
 	if err != nil {
 		t.Fatalf("SyncConfig: %v", err)
@@ -71,12 +74,12 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 }
 
 func TestVerifyConfiguredRootTrustAt(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	rootKey, err := rootPublicKey(state.Network)
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	rootKey, err := rootPublicKey(verified.Network)
 	if err != nil {
 		t.Fatalf("rootPublicKey: %v", err)
 	}
-	if err := verifyConfiguredRootTrustAt(state.Network, rootKey); err != nil {
+	if err := verifyConfiguredRootTrustAt(verified.Network, rootKey); err != nil {
 		t.Fatalf("verifyConfiguredRootTrustAt(valid): %v", err)
 	}
 
@@ -84,10 +87,10 @@ func TestVerifyConfiguredRootTrustAt(t *testing.T) {
 	for i := range wrongRoot {
 		wrongRoot[i] = byte(i + 1)
 	}
-	if err := verifyConfiguredRootTrustAt(state.Network, wrongRoot); err == nil {
+	if err := verifyConfiguredRootTrustAt(verified.Network, wrongRoot); err == nil {
 		t.Fatalf("verifyConfiguredRootTrustAt should reject mismatched root")
 	}
-	if err := verifyConfiguredRootTrustAt(state.Network, nil); err != nil {
+	if err := verifyConfiguredRootTrustAt(verified.Network, nil); err != nil {
 		t.Fatalf("verifyConfiguredRootTrustAt(nil): %v", err)
 	}
 }

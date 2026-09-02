@@ -9,7 +9,7 @@ import (
 )
 
 func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
-	_, config := buildTestNetworkState(t)
+	_, _, _, config := buildTestDaemonOwners(t)
 	knownAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}
 	replay := gossip.NewReplayWindow(time.Minute)
 	quotas := gossip.NewPeerQuotas(gossip.QuotaConfig{ByteRate: 1, ByteBurst: 1, ObjectRate: 1, ObjectBurst: 1})

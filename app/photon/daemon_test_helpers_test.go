@@ -164,18 +164,12 @@ func newTestLinuxRuntimeWithOptions(options photonlinux.RuntimeOptions) *photonl
 	return runtime
 }
 
-func newTestDaemonStateStore(state *stateFile) *DaemonStateStore {
-	verified := &corestate.VerifiedState{}
-	checkpoint := &corestate.GossipCheckpoint{}
-	if state != nil {
-		verified.ManagedZone = state.ManagedZone
-		verified.Network = state.Network
-		verified.RootPrivateKey = state.RootPrivateKey
-		verified.IdentityPrivateKey = state.ZonePrivateKey
-		checkpoint = testGossipCheckpoint(state.SyncPeers)
+func newTestDaemonStateStore(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState) *DaemonStateStore {
+	if verified == nil {
+		verified = &corestate.VerifiedState{}
 	}
 	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
-	store, err := newDaemonStateStore(common, linuxRuntimeStateFromLegacy(state), nil)
+	store, err := newDaemonStateStore(common, runtime, nil)
 	if err != nil {
 		panic(err)
 	}

@@ -16,7 +16,14 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func newPersistedIPsecPublishTestService(t *testing.T, rt *Runtime, state *stateFile, config *syncConfigFile) (*DaemonService, func()) {
+func newPersistedIPsecPublishTestService(
+	t *testing.T,
+	rt *Runtime,
+	verified *corestate.VerifiedState,
+	checkpoint *corestate.GossipCheckpoint,
+	runtime *linuxRuntimeState,
+	config *syncConfigFile,
+) (*DaemonService, func()) {
 	t.Helper()
 	// These tests isolate IPsec protocol publication. Endpoint publication is
 	// covered separately and can legitimately add a new address family between
@@ -28,10 +35,10 @@ func newPersistedIPsecPublishTestService(t *testing.T, rt *Runtime, state *state
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
 	candidate := &corestate.CommitCandidate{
-		Verified: verifiedStateForTest(state),
-		Gossip:   testGossipCheckpoint(state.SyncPeers),
+		Verified: verified,
+		Gossip:   checkpoint,
 	}
-	if err := initializeLinuxState(store, candidate, 0, linuxRuntimeStateFromLegacy(state)); err != nil {
+	if err := initializeLinuxState(store, candidate, 0, runtime); err != nil {
 		_ = store.Close()
 		t.Fatalf("initializeLinuxState: %v", err)
 	}
@@ -61,9 +68,9 @@ func newPersistedIPsecPublishTestService(t *testing.T, rt *Runtime, state *state
 }
 
 func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -74,7 +81,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service, closeStore := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
@@ -150,9 +157,9 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 }
 
 func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -168,7 +175,7 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 		"version":                   1,
 		"enabled":                   true,
 		"provider":                  ipsec.ProviderStrongSwan,
-		"ike_identity":              string(state.ManagedZone),
+		"ike_identity":              string(verified.ManagedZone),
 		"transport_key_fingerprint": "old-fingerprint",
 		"accept":                    "both",
 		"address_families":          []string{ipsec.FamilyIPv4},
@@ -177,15 +184,15 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal old profile: %v", err)
 	}
-	oldRecord, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	oldRecord, err := buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, verified.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("build old profile: %v", err)
 	}
-	if err := state.Network.Put(oldRecord); err != nil {
+	if err := verified.Network.Put(oldRecord); err != nil {
 		t.Fatalf("put old profile: %v", err)
 	}
 
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
@@ -214,9 +221,9 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 }
 
 func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -232,7 +239,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 		"version":                   1,
 		"enabled":                   true,
 		"provider":                  ipsec.ProviderStrongSwan,
-		"ike_identity":              string(state.ManagedZone),
+		"ike_identity":              string(verified.ManagedZone),
 		"transport_key_fingerprint": "old-fingerprint",
 		"accept":                    "bidirectional",
 		"address_families":          []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6},
@@ -241,14 +248,14 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal old profile: %v", err)
 	}
-	oldRecord, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, state.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
+	oldRecord, err := buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, verified.ManagedZone, ipsec.RecordKeyProfile, oldValue, ipsec.RecordTypeProfile, now.Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("build old profile: %v", err)
 	}
-	if err := state.Network.Put(oldRecord); err != nil {
+	if err := verified.Network.Put(oldRecord); err != nil {
 		t.Fatalf("put old profile: %v", err)
 	}
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
 	if result.Error != nil {
@@ -275,9 +282,9 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 }
 
 func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -290,7 +297,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
@@ -342,9 +349,9 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 }
 
 func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -358,7 +365,7 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
@@ -394,9 +401,9 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 }
 
 func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtimeOwner, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
@@ -408,7 +415,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service, closeStore := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtimeOwner, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
@@ -428,7 +435,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	rotated, err := ipsec.ParsePortRecord(common.State.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts])
+	rotated, err := ipsec.ParsePortRecord(common.State.Network.Zones[verified.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
 	}
@@ -453,13 +460,13 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 }
 
 func TestDirectIPsecPortRotateRejectsFixedMode(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.PortMode = ipsec.PortModeFixed
 	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return time.Unix(5000, 0) }}
-	_, closeStore := newPersistedIPsecPublishTestService(t, rt, state, config)
+	_, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	closeStore()
 
 	if _, err := rotateIPsecPortDirect(rt); err == nil {
@@ -468,15 +475,15 @@ func TestDirectIPsecPortRotateRejectsFixedMode(t *testing.T) {
 }
 
 func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return time.Unix(5100, 0) },
 	}
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
@@ -582,8 +589,8 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 }
 
 func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
 	now := time.Unix(5000, 0)
 
 	er := gossip.EndpointRecord{
@@ -597,8 +604,8 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	}
 	data, _ := json.Marshal(er)
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      state.ManagedZone,
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone:      verified.ManagedZone,
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
 		Value:     data,
@@ -609,7 +616,7 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 	config.ListenAddr = "0.0.0.0:33434"
 	// AnnounceGossipEndpoints defaults to true.
 
-	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
+	record := localIPsecAddressRecord(config, verified, now)
 	if len(record.Addresses) != 4 {
 		t.Fatalf("got %d addresses, want 4: %+v", len(record.Addresses), record.Addresses)
 	}
@@ -639,8 +646,8 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 }
 
 func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
 	now := time.Unix(5000, 0)
 
 	er := gossip.EndpointRecord{
@@ -652,8 +659,8 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	}
 	data, _ := json.Marshal(er)
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      state.ManagedZone,
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone:      verified.ManagedZone,
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
 		Value:     data,
@@ -663,7 +670,7 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 	config := defaultAppConfig()
 	config.ListenAddr = "0.0.0.0:33434"
 
-	record1 := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
+	record1 := localIPsecAddressRecord(config, verified, now)
 	first, _ := json.Marshal(record1)
 
 	// Simulate gossip endpoint record being refreshed 5 minutes later with the
@@ -674,10 +681,10 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 		er.Endpoints[i].LastObserved = later.Unix()
 	}
 	data, _ = json.Marshal(er)
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Value = data
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Timestamp = later.Unix()
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Value = data
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Timestamp = later.Unix()
 
-	record2 := localIPsecAddressRecord(config, verifiedStateForTest(state), later)
+	record2 := localIPsecAddressRecord(config, verified, later)
 	second, _ := json.Marshal(record2)
 
 	if !bytes.Equal(first, second) {
@@ -686,8 +693,8 @@ func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
 }
 
 func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
 	now := time.Unix(5000, 0)
 
 	config := defaultAppConfig()
@@ -704,15 +711,15 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	}
 	data, _ := json.Marshal(er)
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      state.ManagedZone,
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone:      verified.ManagedZone,
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
 		Value:     data,
 		Timestamp: now.Unix(),
 	}
 
-	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
+	record := localIPsecAddressRecord(config, verified, now)
 	if len(record.Addresses) != 2 {
 		t.Fatalf("got %d addresses, want 2: %+v", len(record.Addresses), record.Addresses)
 	}
@@ -725,9 +732,9 @@ func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
 }
 
 func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(5000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = "198.51.100.10:4500"
@@ -738,7 +745,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service, _ := newPersistedIPsecPublishTestService(t, rt, state, config)
+	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
@@ -796,8 +803,8 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 }
 
 func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
 	now := time.Unix(5000, 0)
 
 	er := gossip.EndpointRecord{
@@ -808,8 +815,8 @@ func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	}
 	data, _ := json.Marshal(er)
-	state.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      state.ManagedZone,
+	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone:      verified.ManagedZone,
 		Key:       gossip.EndpointRecordKeyUDP,
 		Type:      "sync.endpoint",
 		Value:     data,
@@ -820,7 +827,7 @@ func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
 	config.IPsec.AnnounceGossipEndpoints = false
 	config.ListenAddr = "198.51.100.10:33434"
 
-	record := localIPsecAddressRecord(config, verifiedStateForTest(state), now)
+	record := localIPsecAddressRecord(config, verified, now)
 	if len(record.Addresses) != 1 || record.Addresses[0].Address != "198.51.100.10" {
 		t.Fatalf("expected only listen fallback, got: %+v", record.Addresses)
 	}

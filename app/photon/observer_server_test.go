@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observer"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestObserverStartObserverServerDisabled(t *testing.T) {
@@ -33,7 +34,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	d := &DaemonService{
-		StateStore: newTestDaemonStateStore(newTestStateFile()),
+		StateStore: newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
 		Sync: &SyncRuntime{
 			Config: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
 			App: &Runtime{Config: &appConfig{Observer: observerConfig{

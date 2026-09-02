@@ -10,9 +10,9 @@ import (
 )
 
 func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, _, _, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "127.0.0.1:33434"
 	config.EndpointTTL = time.Hour
 	now := time.Unix(1000, 0)
@@ -23,7 +23,7 @@ func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
 	t.Cleanup(func() { collectSyncLocalEndpoints = oldCollect })
 
 	runtime := newSyncRuntime(config, nil, &Runtime{Clock: func() time.Time { return now }})
-	intent, err := runtime.endpointProtocolIntent(verifiedStateForTest(state))
+	intent, err := runtime.endpointProtocolIntent(verified)
 	if err != nil || intent == nil {
 		t.Fatalf("endpoint intent/error = %#v/%v", intent, err)
 	}

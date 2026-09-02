@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
@@ -29,7 +31,8 @@ func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
 }
 
 func TestLegacyStateMetaCannotPersistPeerDiagnostics(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	state := composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime)
 	normalizeSyncPeers(state)
 	state.SyncPeers["peer-a.catofes."] = syncPeerState{LastSyncUnix: 42}
 	data, err := json.Marshal(stateMetaFromState(state))

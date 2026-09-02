@@ -14,8 +14,7 @@ import (
 )
 
 func newTestObserverServer() *observerServer {
-	state := newTestStateFile()
-	store := newTestDaemonStateStore(state)
+	store := newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 	d := &DaemonService{
 		StateStore: store,
 		Sync: &SyncRuntime{
@@ -42,13 +41,6 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	srv.daemon.StateStore.writeMu.Unlock()
 	srv.daemon.StateStore.refreshMeta()
 	srv.daemon.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
-}
-
-func newTestStateFile() *stateFile {
-	return &stateFile{
-		Network:   nil,
-		SyncPeers: make(map[string]syncPeerState),
-	}
 }
 
 func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {

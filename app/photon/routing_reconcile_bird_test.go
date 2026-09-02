@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -403,15 +404,14 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 }
 
 func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
-	initial := &stateFile{
-		ManagedZone: "node-a.catofes.",
-		Network:     cloneTestNetworkState(),
+	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: cloneTestNetworkState()}
+	runtime := &linuxRuntimeState{
 		BirdInstances: map[string]*BirdInstanceState{
 			"mesh": {NetNSName: "mesh", State: birdInstanceStateRunning},
 		},
 		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
 	}
-	service := &DaemonService{StateStore: newTestDaemonStateStore(initial)}
+	service := &DaemonService{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
 	common, workspace := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
 	baseBird := cloneBirdInstances(workspace.BirdInstances)

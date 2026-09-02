@@ -116,7 +116,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 	now := time.Unix(4140, 0)
 
 	// Add a grandchild zone under node-b.catofes.
-	// buildTestNetworkState already has root -> catofes. -> node-b.catofes.
+	// buildTestDaemonOwners already has root -> catofes. -> node-b.catofes.
 	// We need to add a sub-zone like leaf.node-b.catofes.
 	leafZone := zone.ZonePath("leaf.node-b.catofes.")
 	verified.Network.Zones[leafZone] = &zone.ZoneState{

@@ -13,8 +13,8 @@ import (
 // dual-stack non-rotating link to node-b. and a rotating IPv6 link to node-c.
 func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 	t.Helper()
-	state := &stateFile{
-		ManagedZone: zone.ZonePath("local."),
+	managedZone := zone.ZonePath("local.")
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"link-b": {ActualState: "up"},
 			"link-c": {
@@ -37,7 +37,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 			},
 		},
 	}
-	return linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
+	return linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(managedZone))
 }
 
 func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {

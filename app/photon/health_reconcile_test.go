@@ -14,8 +14,8 @@ import (
 )
 
 func TestHealthTargetsParseScopedNetNS(t *testing.T) {
-	state := &stateFile{
-		ManagedZone: zone.ZonePath("node-a.catofes."),
+	managedZone := zone.ZonePath("node-a.catofes.")
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"link-1": {ActualState: "up"},
 		},
@@ -31,7 +31,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		},
 	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(managedZone))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -48,8 +48,8 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 }
 
 func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
-	state := &stateFile{
-		ManagedZone: zone.ZonePath("node-a.catofes."),
+	managedZone := zone.ZonePath("node-a.catofes.")
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"link-1": {
 				ActualState:           "up",
@@ -75,7 +75,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(state.ManagedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(managedZone))
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -104,8 +104,7 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 	local := zone.ZonePath("less.catofes.")
 	peer := zone.ZonePath("more.catofes.")
 	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
-	state := &stateFile{
-		ManagedZone: local,
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"link-1": {
 				ID:               "link-1",
@@ -128,7 +127,7 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 		},
 	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(local))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -157,8 +156,7 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 	if err != nil {
 		t.Fatalf("derive staged tunnel addresses: %v", err)
 	}
-	state := &stateFile{
-		ManagedZone: local,
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			linkID: {
 				ID:                  linkID,
@@ -184,7 +182,7 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 		},
 	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(state.LinkInstances, state.IPsecReconcile), string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(local))
 	if len(targets) != 0 {
 		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/observer"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
@@ -21,9 +22,8 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayload(t *testing.T) {
-	state := newTestStateFile()
-	state.LinkInstances = map[string]linkInstanceState{"link-b": {}, "link-a": {}}
-	d := &DaemonService{StateStore: newTestDaemonStateStore(state)}
+	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-b": {}, "link-a": {}}}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, nil, runtime)}
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerLinkIDsPayload should return a map payload")
@@ -35,17 +35,18 @@ func TestObserverLinkIDsPayload(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayloadEmptyState(t *testing.T) {
-	d := &DaemonService{StateStore: newTestDaemonStateStore(newTestStateFile())}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, nil, nil)}
 	if got := d.observerLinkIDsPayload(); got != nil {
 		t.Errorf("payload = %v, want nil with no link instances", got)
 	}
 }
 
 func TestObserverPeerIDsPayload(t *testing.T) {
-	state := newTestStateFile()
-	state.SyncPeers["peer-b"] = syncPeerState{LastSyncUnix: 1}
-	state.SyncPeers["peer-a"] = syncPeerState{LastSyncUnix: 1}
-	d := &DaemonService{StateStore: newTestDaemonStateStore(state)}
+	checkpoint := &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		"peer-b": {LastSyncUnix: 1},
+		"peer-a": {LastSyncUnix: 1},
+	}}
+	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, checkpoint, nil)}
 	payload, ok := d.observerPeerIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerPeerIDsPayload should return a map payload")
@@ -91,12 +92,13 @@ func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
 }
 
 func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
-	state := newTestStateFile()
-	state.LinkInstances = map[string]linkInstanceState{"link-a": {}}
-	state.SyncPeers["peer-a"] = syncPeerState{LastSyncUnix: 1}
+	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-a": {}}}
+	checkpoint := &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		"peer-a": {LastSyncUnix: 1},
+	}}
 	hub := observer.NewHub()
 	d := &DaemonService{
-		StateStore:  newTestDaemonStateStore(state),
+		StateStore:  newTestDaemonStateStore(nil, checkpoint, runtime),
 		observerHub: hub,
 		// Sync and Linux runtime are nil: common peer notifications remain,
 		// while platform link/route notifications must not be fabricated.

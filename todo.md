@@ -1162,6 +1162,11 @@ package dependency: app -> host -> gossip -> state -> zone
             `buildTestABDaemonStates` 改为返回两端 verified owners；删除只验证旧 aggregate constructor 自身 detached-lock 行为的 revocation/IPsec
             测试，并最终删除 `newTestDaemonService(stateFile)`。普通 daemon/controller 行为测试已不再经 aggregate service 入口；现存显式
             `stateFile` 转换限于 pending auto-join/identity legacy fixture、旧 codec/migration/COW 专测及尚待拆分的少量 observer fixture。
+          - IPsec protocol publication 的持久化 fixture 现直接初始化 `VerifiedState/GossipCheckpoint/linuxRuntimeState`，object-pull、endpoint publish、
+            transport config 也直接消费 typed owners；删除把 `buildTestDaemonOwners` 反向合成为 `stateFile` 的 `buildTestNetworkState`。observer
+            event/server、link output、ping/health target 与 routing timestamp no-op 测试同步退出 aggregate fixture：common managed zone、gossip peer
+            checkpoint 和 Linux link/reconcile state 分开构造。`newTestDaemonStateStore` 只接受三个明确 owner，不再负责拆分 `stateFile`。现存 aggregate
+            引用进一步收窄到 pending admission/identity、legacy codec/migration、clone/schema guard 以及明确验证旧数据库事务的测试。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
