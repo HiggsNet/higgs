@@ -1468,7 +1468,14 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	if err := d.cleanupPurgePlanIPsecLinks(ctx, runtime, plan); err != nil {
 		return nil, err
 	}
-	if _, _, err := d.StateStore.commitPurgeRuntimeIfRevision(uint64(common.Revision), plan.LinkInstances, plan.SyncPeers); err != nil {
+	if _, _, err := d.StateStore.commitRuntimeIfRevision(uint64(common.Revision), func(candidate *linuxRuntimeState) {
+		for _, id := range plan.LinkInstances {
+			delete(candidate.LinkInstances, id)
+		}
+		for _, peerID := range plan.SyncPeers {
+			delete(candidate.PeerCleanups, peerID)
+		}
+	}); err != nil {
 		return nil, err
 	}
 	result, err := d.StateStore.PurgeCommon(ctx, now, target)

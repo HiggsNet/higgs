@@ -2,18 +2,18 @@
 
 > 初始盘点基线：`3aa43fb`（2026-08-27）；进度复核：2026-08-28 E2g
 > 范围：`app/photon` 下 76 个非测试 Go 文件  
-> 目标：说明每个文件当前职责、最终归属，以及 verified state、gossip runtime、checkpoint、Linux platform runtime、observability 和 presentation 之间的边界。
+> 目标：说明每个文件当前职责、最终归属，以及 StateStore、GossipDriver、LinuxState、LinuxDriver、Observation 和 presentation 之间的边界。冻结术语见 [`runtime-state-ownership.md`](runtime-state-ownership.md)。
 
 ## 1. 最终分层
 
 | 层 | 所有权 |
 |---|---|
-| `app/photon` | Linux executable 入口、CLI 注册和依赖装配 |
-| `pkg/core/host` | 公共事件队列、scheduler、唯一 writer、gossip action 执行、worker completion 和 ChangeSet dispatch |
+| `app/photon` | Linux Daemon、唯一顶层事件循环、executable 入口、CLI 注册和依赖装配 |
+| `pkg/core/host` | 公共 GossipDriver：协议事件队列、gossip scheduler/action、transport、object-pull 和协议 worker completion |
 | `pkg/core/gossip` | wire codec、同步 FSM/session、chunk、object-pull 协议和 endpoint discovery |
 | `pkg/core/state` | verified state、`GossipCheckpoint`、typed intent、签名验证和公共事务 |
 | `pkg/core/zone` | authority、delegation、revocation、record 和 Network 等最低层模型 |
-| `internal/photonlinux` | Linux IPsec、routing、firewall、health、Unix control 和 platform runtime codec |
+| `internal/photonlinux` | LinuxDriver、LinuxState codec，以及 Linux IPsec、routing、firewall、health 的具体实现 |
 | `internal/observability` | 可丢失的实时统计和诊断 |
 | `internal/inspect` | 只读 view；不拥有 mutable store |
 | `internal/controlapi` | 平台无关 Command/Response DTO；Unix socket/named pipe 是平台 adapter |
@@ -256,9 +256,19 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 - `app/photon` 的 CLI flag、Unix control、composition、完整 daemon 顺序和 root smoke 测试仍属于 executable 集成边界，不能迁成底层包单测；
 - 普通测试已经使用 typed owners；只有旧 schema migration/codec 测试可以继续构造 `stateFile`，不得把该 fixture 用回在线行为测试。
 
-HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux runtime state owner 迁移已完成。旧 schema decoder 仍留在 app migration
-边界，不能随 current codec 一起误搬成在线兼容层。下一批审计 live runtime state 是否应由唯一 `photonlinux.Runtime` 直接持有，
-以缩小 `DaemonStateStore`，但不得再创建一个并列 lifecycle Runtime 或 capability bag。
+HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
+边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
+`photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
+
+目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `DaemonService` 收敛为唯一顶层
+`Daemon`，`host.Runtime` 是公共 `GossipDriver`，`photonlinux.Runtime` 是具体 `LinuxDriver`，`state.Store` 是公共
+`StateStore`。`DaemonStateStore` 仍是迁移期 common/Linux 顺序协调器，最终必须删除；不能把它描述为长期 Repository，
+也不能通过把同一把 mutex/commit callback 整体搬进 LinuxDriver 来假装完成。单调用方的 Bird GC、revoked purge 和
+peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段收缩和 Daemon owner 切换时一起消除。
+
+下一轮先把平台数据分成 `LinuxState` 与纯内存 `LinuxObservation`：只保存无法重建的本地 intent/secret 和非幂等
+多阶段操作的最小 journal；SA、route、BIRD/firewall 当前状态、reconcile action、LastRun/LastError 启动后重新 Observe，
+不得继续从 bbolt snapshot 冒充在线状态。
 
 ### 5.3 推荐顺序的当前进度
 
@@ -266,9 +276,10 @@ HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux runtime sta
 2. 公共 HostRuntime：协议 receive、timer、object-pull、discovery 和 controller 周期调度已完成；`sync.go` 与
    `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。HostRuntime 已直接持有 common Store 和同一个
    gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
-3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
-   current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 也已归 `internal/photonlinux`；app 旧库迁移只负责
+3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
+   current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
+   但现有 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把 codec 迁移误报为状态模型完成。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

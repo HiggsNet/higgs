@@ -227,10 +227,10 @@ portable core 不得：
 - 读取 Windows registry；
 - 监听 Unix signal。
 
-`app/photon-windows` 是唯一 Windows composition root：它创建一个公共 `pkg/core/host.Runtime`、一个由
-公共 `state.BoltStore` 恢复的 `pkg/core/state.Store`、一组 `internal/photonwindows` 平台资源，以及未来真正出现的
-用户态 packet engine。不得再建立一个持有 HostRuntime、Store 和平台资源的通用 `photonclient.Runtime`，也不得让
-事件按 `photonclient -> host -> photonclient` 往返。
+`app/photon-windows` 是唯一 Windows composition root：它创建顶层 Daemon、一个公共 GossipDriver（当前类型
+`pkg/core/host.Runtime`）、一个由公共 `state.BoltStore` 恢复的 `pkg/core/state.Store`、WindowsDriver/WindowsState，
+以及未来真正出现的用户态 packet engine。不得再建立一个持有这些组件的通用 `photonclient.Runtime`，也不得让事件按
+`photonclient -> host -> photonclient` 往返。完整命名和持久化边界见 `docs/runtime-state-ownership.md`。
 
 平台接口只在真实 consumer 出现时按最小调用面提取。编译目标已经区分 Windows/Linux，初始化失败由对应
 composition root 当场返回；不建立包含所有未来能力的 `Resources` bag，也不通过 nil 检查探测当前平台能力。
@@ -242,7 +242,7 @@ composition root 当场返回；不建立包含所有未来能力的 `Resources`
 
 ## 5. 生命周期
 
-Windows service/composition 只有在配置、公共 Store、HostRuntime 和当前实际启用的平台组件初始化完成后才进入
+Windows service/composition 只有在配置、StateStore、GossipDriver 和当前实际启用的平台组件初始化完成后才进入
 `running`。组件在自己的构造入口返回具体初始化错误，不先注入 nil 再做通用 capability 扫描。关键后台 loop
 意外退出时 service 进入 `failed`，不能继续报告 ready。
 
@@ -250,28 +250,28 @@ Windows service/composition 只有在配置、公共 Store、HostRuntime 和当�
 
 1. cancel service context，停止接收新的 Wintun packet；
 2. 用户态 packet engine 撤销 route、停止 peer 并清理 SA；
-3. 停止公共 HostRuntime 并关闭其 gossip transport；
+3. 停止 GossipDriver 并关闭其 gossip transport；
 4. 关闭 Wintun session/device；
 5. 关闭 Windows network observer 和平台资源；
 6. 最后关闭 Store/BoltStore，并报告最终状态。
 
-Windows address/route 的 ownership 和回滚属于 `internal/photonwindows`，不由公共 HostRuntime 或 portable packet
+Windows address/route 的 ownership 和回滚属于 `internal/photonwindows`，不由 GossipDriver 或 portable packet
 engine 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/generation 的资源。
 
 ## 6. 当前首个切口
 
-早期实现建立了可交叉编译的产品和 capability 骨架。F0 实验验证了公共 Store/BoltStore、HostRuntime 与
+早期实现建立了可交叉编译的产品和 capability 骨架。F0 实验验证了公共 StateStore/BoltStore、GossipDriver 与
 gossip Transport 可以完成双节点收敛，也暴露出 `photonclient.Runtime`、通用 `Resources.Validate` 与 gossip
-controller glue 重复了已有 common runtime。该套层已经删除；Store 恢复入口现位于 `internal/photonwindows`，
-双节点测试直接驱动两个 HostRuntime、两个 Store/BoltStore 和真实 Transport。
+controller glue 重复了已有公共 gossip 执行闭环。该套层已经删除；Store 恢复入口现位于 `internal/photonwindows`，
+双节点测试直接驱动两个 GossipDriver、两个 StateStore/BoltStore 和真实 Transport。
 
 F 阶段修正为以下顺序：
 
 - 可交叉编译的 `photon-windows.exe` 命令骨架；
 - 公共 `state.BoltStore.LoadCommon/RestoreStore` 恢复唯一 Store，校验 root pin/managed zone；
 - 已撤回 `photonclient.Runtime`、通用 `Resources` capability bag 和 client gossip controller glue；
-- memory 双节点验收已直接围绕 HostRuntime/Store/Transport，不创建第二个 runtime；
-- 让公共 HostRuntime 的事件执行边界足够完整，Windows composition 不复制 Linux daemon executor；
+- memory 双节点验收已直接围绕 GossipDriver/StateStore/Transport，不创建第二个 runtime；
+- 让公共 GossipDriver 的协议执行边界足够完整，Windows composition 不复制 Linux gossip executor；
 - Photon Windows schema v1 与离线 `config validate`；
 - Linux unit tests 与 Windows amd64 compile guard。
 

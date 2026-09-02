@@ -229,31 +229,6 @@ func (s *DaemonStateStore) commitFirewallIfRevision(revision uint64, endpointACL
 	})
 }
 
-func (s *DaemonStateStore) commitBirdGCIfRevision(revision uint64, remove []string) (uint64, bool, error) {
-	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		for _, netns := range remove {
-			delete(runtime.BirdInstances, netns)
-		}
-	})
-}
-
-func (s *DaemonStateStore) commitPurgeRuntimeIfRevision(revision uint64, linkIDs, peerIDs []string) (uint64, bool, error) {
-	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		for _, id := range linkIDs {
-			delete(runtime.LinkInstances, id)
-		}
-		for _, peerID := range peerIDs {
-			delete(runtime.PeerCleanups, peerID)
-		}
-	})
-}
-
-func (s *DaemonStateStore) commitPeerCleanupsIfRevision(revision uint64, cleanups map[string]peerLifecycleCleanupState) (uint64, bool, error) {
-	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.PeerCleanups = photonstate.ClonePeerLifecycleCleanups(cleanups)
-	})
-}
-
 // readCommonAndRuntime returns detached snapshots of the two actual state
 // owners at one serialized revision.
 func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntimeState) {

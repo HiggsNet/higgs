@@ -167,7 +167,9 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	if !changed {
 		return false
 	}
-	if _, _, err := d.StateStore.commitPeerCleanupsIfRevision(uint64(view.Revision), cleanups); err != nil {
+	if _, _, err := d.StateStore.commitRuntimeIfRevision(uint64(view.Revision), func(candidate *linuxRuntimeState) {
+		candidate.PeerCleanups = photonstate.ClonePeerLifecycleCleanups(cleanups)
+	}); err != nil {
 		d.logWarn("peer_lifecycle", "cleanup_commit_failed", map[string]any{"error": err})
 		return false
 	}

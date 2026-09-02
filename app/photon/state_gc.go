@@ -59,7 +59,11 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 	if !apply {
 		return plan, nil
 	}
-	_, _, err := d.StateStore.commitBirdGCIfRevision(uint64(common.Revision), plan.OrphanBirdInstances)
+	_, _, err := d.StateStore.commitRuntimeIfRevision(uint64(common.Revision), func(candidate *linuxRuntimeState) {
+		for _, netns := range plan.OrphanBirdInstances {
+			delete(candidate.BirdInstances, netns)
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
