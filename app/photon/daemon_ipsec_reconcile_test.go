@@ -144,14 +144,14 @@ func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
 }
 
 func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3990, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	firstRev := service.StateStore.Meta().Revision
 	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
 	committedRev := service.StateStore.Meta().Revision
@@ -172,9 +172,9 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 }
 
 func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4000, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -189,7 +189,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
 
@@ -338,11 +338,11 @@ func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
 }
 
 func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4050, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -350,7 +350,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
 	driver := &staleCommitIPsecDriver{}
 	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
@@ -380,11 +380,11 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 }
 
 func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4060, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -392,7 +392,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 	driver := &staleCommitIPsecDriver{}
@@ -451,11 +451,11 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 }
 
 func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4000, 0)
-	state.Network.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
-	addTestIPsecRecords(t, state.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.RoleOut)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	verified.Network.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
+	addTestIPsecRecords(t, verified.Network.Zones["node-a.catofes."], "node-a.catofes.", now, ipsec.RoleOut)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -470,7 +470,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
 
 	common, latest := service.StateStore.readCommonAndRuntime()
@@ -522,9 +522,9 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 }
 
 func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4150, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -540,7 +540,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.Events <- daemonEvent{
@@ -585,9 +585,9 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 }
 
 func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4160, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -603,7 +603,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 		Clock:     func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: true, XFRMIfID: 77}}
@@ -628,9 +628,9 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 }
 
 func TestDaemonIPsecReconcileInterval(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	service := newTestDaemonService(&Runtime{Config: appConfig}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(&Runtime{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
 	if interval := service.ipsecReconcileInterval(); interval != 0 {
 		t.Fatalf("interval without link groups = %s, want 0", interval)
 	}

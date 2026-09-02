@@ -11,14 +11,15 @@ import (
 	"time"
 
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4050, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -33,7 +34,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
 	_, latest := service.StateStore.readCommonAndRuntime()
@@ -62,9 +63,9 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 }
 
 func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4100, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -74,7 +75,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
@@ -139,9 +140,9 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 }
 
 func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4125, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
 		ID:                 "main",
@@ -151,7 +152,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, now.Add(-time.Minute))
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
 	driver := &observedIPsecDriver{
@@ -177,7 +178,7 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -199,14 +200,14 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 }
 
 func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4126, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now.Add(-time.Minute))
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
 	driver := &observedIPsecDriver{
@@ -237,7 +238,7 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -257,14 +258,14 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 }
 
 func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4128, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -272,8 +273,8 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
 	}
 	baseSpec := plan.Desired[0]
-	updateDaemonTestPortRecord(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, ipsec.DefaultNATTPort, now.Add(time.Minute))
-	rotatedPlan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now.Add(time.Minute)})
+	updateDaemonTestPortRecord(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", 2, ipsec.DefaultNATTPort, now.Add(time.Minute))
+	rotatedPlan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks(rotated): %v", err)
 	}
@@ -290,7 +291,7 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 	persisted.ChildSAName = rotatedIKE + "-child"
 	persisted.InterfaceName = rotatedInterface
 	persisted.XFRMIfID = rotatedIfID
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
 	driver := &observedIPsecDriver{
@@ -320,7 +321,7 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now.Add(time.Minute) },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -344,14 +345,14 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 }
 
 func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4135, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -360,7 +361,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now.Add(-time.Minute))
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
 	rt := &Runtime{
@@ -369,7 +370,7 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -389,15 +390,15 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 }
 
 func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4137, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
 	group.Reconcile.Backoff = ipsec.BackoffPolicy{InitialSeconds: 1, MaxSeconds: 1}
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -407,7 +408,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 	spec := plan.Desired[0]
 	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, now.Add(-time.Minute))
 	persisted = ipsec.MarkLinkApplyFailure(persisted, group.Reconcile.Backoff, now.Add(-2*time.Second), errors.New("waiting for established SA"))
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
 	rt := &Runtime{
@@ -416,7 +417,7 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -436,11 +437,11 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 }
 
 func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -449,7 +450,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
@@ -534,11 +535,11 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 }
 
 func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(5101, 0)
-	addRevocationTombstoneForTest(t, state.Network, "node-b.catofes.", "catofes.")
+	addRevocationTombstoneForTest(t, verified.Network, "node-b.catofes.", "catofes.")
 	spec := ipsec.TransportLinkSpec{
-		LocalZone:     state.ManagedZone,
+		LocalZone:     verified.ManagedZone,
 		PeerZone:      "node-b.catofes.",
 		OverlayID:     "main",
 		TransportID:   "ipsec-purge-revoked",
@@ -546,15 +547,15 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 		XFRMIfID:      5101,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
-	state.SyncPeers = map[string]syncPeerState{"node-b.catofes.": {}}
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{"node-b.catofes.": {}}
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &ipsec.DryRunDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", true)
@@ -589,16 +590,16 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 }
 
 func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	state.LinkInstances = nil
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	runtime.LinkInstances = nil
 	now := time.Unix(5105, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
+	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
 	cleaned, orphans, err := recoveryCleanupIPsecDirect(context.Background(), rt, false)
 	if err != nil {
 		t.Fatalf("recoveryCleanupIPsecDirect: %v", err)
@@ -657,14 +658,14 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 }
 
 func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(5110, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	appConfig := defaultAppConfig()
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
+	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
@@ -673,14 +674,14 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	rt := &Runtime{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)
@@ -712,60 +713,9 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(5111, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	appConfig := defaultAppConfig()
-	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), state.Network, state.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
-	if err != nil {
-		t.Fatalf("PlanTransportLinks: %v", err)
-	}
-	if len(plan.Desired) != 1 {
-		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
-	}
-	spec := plan.Desired[0]
-	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	state.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
-	rt := &Runtime{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
-	}
-	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
-	installTestIPsecDrivers(service, driver, driver)
-
-	state.Lock()
-	unlock := state.Unlock
-	cleaned, orphans, err := service.handleIPsecCleanupEvent(context.Background(), false)
-	if err != nil {
-		unlock()
-		t.Fatalf("handleIPsecCleanupEvent: %v", err)
-	}
-	_, current := service.StateStore.readCommonAndRuntime()
-	unlock()
-	if cleaned != 1 || orphans != 0 {
-		t.Fatalf("cleanup result = %d/%d, want 1/0", cleaned, orphans)
-	}
-	latest := current
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("persisted link instances = %+v, want reconciled link", latest.LinkInstances)
-	}
-	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
-		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v", driver.Terminated, driver.Unloaded)
-	}
-	if len(driver.Connections) != 1 || driver.Connections[0].TransportID != spec.TransportID {
-		t.Fatalf("driver recreate connections=%+v, want reconciled link", driver.Connections)
-	}
-}
-
 func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.LinkInstances = nil
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	runtime.LinkInstances = nil
 	now := time.Unix(5112, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
@@ -775,7 +725,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)

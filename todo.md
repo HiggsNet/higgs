@@ -1153,6 +1153,15 @@ package dependency: app -> host -> gossip -> state -> zone
             helper 不再要求整个 `stateFile`。纯配置 interval/shutdown 和 record control 测试也直接使用空或标准 owners，aggregate service
             helper 调用由 80 进一步降到 59；剩余 routing 引用属于另外两组 smoke fixture 及少量专测 aggregate copy-on-write 的输入，
             后续应分别判断而非与基础 fixture 混回一起。
+          - dry-run/IPAM routing smoke 与三个 BIRD root smoke fixture 也已直接返回并传递 typed owners；多 authority intent 测试改为更新
+            `VerifiedState`，不再借 `stateFile` 切换测试 signer。删除单调用的 `revokeRouteAssignment`，auto-announce fixture 直接构造
+            `VerifiedState`，BIRD health 组合测试直接注入 Linux runtime owner。上述 routing helper/smoke 文件已无 `stateFile` 引用，
+            aggregate service helper 调用由 59 降到 52。
+          - 随后按完整测试域批量迁移 daemon events、firewall、revocation、双节点 gossip/IPsec smoke、IPsec reconcile/lifecycle 与 identity reload：
+            common records 直接修改 `VerifiedState`，peer endpoint/failure 直接进入 `GossipCheckpoint`，link/reconcile/key 直接进入 Linux runtime。
+            `buildTestABDaemonStates` 改为返回两端 verified owners；删除只验证旧 aggregate constructor 自身 detached-lock 行为的 revocation/IPsec
+            测试，并最终删除 `newTestDaemonService(stateFile)`。普通 daemon/controller 行为测试已不再经 aggregate service 入口；现存显式
+            `stateFile` 转换限于 pending auto-join/identity legacy fixture、旧 codec/migration/COW 专测及尚待拆分的少量 observer fixture。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

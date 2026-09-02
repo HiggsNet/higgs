@@ -45,8 +45,8 @@ func TestFirewallReconcileResultEqualityIgnoresRunTimestamps(t *testing.T) {
 }
 
 func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.FirewallReconcile = &firewallReconcileState{
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	runtime.FirewallReconcile = &firewallReconcileState{
 		Backend:     firewall.BackendNone,
 		LastRunUnix: 100,
 		Instances: map[string]*firewallInstanceReconcileStateEntry{
@@ -54,12 +54,12 @@ func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
 		},
 	}
 	rt := &Runtime{Config: defaultAppConfig()}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	rev := service.StateStore.Meta().Revision
-	next := cloneFirewallReconcileState(state.FirewallReconcile)
+	next := cloneFirewallReconcileState(runtime.FirewallReconcile)
 	next.LastRunUnix = 200
 	next.Instances["overlay"].LastRunUnix = 200
-	if err := service.commitFirewallReconcileResult(rev, state.EndpointACLs, next); err != nil {
+	if err := service.commitFirewallReconcileResult(rev, runtime.EndpointACLs, next); err != nil {
 		t.Fatalf("commitFirewallReconcileResult: %v", err)
 	}
 	if got := service.StateStore.Meta().Revision; got != rev {
@@ -573,8 +573,12 @@ func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 }
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
+	store, err := newDaemonStateStore(corestate.NewStore(&corestate.VerifiedState{}, nil), &linuxRuntimeState{}, nil)
+	if err != nil {
+		t.Fatalf("newDaemonStateStore: %v", err)
+	}
 	d := &DaemonService{
-		StateStore: newTestDaemonStateStore(&stateFile{}),
+		StateStore: store,
 		Sync: &SyncRuntime{
 			App: &Runtime{Config: &appConfig{}},
 		},
@@ -585,10 +589,10 @@ func TestReconcileFirewall_NoInstances(t *testing.T) {
 }
 
 func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, _, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(6000, 0)
-	state.ManagedZone = "node-b.catofes."
-	state.Network.Zones[state.ManagedZone].Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, state.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+	verified.ManagedZone = "node-b.catofes."
+	verified.Network.Zones[verified.ManagedZone].Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, verified.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
 		Version: 1,
 		Mode:    ipsec.PortModeFixed,
 		Current: &ipsec.PortSelection{
@@ -615,8 +619,8 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 	input := buildFirewallPolicyInput(
 		firewall.FirewallInstanceSpec{ID: "host", IsHost: true},
 		&routing.AuthorizedRouteSet{},
-		&corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network},
-		linuxRuntimeStateFromLegacy(state),
+		verified,
+		runtime,
 		defaultAppConfig(),
 		now,
 	)
@@ -744,7 +748,7 @@ func (d *blockingFirewallDriver) Apply(ctx context.Context, plan firewall.Firewa
 }
 
 func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{
 		{
@@ -770,7 +774,7 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 		Clock:  func() time.Time { return time.Unix(7000, 0) },
 	}
 	driver := &captureFirewallOwnerDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestFirewallDriver(service, driver)
 	if err := service.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
@@ -787,7 +791,7 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 }
 
 func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
@@ -802,7 +806,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(7020, 0) },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	driver := &blockingFirewallDriver{
 		started: make(chan struct{}),
 		unblock: make(chan struct{}),
@@ -872,7 +876,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 }
 
 func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
 		ID:            "photontesth2",
@@ -886,7 +890,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(7010, 0) },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	baseRev := service.StateStore.Meta().Revision
 	driver := &captureFirewallOwnerDriver{}
 	driver.onApply = func() {
@@ -914,7 +918,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 }
 
 func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
 		ID:            "photontesth2",
@@ -928,7 +932,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(7000, 0) },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	if service.firewallReconcileInterval() != defaultFirewallReconcileInterval {
 		t.Fatalf("firewall interval = %s, want %s", service.firewallReconcileInterval(), defaultFirewallReconcileInterval)
@@ -948,11 +952,11 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	_, runtime := service.StateStore.readCommonAndRuntime()
-	if runtime.FirewallReconcile == nil || runtime.FirewallReconcile.Instances["photontesth2"] == nil {
-		t.Fatalf("firewall reconcile state missing after recover: %+v", runtime.FirewallReconcile)
+	_, currentRuntime := service.StateStore.readCommonAndRuntime()
+	if currentRuntime.FirewallReconcile == nil || currentRuntime.FirewallReconcile.Instances["photontesth2"] == nil {
+		t.Fatalf("firewall reconcile state missing after recover: %+v", currentRuntime.FirewallReconcile)
 	}
-	entry := runtime.FirewallReconcile.Instances["photontesth2"]
+	entry := currentRuntime.FirewallReconcile.Instances["photontesth2"]
 	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
 		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}

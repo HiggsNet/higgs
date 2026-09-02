@@ -48,15 +48,6 @@ func verifiedStateForTest(state *stateFile) *corestate.VerifiedState {
 	}
 }
 
-func newTestDaemonService(rt *Runtime, state *stateFile, config *syncConfigFile, interval time.Duration) *DaemonService {
-	verified := verifiedStateForTest(state)
-	checkpoint := &corestate.GossipCheckpoint{}
-	if state != nil {
-		checkpoint = testGossipCheckpoint(state.SyncPeers)
-	}
-	return newTestDaemonServiceFromOwners(rt, verified, checkpoint, linuxRuntimeStateFromLegacy(state), config, interval)
-}
-
 // newTestDaemonServiceFromOwners is the normal fixture for tests of current
 // daemon behavior. New tests must construct the common and Linux owners
 // explicitly instead of passing the retired aggregate stateFile shape.
@@ -490,7 +481,7 @@ func observedSAForSpec(spec ipsec.TransportLinkSpec, localEndpoint, remoteEndpoi
 	}
 }
 
-func buildTestABDaemonStates(t *testing.T) (*stateFile, *syncConfigFile, *stateFile, *syncConfigFile) {
+func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *syncConfigFile, *corestate.VerifiedState, *syncConfigFile) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -561,19 +552,19 @@ func buildTestABDaemonStates(t *testing.T) (*stateFile, *syncConfigFile, *stateF
 		return ns
 	}
 
-	stateA := &stateFile{
-		ManagedZone:    "node-a.catofes.",
-		Network:        buildNetwork("node-a.catofes."),
-		ZonePrivateKey: nodeAPriv,
+	verifiedA := &corestate.VerifiedState{
+		ManagedZone:        "node-a.catofes.",
+		Network:            buildNetwork("node-a.catofes."),
+		IdentityPrivateKey: nodeAPriv,
 	}
-	stateB := &stateFile{
-		ManagedZone:    "node-b.catofes.",
-		Network:        buildNetwork("node-b.catofes."),
-		ZonePrivateKey: nodeBPriv,
+	verifiedB := &corestate.VerifiedState{
+		ManagedZone:        "node-b.catofes.",
+		Network:            buildNetwork("node-b.catofes."),
+		IdentityPrivateKey: nodeBPriv,
 	}
 	configA := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
 	configB := &syncConfigFile{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
-	return stateA, configA, stateB, configB
+	return verifiedA, configA, verifiedB, configB
 }
 
 func testWriteAuthority(path zone.ZonePath, pub ed25519.PublicKey) *zone.ZoneAuthority {

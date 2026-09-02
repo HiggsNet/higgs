@@ -12,11 +12,11 @@ import (
 )
 
 func TestRoutingDryRunSmoke(t *testing.T) {
-	state, config, _ := buildDryRunSmokeNetworkState(t)
+	verified, checkpoint, runtime, config, _ := buildDryRunSmokeOwners(t)
 	now := time.Unix(4000, 0)
 
 	// Verify the route set authorizes the expected announcements without errors.
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -102,32 +102,32 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 }
 
 func TestIPAMRoutingSmoke(t *testing.T) {
-	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	verified, checkpoint, runtime, config, signers, rt := buildIPAMRoutingSmokeOwners(t)
 	rt.DisableControl = true
 	now := rt.Now()
 
 	// Construct records signed by both authorities without pretending that one
 	// persisted node can switch its managed identity between CLI calls.
-	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntentAs(verified, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationPoolCreate,
 		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "catofes.",
 	}), now); err != nil {
 		t.Fatalf("catofes pool write: %v", err)
 	}
-	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntentAs(verified, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "node-a.catofes.",
 	}), now); err != nil {
 		t.Fatalf("catofes IPAM writes: %v", err)
 	}
 
-	if err := applyAuthoritativeTestIntentAs(state, "node-a.catofes.", signers["node-a.catofes."], commonRouteIntent(routeMutationRequest{
+	if err := applyAuthoritativeTestIntentAs(verified, "node-a.catofes.", signers["node-a.catofes."], commonRouteIntent(routeMutationRequest{
 		Zone: "node-a.catofes.", Prefix: "10.0.1.0/24", Active: true,
 	}), now); err != nil {
 		t.Fatalf("node-a route announce: %v", err)
 	}
 	// Verify the authorized route set before reconcile.
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 	// Reconcile routing and verify BIRD config import/export filters.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -179,18 +179,18 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 }
 
 func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
-	state, config, signers, rt := buildIPAMRoutingSmokeNetworkState(t)
+	verified, checkpoint, runtime, config, signers, rt := buildIPAMRoutingSmokeOwners(t)
 	rt.DisableControl = true
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
 	now := rt.Now()
 
-	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntentAs(verified, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationPoolCreate,
 		Zone:      "catofes.", Prefix: "10.0.0.0/16", Target: "catofes.",
 	}), now); err != nil {
 		t.Fatalf("catofes pool write: %v", err)
 	}
-	if err := applyAuthoritativeTestIntentAs(state, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
+	if err := applyAuthoritativeTestIntentAs(verified, "catofes.", signers["catofes."], commonIPAMIntentForTest(t, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      "catofes.", Prefix: "10.0.0.0/24", Target: "node-a.catofes.",
 	}), now); err != nil {
@@ -198,7 +198,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -248,11 +248,11 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 }
 
 func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
-	state, config, signers := buildDryRunSmokeNetworkState(t)
+	verified, checkpoint, runtime, config, signers := buildDryRunSmokeOwners(t)
 	now := time.Unix(4000, 0)
 
 	// Initial authorized route set should authorize node-a's announcement.
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
@@ -267,10 +267,10 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	}
 
 	// Revoke the assignment covering node-a's announcement.
-	revokeRouteAssignment(t, state.Network, "catofes.", "10.0.0.0/16", "node-a.catofes.", now.Add(time.Second), signers["catofes."])
+	addRouteAssignment(t, verified.Network, "catofes.", "10.0.0.0/16", "node-a.catofes.", false, now.Add(time.Second), signers["catofes."])
 
 	// After revocation the assignment and its authorized announcement should disappear.
-	ars, err = routing.BuildAuthorizedRouteSet(state.Network, now.Add(time.Second))
+	ars, err = routing.BuildAuthorizedRouteSet(verified.Network, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet after revoke: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})

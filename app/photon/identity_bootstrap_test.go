@@ -229,10 +229,12 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	appConfig.StatePath = statePath
 	appConfig.ManagedZone = "node-b.catofes."
 	appConfig.Identity.KeyPath = keyPath
-	state.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
+	verified := verifiedStateForTest(state)
+	runtime := &linuxRuntimeState{}
+	runtime.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
 	rt := &Runtime{Config: appConfig, StatePath: statePath}
-	config := syncConfigFromAppConfig(appConfig, verifiedStateForTest(state))
-	service := newTestDaemonService(rt, state, config, time.Second)
+	config := syncConfigFromAppConfig(appConfig, verified)
+	service := newTestDaemonServiceFromOwners(rt, verified, nil, runtime, config, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})

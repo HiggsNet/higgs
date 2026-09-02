@@ -20,9 +20,9 @@ import (
 // TestCollectAllRevokedZonesEmpty verifies that no revoked zones are returned
 // when all zones have active delegations.
 func TestCollectAllRevokedZonesEmpty(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, _, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
-	revoked := collectAllRevokedZones(state.Network, now)
+	revoked := collectAllRevokedZones(verified.Network, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected no revoked zones, got %d: %v", len(revoked), revoked)
 	}
@@ -31,11 +31,11 @@ func TestCollectAllRevokedZonesEmpty(t *testing.T) {
 // TestCollectAllRevokedZonesWithRevocation verifies that revoked zones are
 // correctly identified from active state.
 func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, _, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Revoke node-b.catofes.
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -45,7 +45,7 @@ func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	revoked := collectAllRevokedZones(state.Network, now)
+	revoked := collectAllRevokedZones(verified.Network, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. to be revoked, got %v", revoked)
 	}
@@ -57,11 +57,11 @@ func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
 // TestComputeRevocationImpactBasic verifies that inspect.RevocationImpact correctly
 // identifies affected link instances, sync peers, and the source zone.
 func TestComputeRevocationImpactBasic(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Set up a link instance to node-b.catofes.
-	state.LinkInstances = map[string]linkInstanceState{
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-to-node-b": {
 			ID:          "link-to-node-b",
 			PeerZone:    "node-b.catofes.",
@@ -70,15 +70,15 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		},
 	}
 	// Set up a SyncPeer for node-b.
-	state.SyncPeers = map[string]syncPeerState{
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredAddr: "192.0.2.1:33434",
-			ObservedAddr:   "192.0.2.1:33434",
+			DiscoveredEndpoint: "192.0.2.1:33434",
+			ObservedEndpoint:   "192.0.2.1:33434",
 		},
 	}
 
 	// Revoke node-b.catofes.
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -88,7 +88,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, "node-b.catofes.", now)
 	if impact.RevokedZone != "node-b.catofes." {
 		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
 	}
@@ -112,23 +112,23 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 // TestComputeRevocationImpactSubtree verifies that descendant zones are
 // correctly identified as part of the revoked subtree.
 func TestComputeRevocationImpactSubtree(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Add a grandchild zone under node-b.catofes.
 	// buildTestNetworkState already has root -> catofes. -> node-b.catofes.
 	// We need to add a sub-zone like leaf.node-b.catofes.
 	leafZone := zone.ZonePath("leaf.node-b.catofes.")
-	state.Network.Zones[leafZone] = &zone.ZoneState{
+	verified.Network.Zones[leafZone] = &zone.ZoneState{
 		Path:          leafZone,
-		Authority:     state.Network.Zones["node-b.catofes."].Authority,
+		Authority:     verified.Network.Zones["node-b.catofes."].Authority,
 		Delegations:   make(map[zone.ZonePath]*zone.Delegation),
 		Revocations:   make(map[zone.ZonePath]*zone.DelegationRevocation),
 		Records:       make(map[string]*zone.Record),
 		RecordHistory: make(map[string][]*zone.Record),
 	}
 	// Also set up link instance and sync peer for the leaf.
-	state.LinkInstances = map[string]linkInstanceState{
+	runtime.LinkInstances = map[string]linkInstanceState{
 		"link-to-leaf": {
 			ID:          "link-to-leaf",
 			PeerZone:    leafZone,
@@ -136,14 +136,14 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 			ActualState: "up",
 		},
 	}
-	state.SyncPeers = map[string]syncPeerState{
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		string(leafZone): {
-			DiscoveredAddr: "192.0.2.2:33434",
+			DiscoveredEndpoint: "192.0.2.2:33434",
 		},
 	}
 
 	// Revoke node-b.catofes. (parent zone).
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -153,7 +153,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, "node-b.catofes.", now)
 	// The leaf should be in the subtree.
 	found := slices.Contains(impact.RevokedSubtree, leafZone)
 	if !found {
@@ -184,21 +184,21 @@ func TestComputeRevocationImpactNilState(t *testing.T) {
 // TestDaemonFlushRevocationCleanup verifies that the daemon's
 // flushRevocationCleanup correctly clears peer cache after revocation.
 func TestDaemonFlushRevocationCleanup(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Set up sync peer with observed path.
-	state.SyncPeers = map[string]syncPeerState{
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredAddr:       "192.0.2.1:33434",
-			ObservedAddr:         "192.0.2.1:33434",
+			DiscoveredEndpoint:   "192.0.2.1:33434",
+			ObservedEndpoint:     "192.0.2.1:33434",
 			ObservedLastSeenUnix: now.Unix(),
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
 		},
 	}
 
 	// Revoke node-b.catofes.
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -213,7 +213,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	// Flush revocation cleanup.
 	service.flushRevocationCleanup()
@@ -230,11 +230,11 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 }
 
 func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	rt := &Runtime{
 		Config: defaultAppConfig(),
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	before := service.StateStore.Meta().Revision
 
 	service.flushRevocationCleanup()
@@ -245,12 +245,12 @@ func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.
 }
 
 func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {LastError: "zone revoked"},
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
+		"node-b.catofes.": {LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureLegacy, Message: "zone revoked"}},
 	}
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -260,7 +260,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
 	})
@@ -277,12 +277,12 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 }
 
 func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
-	state, config := buildTestNetworkState(b)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(b)
 	now := time.Unix(4140, 0)
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {LastError: "zone revoked"},
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
+		"node-b.catofes.": {LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureLegacy, Message: "zone revoked"}},
 	}
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -291,7 +291,10 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 		RevokedAuthorityHash:  delegation.AuthorityHash,
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service := newTestDaemonService(&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		verified, checkpoint, runtime, config, time.Second,
+	)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
@@ -299,61 +302,13 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 	}
 }
 
-func TestDaemonFlushRevocationCleanupUsesStateStoreWhileConstructorInputLocked(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	now := time.Unix(4140, 0)
-	state.SyncPeers = map[string]syncPeerState{
-		"node-b.catofes.": {DiscoveredAddr: "192.0.2.1:33434"},
-	}
-	parent := state.Network.Zones["catofes."]
-	delegation := parent.Delegations["node-b.catofes."]
-	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
-		ChildZone:             "node-b.catofes.",
-		ParentZone:            "catofes.",
-		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
-		RevokedAuthorityHash:  delegation.AuthorityHash,
-		RevokedAt:             now.Add(-time.Second).Unix(),
-	}
-
-	rt := &Runtime{
-		Config: defaultAppConfig(),
-		Clock:  func() time.Time { return now },
-	}
-	service := newTestDaemonService(rt, state, config, time.Second)
-	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
-		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
-	})
-
-	state.Lock()
-	done := make(chan struct{})
-	go func() {
-		service.flushRevocationCleanup()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		state.Unlock()
-		t.Fatalf("flushRevocationCleanup blocked behind detached constructor-input lock")
-	}
-	state.Unlock()
-
-	view := service.StateStore.common.ReadView()
-	if got := view.Gossip.Peers["node-b.catofes."].DiscoveredEndpoint; got != "" {
-		t.Fatalf("committed discovered addr = %q, want cleared", got)
-	}
-	if _, ok := service.hostRuntime.Observability.Snapshot("node-b.catofes.", now); ok {
-		t.Fatal("revoked peer diagnostics were not deleted")
-	}
-}
-
 // TestAllRevocationImpact verifies the combined impact for multiple revoked zones.
 func TestAllRevocationImpact(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Revoke node-b.catofes.
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -363,7 +318,7 @@ func TestAllRevocationImpact(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), nil, now)
+	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, nil, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}
@@ -374,10 +329,10 @@ func TestAllRevocationImpact(t *testing.T) {
 
 // TestAllRevocationImpactEmpty verifies empty output when no zones are revoked.
 func TestAllRevocationImpactEmpty(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), nil, now)
+	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, nil, now)
 	if impacts != nil {
 		t.Fatalf("expected nil impacts, got %d", len(impacts))
 	}
@@ -387,11 +342,11 @@ func TestAllRevocationImpactEmpty(t *testing.T) {
 // notifyStateChanged path clears peer cache after revocation, and that the
 // deny-first ordering runs cleanup before IPsec/routing/firewall flush.
 func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
-	addTestIPsecRecords(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
 	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, state.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
 	rt := &Runtime{
@@ -400,17 +355,17 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	}
 
 	// Set up a sync peer with observed path.
-	state.SyncPeers = map[string]syncPeerState{
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredAddr:       "192.0.2.1:33434",
-			ObservedAddr:         "192.0.2.1:33434",
+			DiscoveredEndpoint:   "192.0.2.1:33434",
+			ObservedEndpoint:     "192.0.2.1:33434",
 			ObservedLastSeenUnix: now.Unix(),
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
 		},
 	}
 
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	// Create the link first.
@@ -611,11 +566,11 @@ func readBirdConfigForNetns(t *testing.T, runtime *linuxRuntimeState, netns stri
 // TestConfiguredBootstrapPeerRevoked verifies that a revoked bootstrap peer is
 // detected in the impact's ConfiguredButRevoked list.
 func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Revoke node-b.catofes.
-	parent := state.Network.Zones["catofes."]
+	parent := verified.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
 		ChildZone:             "node-b.catofes.",
@@ -631,7 +586,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		},
 	}
 
-	impacts := AllRevocationImpact(state.Network, state.LinkInstances, testGossipCheckpoint(state.SyncPeers), config, now)
+	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, config, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}

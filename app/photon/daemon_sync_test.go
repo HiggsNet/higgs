@@ -13,21 +13,21 @@ import (
 // composition: UDP datagrams, TCP object-pull, daemon event pumping and the
 // two common stores converge through the production wiring.
 func TestDaemonEventLoopSyncSession(t *testing.T) {
-	stateA, configA, stateB, configB := buildTestABDaemonStates(t)
+	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
 	now := time.Now()
 
-	recordA, err := buildSignedRecordAt(stateA.Network, stateA.ZonePrivateKey, "node-a.catofes.", "event-loop-test", []byte("from-a"), "policy.string", now)
+	recordA, err := buildSignedRecordAt(verifiedA.Network, verifiedA.IdentityPrivateKey, "node-a.catofes.", "event-loop-test", []byte("from-a"), "policy.string", now)
 	if err != nil {
 		t.Fatalf("build record for A: %v", err)
 	}
-	if err := stateA.Network.Put(recordA); err != nil {
+	if err := verifiedA.Network.Put(recordA); err != nil {
 		t.Fatalf("put record on A: %v", err)
 	}
-	recordB, err := buildSignedRecordAt(stateB.Network, stateB.ZonePrivateKey, "node-b.catofes.", "event-loop-test", []byte("from-b"), "policy.string", now)
+	recordB, err := buildSignedRecordAt(verifiedB.Network, verifiedB.IdentityPrivateKey, "node-b.catofes.", "event-loop-test", []byte("from-b"), "policy.string", now)
 	if err != nil {
 		t.Fatalf("build record for B: %v", err)
 	}
-	if err := stateB.Network.Put(recordB); err != nil {
+	if err := verifiedB.Network.Put(recordB); err != nil {
 		t.Fatalf("put record on B: %v", err)
 	}
 
@@ -51,9 +51,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	rtA := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	rtB := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
-	serviceA := newTestDaemonService(rtA, stateA, configA, time.Second)
+	serviceA := newTestDaemonServiceFromOwners(rtA, verifiedA, nil, &linuxRuntimeState{}, configA, time.Second)
 	setTestGossipTransport(t, serviceA, transportA)
-	serviceB := newTestDaemonService(rtB, stateB, configB, time.Second)
+	serviceB := newTestDaemonServiceFromOwners(rtB, verifiedB, nil, &linuxRuntimeState{}, configB, time.Second)
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
 	serviceA.EnableEventLoopSync(clock)

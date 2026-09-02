@@ -14,6 +14,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -46,7 +47,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	// Build a minimal state with root + catofes + node-a.
-	state, syncConfig, _ := buildDryRunSmokeNetworkState(t)
+	verified, checkpoint, runtime, syncConfig, _ := buildDryRunSmokeOwners(t)
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
@@ -74,7 +75,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	}
 
 	// Use real process manager and birdc client.
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -154,7 +155,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatalf("set lo up: %v", err)
 	}
 
-	state, syncConfig, _ := buildDryRunSmokeNetworkState(t)
+	verified, checkpoint, runtime, syncConfig, _ := buildDryRunSmokeOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
 	appConfig.Netns = netnsConfig{
@@ -179,7 +180,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
-	service1 := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service1 := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager1 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service1, processManager1, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -348,17 +349,22 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	}
 	healthSmokePacketLossRates(t, ctx, nsA, nsB, vethA)
 
+	initialRuntime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{
+		"link-1": {
+			ID:                  "link-1",
+			GroupID:             "main",
+			ActualState:         "up",
+			StagedInterfaceName: vethA,
+		},
+	}}
+	stateStore, err := newDaemonStateStore(corestate.NewStore(&corestate.VerifiedState{}, nil), initialRuntime, nil)
+	if err != nil {
+		t.Fatalf("newDaemonStateStore: %v", err)
+	}
 	service := &DaemonService{
-		health: manager,
-		StateStore: newTestDaemonStateStore(&stateFile{LinkInstances: map[string]linkInstanceState{
-			"link-1": {
-				ID:                  "link-1",
-				GroupID:             "main",
-				ActualState:         "up",
-				StagedInterfaceName: vethA,
-			},
-		}}),
-		Sync: &SyncRuntime{},
+		health:     manager,
+		StateStore: stateStore,
+		Sync:       &SyncRuntime{},
 	}
 	_, runtime := service.StateStore.readCommonAndRuntime()
 	service.recordBirdHealthObservationUnavailableForLinks(runtime.LinkInstances, runtime.IPsecReconcile, nsA, []string{"main"})
@@ -532,7 +538,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	_ = exec.CommandContext(ctx, "ip", "netns", "exec", nsName, "ip", "link", "set", upstreamIface, "up").Run()
 
 	// Build minimal state.
-	state, syncConfig, _ := buildDryRunSmokeNetworkState(t)
+	verified, checkpoint, runtime, syncConfig, _ := buildDryRunSmokeOwners(t)
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
@@ -570,7 +576,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	// Use real process manager.
-	service := newTestDaemonService(rt, state, syncConfig, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}

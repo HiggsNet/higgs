@@ -250,7 +250,7 @@ func applyAuthoritativeVerifiedTestIntent(state *corestate.VerifiedState, intent
 	return store.ReadView().State, nil
 }
 
-func applyAuthoritativeTestIntentAs(state *stateFile, managedZone zone.ZonePath, privateKey []byte, intent corestate.LocalIntent, now time.Time) error {
+func applyAuthoritativeTestIntentAs(state *corestate.VerifiedState, managedZone zone.ZonePath, privateKey []byte, intent corestate.LocalIntent, now time.Time) error {
 	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{
 		ManagedZone:          managedZone,
 		Network:              state.Network,

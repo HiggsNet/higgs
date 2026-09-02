@@ -107,9 +107,9 @@ func TestDaemonEndpointTimerPublishesToCommonOwner(t *testing.T) {
 }
 
 func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(2000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
@@ -122,7 +122,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 	if _, err := service.publishLocalProtocols(false); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
@@ -195,14 +195,14 @@ func TestDaemonIPsecPortRotateCommitsLinuxRuntimeOwner(t *testing.T) {
 }
 
 func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
-	state, config := buildTestNetworkState(t)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3000, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
@@ -246,17 +246,17 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 }
 
 func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(4000, 0)
 	rt := &Runtime{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
-	service := newTestDaemonService(rt, state, config, time.Second)
+	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	external, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
@@ -296,11 +296,11 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 }
 
 func TestBuildSignedRecordReturnsErrorWithoutLocalSigner(t *testing.T) {
-	state, _ := buildTestNetworkState(t)
-	state.ManagedZone = "node-a.catofes."
-	state.ZonePrivateKey = nil
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-a.catofes."
+	verified.IdentityPrivateKey = nil
 
-	_, err := buildSignedRecordAt(state.Network, state.ZonePrivateKey, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
+	_, err := buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
 	if err == nil || !strings.Contains(err.Error(), "no local signing key") {
 		t.Fatalf("buildSignedRecordAt error = %v, want missing signer", err)
 	}
@@ -540,9 +540,9 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 }
 
 func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "198.51.100.20:4242"
 	now := time.Unix(2200, 0)
 	appConfig := defaultAppConfig()
@@ -559,7 +559,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	// First publish: records are created, state is flushed.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
@@ -607,7 +607,9 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 		ListenAddr:             "127.0.0.1:0",
 		DisableEndpointPublish: true,
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(
+		rt, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state), config, time.Second,
+	)
 	beforeRev := service.StateStore.Meta().Revision
 
 	changed, err := service.prepareStartupState()
@@ -641,9 +643,9 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 }
 
 func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
-	state, config := buildTestNetworkState(t)
-	state.ManagedZone = "node-b.catofes."
-	config.PeerID = string(state.ManagedZone)
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "198.51.100.20:4242"
 	config.AdvertiseAddrs = []string{"198.51.100.20:4242"}
 	config.EndpointRefresh = 30 * time.Minute
@@ -658,14 +660,14 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonService(rt, state, config, time.Second)
+	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	// First publish: record is created.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
 	}
 	firstView := service.StateStore.common.ReadView()
-	first := firstView.State.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	first := firstView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if first == nil {
 		t.Fatal("first endpoint record missing")
 	}
@@ -697,7 +699,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 		t.Fatalf("syncNow = false, want true after refresh interval")
 	}
 	thirdView := service.StateStore.common.ReadView()
-	third := thirdView.State.Network.Zones[state.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
+	third := thirdView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if third.Version != first.Version+1 {
 		t.Fatalf("third version = %d, want %d (refreshed)", third.Version, first.Version+1)
 	}

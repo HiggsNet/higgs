@@ -244,7 +244,7 @@ func buildTestRoutingOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config
 }
 
-func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey) {
+func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -356,14 +356,14 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile, ma
 		t.Fatalf("VerifyChain(node-b): %v", err)
 	}
 
-	state := &stateFile{
-		ManagedZone:    "node-a.catofes.",
-		Network:        ns,
-		ZonePrivateKey: nodeAPriv,
+	verified := &corestate.VerifiedState{
+		ManagedZone:        "node-a.catofes.",
+		Network:            ns,
+		IdentityPrivateKey: nodeAPriv,
 	}
-	addIPAMPool(t, state.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
-	addIPAMPool(t, state.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
-	addIPAMPool(t, state.Network, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
+	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
+	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
+	addIPAMPool(t, verified.Network, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
@@ -376,21 +376,21 @@ func buildDryRunSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile, ma
 	}
 
 	// Pool delegations covering the assignments below.
-	addIPAMPool(t, state.Network, "catofes.", "10.0.0.0/16", "catofes.", now, catofesPriv)
-	addIPAMPool(t, state.Network, "catofes.", "10.1.0.0/16", "catofes.", now, catofesPriv)
+	addIPAMPool(t, verified.Network, "catofes.", "10.0.0.0/16", "catofes.", now, catofesPriv)
+	addIPAMPool(t, verified.Network, "catofes.", "10.1.0.0/16", "catofes.", now, catofesPriv)
 
 	// IPAM assignments in catofes. for the two leaf nodes.
-	addRouteAssignment(t, state.Network, "catofes.", "10.0.0.0/16", "node-a.catofes.", true, now, catofesPriv)
-	addRouteAssignment(t, state.Network, "catofes.", "10.1.0.0/16", "node-b.catofes.", true, now, catofesPriv)
+	addRouteAssignment(t, verified.Network, "catofes.", "10.0.0.0/16", "node-a.catofes.", true, now, catofesPriv)
+	addRouteAssignment(t, verified.Network, "catofes.", "10.1.0.0/16", "node-b.catofes.", true, now, catofesPriv)
 
 	// Active route announcements in the respective leaf zones.
-	addRouteAnnouncement(t, state.Network, "node-a.catofes.", "10.0.1.0/24", true, now, nodeAPriv)
-	addRouteAnnouncement(t, state.Network, "node-b.catofes.", "10.1.1.0/24", true, now, nodeBPriv)
+	addRouteAnnouncement(t, verified.Network, "node-a.catofes.", "10.0.1.0/24", true, now, nodeAPriv)
+	addRouteAnnouncement(t, verified.Network, "node-b.catofes.", "10.1.1.0/24", true, now, nodeBPriv)
 
-	return state, config, signers
+	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config, signers
 }
 
-func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey, *Runtime) {
+func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey, *Runtime) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -474,13 +474,13 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 		t.Fatalf("VerifyChain(node-a): %v", err)
 	}
 
-	state := &stateFile{
-		ManagedZone:    "node-a.catofes.",
-		Network:        ns,
-		ZonePrivateKey: nodeAPriv,
+	verified := &corestate.VerifiedState{
+		ManagedZone:        "node-a.catofes.",
+		Network:            ns,
+		IdentityPrivateKey: nodeAPriv,
 	}
-	addIPAMPool(t, state.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
-	addIPAMPool(t, state.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
+	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
+	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
 	config := &syncConfigFile{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
@@ -507,7 +507,7 @@ func buildIPAMRoutingSmokeNetworkState(t *testing.T) (*stateFile, *syncConfigFil
 		Clock:  func() time.Time { return time.Unix(4000, 0) },
 	}
 
-	return state, config, signers, rt
+	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config, signers, rt
 }
 
 func addIPAMPool(t *testing.T, network *zone.NetworkState, source zone.ZonePath, prefix string, delegatedTo zone.ZonePath, now time.Time, signer ed25519.PrivateKey) {
@@ -552,11 +552,6 @@ func addRouteAssignment(t *testing.T, network *zone.NetworkState, source zone.Zo
 		t.Fatalf("buildSignedRecordAt: %v", err)
 	}
 	network.Zones[source].Records[key] = signed
-}
-
-func revokeRouteAssignment(t *testing.T, network *zone.NetworkState, source zone.ZonePath, prefix string, assignedTo zone.ZonePath, now time.Time, signer ed25519.PrivateKey) {
-	t.Helper()
-	addRouteAssignment(t, network, source, prefix, assignedTo, false, now, signer)
 }
 
 func addRouteAnnouncement(t *testing.T, network *zone.NetworkState, path zone.ZonePath, prefix string, active bool, now time.Time, signer ed25519.PrivateKey) {
@@ -706,15 +701,15 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		}
 	}
 
-	state := &stateFile{
-		ManagedZone:    managedZone,
-		Network:        ns,
-		ZonePrivateKey: managedPriv,
-		RootPrivateKey: rootPriv,
+	verified := &corestate.VerifiedState{
+		ManagedZone:        managedZone,
+		Network:            ns,
+		IdentityPrivateKey: managedPriv,
+		RootPrivateKey:     rootPriv,
 	}
 	rt := &Runtime{
 		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
 		Clock:  func() time.Time { return time.Unix(1000, 0) },
 	}
-	return verifiedStateForTest(state), rt
+	return verified, rt
 }

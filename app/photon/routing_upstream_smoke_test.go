@@ -364,9 +364,9 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 
 func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 	now := time.Unix(1000, 0)
-	state, _, signers, _ := buildIPAMRoutingSmokeNetworkState(t)
-	addRouteAssignment(t, state.Network, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
-	ars, err := routing.BuildAuthorizedRouteSet(state.Network, now)
+	verified, _, _, _, signers, _ := buildIPAMRoutingSmokeOwners(t)
+	addRouteAssignment(t, verified.Network, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
+	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 		Overlays:  []string{"main"},
 		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 	}
-	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(state.Network), "photontesth2")
+	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(verified.Network), "photontesth2")
 	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, ng, netnsCfg, ars, "node-a.catofes.")
 	if spec.Upstream == nil {
 		t.Fatal("expected upstream interface block")
