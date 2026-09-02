@@ -1006,20 +1006,16 @@ package dependency: app -> host -> gossip -> state -> zone
           `Runtime.LoadState/loadPartitionedState/applyConfiguredIdentityOverlay` 也已整体移到 `_test.go`，启动不再重建 aggregate view。
         - [x] `init root` 直接原子初始化 common/Linux buckets，不再先写 legacy aggregate schema 等待下次 daemon 启动迁移；
           `Runtime.SaveState(stateFile)` 因此移到 test-only helper。旧 schema 读取/迁移仍保留。
-        - [ ] 配置驱动的 pending auto-join 仍是唯一 production legacy writer：此时 managed zone authority 尚未同步，不能通过
-          正式 common `ValidateStateRoot`。当前已缩成直接写 root-only Network 与 identity meta 的最小 writer，不再先构造或返回
-          `stateFile`；待 state/admission 定义独立的 pending identity root 后改为新 schema，不能通过放宽 verified 校验来删除。
-          通用 `saveStateAt/stateMetaFromState` 已移到测试。
-          - 当前闭环仍未完成：`openLinuxDaemonState` 在空库写入 pending legacy root 后立即进入正式 migration，随后会因 managed zone
-            authority 尚不存在而被 `ValidateStateRoot` 拒绝。保留 admission/identity bootstrap 的 legacy fixture 覆盖；在定义独立 pending
-            owner 或显式 pending startup 分支前，不能把该路径标记为已切到 common Store，也不能用放宽 verified 校验规避。
-        - [ ] 继续按 planner/inspect/offline migration 三组迁走 production `stateFile` 参数；全部调用方消失后删除 aggregate clone。
-          production `cloneLinuxRuntimeState` 已改为直接复制 typed runtime，不再绕行
-          `runtime -> stateFile -> runtime`；`composeLinuxStateView/applyLinuxRuntimeReadView` 已降为纯测试 fixture。
-        - [ ] 清理测试侧 aggregate 债务：`daemon_test_helpers_test.go` 已膨胀到 1500 行，且普通 daemon 测试仍通过
-          `stateFile` 构造 common/Linux owners。先增加直接接收 `VerifiedState + GossipCheckpoint + linuxRuntimeState` 的
-          typed-owner fixture，并迁移 daemon lifecycle 基础测试；随后按 gossip、reconcile、root-smoke 拆分 helper 与调用方，
-          最终只允许 legacy migration 测试使用 `LoadState/SaveState/cloneStateFile/stateMetaFromState`。
+        - [x] 配置驱动的 pending auto-join 已退出 production legacy writer：当前 common schema 保存 trusted root、identity private key 与
+          authority-less managed-zone placeholder，Linux runtime 保存 canonical identity key path。`ValidateStateRoot` 仍要求 managed zone entry
+          存在且继续校验 root pin/private key；`autoJoinPendingVerified` 通过 authority 缺失识别 pending，不放宽普通 verified state 的结构校验。
+          `openLinuxDaemonState` 空库初始化、关闭重开和 admission runtime commit 均已覆盖，不再发生“先写 legacy 再立即迁移”的闭环断裂。
+        - [x] production `stateFile` 已收窄为单向旧库迁移 DTO：planner/inspect/offline/daemon 各消费者均读取 typed owners，aggregate clone、
+          partitioned-to-aggregate projection 和通用 loader 已删除。production `cloneLinuxRuntimeState` 直接复制 typed runtime；现存 `stateFile`
+          参数只在 `runtime_state_migration.go` 与 `gossip_checkpoint_migration.go` 内部使用，随旧 schema 支持周期一并保留或删除。
+        - [x] 清理测试侧 aggregate 债务：普通 daemon、gossip、reconcile、root-smoke 与 offline command 测试均直接构造或读取
+          `VerifiedState + GossipCheckpoint + linuxRuntimeState`；aggregate service/store/loader/clone fixture 已删除。只允许 legacy
+          migration/codec 测试通过 `legacy_state_fixture_test.go` 使用 `stateFile/stateMetaFromState` 写入退役 schema。
           - 第一批已建立 owner-first `buildTestDaemonOwners`，旧 `buildTestNetworkState` 只作为待迁调用方的反向组合 wrapper；
             daemon lifecycle、control common view、links/status、packet checkpoint 与 Observer snapshot 测试已直接准备 typed owners。
             原先通过锁住 constructor `stateFile` 验证 detached 的两组 read 测试，改为直接修改构造输入并断言 Store 的 owner clone
@@ -1167,6 +1163,15 @@ package dependency: app -> host -> gossip -> state -> zone
             event/server、link output、ping/health target 与 routing timestamp no-op 测试同步退出 aggregate fixture：common managed zone、gossip peer
             checkpoint 和 Linux link/reconcile state 分开构造。`newTestDaemonStateStore` 只接受三个明确 owner，不再负责拆分 `stateFile`。现存 aggregate
             引用进一步收窄到 pending admission/identity、legacy codec/migration、clone/schema guard 以及明确验证旧数据库事务的测试。
+          - pending auto-join/admission 与 identity fixture 本身也已改为直接返回 `VerifiedState + linuxRuntimeState`，diagnosis、startup admission、
+            identity mismatch/reload 测试不再先构造 `stateFile` 再投影。direct state GC 不再借 legacy migration fixture 准备当前 partitioned DB；
+            firewall netns、BIRD rotate policy 直接使用 Linux runtime。删除仅供测试的 `Runtime.SyncConfig(stateFile)`，配置测试调用正式
+            `syncConfigFromAppConfig(VerifiedState)`。当前普通行为测试已无 aggregate fixture；剩余引用只属于明确的旧 `LoadState/SaveState`、
+            legacy codec/migration 与 clone/schema guard 覆盖。
+          - aggregate clone 清理完成：删除 test-only `cloneStateFile`、锁方法、aggregate benchmark 和无调用的 legacy peer clone；深拷贝与字段
+            清单防护改为直接覆盖生产 `cloneLinuxRuntimeState`。authority/join/recovery 流程测试改读 current common owner；auto-join bootstrap
+            与 admission restart 测试改走正式 `openLinuxDaemonState` 和 persisted runtime commit。旧 `aggregate_state_fixture_test.go` 已删除，
+            仅保留窄 `legacy_state_fixture_test.go` 为 migration/codec 测试读写退役 schema；`stateFile` 测试引用只存在于这些明确 legacy 覆盖。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。

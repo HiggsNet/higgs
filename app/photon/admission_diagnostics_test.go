@@ -10,27 +10,18 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func diagnoseTestAutoJoinAdmission(state *stateFile, now time.Time) inspect.AdmissionDiagnosis {
-	if state == nil {
-		return diagnoseAutoJoinAdmission(nil, nil, now)
-	}
-	return diagnoseAutoJoinAdmission(&corestate.VerifiedState{
-		ManagedZone: state.ManagedZone, Network: state.Network, IdentityPrivateKey: state.ZonePrivateKey,
-	}, state.Admission, now)
-}
-
 func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	network, result, err := corestate.ReconcileManagedAuthority(
-		state.Network, state.ManagedZone, state.ZonePrivateKey.Public().(ed25519.PublicKey), time.Unix(1000, 0),
+		verified.Network, verified.ManagedZone, verified.IdentityPrivateKey.Public().(ed25519.PublicKey), time.Unix(1000, 0),
 	)
 	if err != nil || !result.Adopted {
 		t.Fatalf("pre-adopt: result=%+v err=%v", result, err)
 	}
-	state.Network = network
+	verified.Network = network
 	now := time.Unix(2000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if d.Pending {
 		t.Fatalf("diagnosis should not be pending after adoption")
 	}
@@ -41,10 +32,10 @@ func TestDiagnoseAutoJoinAdoptionNotPending(t *testing.T) {
 
 func TestDiagnoseAutoJoinMissingParentZone(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	delete(state.Network.Zones, state.ManagedZone.Parent())
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
+	delete(verified.Network.Zones, verified.ManagedZone.Parent())
 	now := time.Unix(1000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -55,15 +46,15 @@ func TestDiagnoseAutoJoinMissingParentZone(t *testing.T) {
 
 func TestDiagnoseAutoJoinMissingDelegation(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
-	parent := state.ManagedZone.Parent()
-	parentState := state.Network.Zones[parent]
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
+	parent := verified.ManagedZone.Parent()
+	parentState := verified.Network.Zones[parent]
 	if parentState == nil {
 		t.Fatalf("parent zone missing")
 	}
-	delete(parentState.Delegations, state.ManagedZone)
+	delete(parentState.Delegations, verified.ManagedZone)
 	now := time.Unix(1000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -74,9 +65,9 @@ func TestDiagnoseAutoJoinMissingDelegation(t *testing.T) {
 
 func TestDiagnoseAutoJoinDelegationKeyMismatch(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", false)
 	now := time.Unix(1000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -87,9 +78,9 @@ func TestDiagnoseAutoJoinDelegationKeyMismatch(t *testing.T) {
 
 func TestDiagnoseAutoJoinNoBootstrapSync(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	now := time.Unix(1000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -100,14 +91,14 @@ func TestDiagnoseAutoJoinNoBootstrapSync(t *testing.T) {
 
 func TestDiagnoseAutoJoinWaitingForAdoption(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	now := time.Unix(1000, 0)
-	state.Admission = &admissionState{
+	runtime.Admission = &admissionState{
 		Pending:               true,
 		PendingSinceUnix:      now.Add(-1 * time.Hour).Unix(),
 		LastBootstrapSyncUnix: now.Add(-5 * time.Minute).Unix(),
 	}
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if !d.Pending {
 		t.Fatalf("diagnosis should be pending")
 	}
@@ -118,9 +109,9 @@ func TestDiagnoseAutoJoinWaitingForAdoption(t *testing.T) {
 
 func TestDiagnoseAutoJoinJoinRequestPresent(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	now := time.Unix(1000, 0)
-	d := diagnoseTestAutoJoinAdmission(state, now)
+	d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
 	if d.JoinRequestB64 == "" {
 		t.Fatalf("join_request should be present for pending state with key")
 	}
@@ -131,10 +122,9 @@ func TestDiagnoseAutoJoinJoinRequestPresent(t *testing.T) {
 
 func TestUpdateAdmissionOnPendingSetsTimestamp(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	now := time.Unix(5000, 0)
-	runtime := linuxRuntimeStateFromLegacy(state)
-	updateAdmissionOnPending(verifiedStateForTest(state), runtime, now)
+	updateAdmissionOnPending(verified, runtime, now)
 	if runtime.Admission == nil {
 		t.Fatalf("admission state should be initialized")
 	}
@@ -151,14 +141,13 @@ func TestUpdateAdmissionOnPendingSetsTimestamp(t *testing.T) {
 
 func TestUpdateAdmissionOnPendingPreservesTimestamp(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", true)
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", true)
 	originalTime := time.Unix(3000, 0)
-	state.Admission = &admissionState{
+	runtime.Admission = &admissionState{
 		Pending:          true,
 		PendingSinceUnix: originalTime.Unix(),
 	}
-	runtime := linuxRuntimeStateFromLegacy(state)
-	updateAdmissionOnPending(verifiedStateForTest(state), runtime, time.Unix(5000, 0))
+	updateAdmissionOnPending(verified, runtime, time.Unix(5000, 0))
 	if runtime.Admission.PendingSinceUnix != originalTime.Unix() {
 		t.Fatalf("pending_since = %d, want %d (should be preserved)", runtime.Admission.PendingSinceUnix, originalTime.Unix())
 	}
@@ -179,32 +168,46 @@ func TestAdmissionStatePersistsAcrossReload(t *testing.T) {
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
 	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	state, err := rt.LoadState()
+	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("openLinuxDaemonState: %v", err)
 	}
-	if !autoJoinPendingVerified(verifiedStateForTest(state)) {
+	view := startup.Common.ReadView()
+	if !autoJoinPendingVerified(view.State) {
 		t.Fatalf("state should start pending")
 	}
-
-	runtime := linuxRuntimeStateFromLegacy(state)
-	updateAdmissionOnPending(verifiedStateForTest(state), runtime, time.Unix(1000, 0))
-	state.Admission = cloneAdmissionState(runtime.Admission)
-	if err := rt.SaveState(state); err != nil {
-		t.Fatalf("SaveState: %v", err)
-	}
-
-	reloaded, err := rt.LoadState()
+	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
 	if err != nil {
-		t.Fatalf("LoadState(reloaded): %v", err)
+		startup.Common.Close()
+		_ = boltStore.Close()
+		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
-	if reloaded.Admission == nil {
+	_, committed, err := stateStore.commitRuntimeIfRevision(uint64(view.Revision), func(runtime *linuxRuntimeState) {
+		updateAdmissionOnPending(view.State, runtime, time.Unix(1000, 0))
+	})
+	if err != nil || !committed {
+		t.Fatalf("commit admission runtime = committed %v err %v", committed, err)
+	}
+	stateStore.common.Close()
+	if err := boltStore.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
+	}
+
+	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
+	}
+	if reopened.Runtime.Admission == nil {
 		t.Fatalf("admission state should persist across reload")
 	}
-	if !reloaded.Admission.Pending {
+	if !reopened.Runtime.Admission.Pending {
 		t.Fatalf("admission should still be pending after reload")
 	}
-	if reloaded.Admission.PendingReason == "" {
+	if reopened.Runtime.Admission.PendingReason == "" {
 		t.Fatalf("pending_reason should persist after reload")
+	}
+	reopened.Common.Close()
+	if err := reopenedStore.Close(); err != nil {
+		t.Fatalf("Close reopened BoltStore: %v", err)
 	}
 }

@@ -94,7 +94,7 @@ func TestJoinFlow(t *testing.T) {
 	if err := acceptJoinBundle(bundlePath, keyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle: %v", err)
 	}
-	state, err := loadState()
+	state, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState(node-b): %v", err)
 	}
@@ -164,7 +164,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err := acceptJoinBundle(bundleText, keyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(base64): %v", err)
 	}
-	joined, err := loadState()
+	joined, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState(node): %v", err)
 	}

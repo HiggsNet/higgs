@@ -114,7 +114,7 @@ func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.
 }
 
 func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
-	state := &stateFile{LinkInstances: map[string]linkInstanceState{
+	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{
 		"link-1": {
 			ID:                    "link-1",
 			GroupID:               "main",
@@ -133,10 +133,10 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 
 	wantPolicies := func(phase string, want map[string]uint) {
 		t.Helper()
-		instance := state.LinkInstances["link-1"]
+		instance := runtime.LinkInstances["link-1"]
 		instance.RotatePhase = phase
-		state.LinkInstances["link-1"] = instance
-		got := birdRotateInterfacePolicies(state.LinkInstances, state.IPsecReconcile, "photon", []string{"main"}, routingInst)
+		runtime.LinkInstances["link-1"] = instance
+		got := birdRotateInterfacePolicies(runtime.LinkInstances, runtime.IPsecReconcile, "photon", []string{"main"}, routingInst)
 		gotMap := make(map[string]uint, len(got))
 		for _, policy := range got {
 			gotMap[policy.InterfaceName] = policy.Metric

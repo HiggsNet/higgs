@@ -669,8 +669,8 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 }
 
 func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
-	state := &stateFile{
-		ManagedZone: "node-a.catofes.",
+	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes."}
+	runtime := &linuxRuntimeState{
 		LinkInstances: map[string]linkInstanceState{
 			"a": {
 				ID:              "a",
@@ -700,8 +700,8 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 	input := buildFirewallPolicyInput(
 		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "default"},
 		&routing.AuthorizedRouteSet{},
-		&corestate.VerifiedState{ManagedZone: state.ManagedZone, Network: state.Network},
-		linuxRuntimeStateFromLegacy(state),
+		verified,
+		runtime,
 		config,
 		time.Now(),
 	)

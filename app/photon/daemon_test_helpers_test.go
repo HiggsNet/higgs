@@ -38,16 +38,6 @@ type testLinuxDrivers struct {
 	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
 }
 
-func verifiedStateForTest(state *stateFile) *corestate.VerifiedState {
-	if state == nil {
-		return nil
-	}
-	return &corestate.VerifiedState{
-		ManagedZone: state.ManagedZone, Network: state.Network,
-		RootPrivateKey: state.RootPrivateKey, IdentityPrivateKey: state.ZonePrivateKey,
-	}
-}
-
 // newTestDaemonServiceFromOwners is the normal fixture for tests of current
 // daemon behavior. New tests must construct the common and Linux owners
 // explicitly instead of passing the retired aggregate stateFile shape.

@@ -34,19 +34,30 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	}
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
+	// Pending auto-join has a stable local identity but no verified managed
+	// authority yet. Keep an explicit authority-less zone placeholder so the
+	// common root remains structurally valid while autoJoinPendingVerified still
+	// reports that synchronization/adoption is required.
+	ns.Zones[config.ManagedZone] = zone.NewZoneState(config.ManagedZone, nil)
 	configureValidation(ns)
-	store, err := zone.OpenBoltStore(path, 0o600)
+	store, err := corestate.OpenBoltStore(path, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	meta := stateMeta{
-		ManagedZone:     config.ManagedZone,
-		IdentityKeyPath: keyPath,
-		ZonePrivateKey:  append(ed25519.PrivateKey(nil), key.PrivateKey...),
-		SyncPeers:       make(map[string]syncPeerState),
+	candidate := &corestate.CommitCandidate{
+		Verified: &corestate.VerifiedState{
+			ManagedZone:          config.ManagedZone,
+			Network:              ns,
+			TrustedRootPublicKey: append(ed25519.PublicKey(nil), config.TrustedRootPublicKey...),
+			IdentityPrivateKey:   append(ed25519.PrivateKey(nil), key.PrivateKey...),
+		},
+		Gossip: &corestate.GossipCheckpoint{},
 	}
-	return store.SaveNetworkAndMetaJSON(cliMetaKey, meta, ns)
+	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{IdentityKeyPath: keyPath}); err != nil {
+		_ = store.Close()
+		return err
+	}
+	return store.Close()
 }
 
 func validateAutoJoinBootstrapConfig(config *appConfig) error {
@@ -89,8 +100,8 @@ func configuredIdentityKey(config *appConfig) (*privateKeyFile, string, error) {
 
 // validateConfiguredIdentityState checks that immutable identity settings still
 // describe the identity restored from the current common/Linux partitions.
-// It validates only fully initialized state; pending auto-join remains a
-// separate legacy bootstrap boundary until it has its own persisted owner.
+// Pending auto-join is represented by a current-schema verified owner whose
+// managed zone exists with no authority until gossip adoption completes.
 func validateConfiguredIdentityState(verified *corestate.VerifiedState, runtime *linuxRuntimeState, config *appConfig) (string, error) {
 	if config == nil || (config.ManagedZone == "" && config.Identity.KeyPath == "") {
 		return "", nil

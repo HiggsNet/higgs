@@ -595,8 +595,8 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 
 func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(t *testing.T) {
 	dir := t.TempDir()
-	state, _ := buildPendingAutoJoinState(t, dir, "node-b.catofes.", false)
-	state.Admission = nil
+	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", false)
+	runtime.Admission = nil
 	now := time.Unix(7250, 0)
 	rt := &Runtime{
 		StatePath: filepath.Join(dir, "photon.db"),
@@ -608,7 +608,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 		DisableEndpointPublish: true,
 	}
 	service := newTestDaemonServiceFromOwners(
-		rt, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state), config, time.Second,
+		rt, verified, &corestate.GossipCheckpoint{}, runtime, config, time.Second,
 	)
 	beforeRev := service.StateStore.Meta().Revision
 
@@ -619,7 +619,7 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if !changed {
 		t.Fatal("prepareStartupState changed = false, want admission commit")
 	}
-	if state.Admission != nil {
+	if runtime.Admission != nil {
 		t.Fatal("prepareStartupState mutated the detached constructor input")
 	}
 	common, committed := service.StateStore.readCommonAndRuntime()

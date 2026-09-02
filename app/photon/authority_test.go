@@ -18,7 +18,7 @@ func TestRootInitHasAllAuthorityPermissions(t *testing.T) {
 	if err := initRootState(); err != nil {
 		t.Fatalf("initRootState: %v", err)
 	}
-	state, err := loadState()
+	state, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 	}
 
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	state, err := loadState()
+	state, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState admin before grant: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 	if err := grantDelegationPermissions("catofes.", []zone.Permission{zone.PermAllocateIP}, grantBundlePath, true); err != nil {
 		t.Fatalf("grantDelegationPermissions(catofes): %v", err)
 	}
-	state, err = loadState()
+	state, err = loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState admin after grant: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 	if err := acceptJoinBundle(grantBundlePath, "", true); err != nil {
 		t.Fatalf("acceptJoinBundle(grant): %v", err)
 	}
-	childState, err := loadState()
+	childState, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState catofes after grant accept: %v", err)
 	}

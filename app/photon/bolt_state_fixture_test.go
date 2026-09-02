@@ -1,10 +1,26 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
+
+func loadConfiguredVerifiedState() (*corestate.VerifiedState, error) {
+	runtime, err := NewRuntime()
+	if err != nil {
+		return nil, err
+	}
+	common, _, err := loadOfflineOwnerViews(runtime)
+	if err != nil {
+		return nil, err
+	}
+	if common.State == nil {
+		return nil, fmt.Errorf("configured state has no verified owner")
+	}
+	return common.State, nil
+}
 
 // seedPartitionedStateDB initializes an empty current-schema database and
 // closes it so an offline command can reopen the file through production code.

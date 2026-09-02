@@ -29,7 +29,7 @@ gossip:
 	}
 }
 
-func TestLoadStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
+func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, pub := writeTestPrivateKey(t, dir, "node-b")
 	rootPub, _, err := ed25519.GenerateKey(nil)
@@ -44,31 +44,42 @@ func TestLoadStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
 	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	state, err := rt.LoadState()
+	store, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
-		t.Fatalf("LoadState: %v", err)
+		t.Fatalf("openLinuxDaemonState: %v", err)
 	}
-	if state.ManagedZone != "node-b.catofes." || !autoJoinPendingVerified(verifiedStateForTest(state)) {
-		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPendingVerified(verifiedStateForTest(state)))
+	state := startup.Common.ReadView().State
+	if state.ManagedZone != "node-b.catofes." || !autoJoinPendingVerified(state) {
+		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPendingVerified(state))
 	}
-	if !equalPublicKey(state.ZonePrivateKey.Public().(ed25519.PublicKey), pub) {
-		t.Fatalf("ZonePrivateKey public mismatch")
+	if !equalPublicKey(state.IdentityPrivateKey.Public().(ed25519.PublicKey), pub) {
+		t.Fatalf("IdentityPrivateKey public mismatch")
 	}
 	root := state.Network.Zones[zone.RootZone]
 	if root == nil || root.Authority == nil || !authorityHasKey(root.Authority, rootPub) {
 		t.Fatalf("trusted root authority missing: %+v", root)
 	}
 
-	reloaded, err := rt.LoadState()
-	if err != nil {
-		t.Fatalf("LoadState(reloaded): %v", err)
+	wantIdentityPath := startup.Runtime.IdentityKeyPath
+	startup.Common.Close()
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close BoltStore: %v", err)
 	}
-	if reloaded.IdentityKeyPath == "" || reloaded.IdentityKeyPath != state.IdentityKeyPath {
-		t.Fatalf("IdentityKeyPath = %q, want %q", reloaded.IdentityKeyPath, state.IdentityKeyPath)
+
+	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
+	}
+	if reopened.Runtime.IdentityKeyPath == "" || reopened.Runtime.IdentityKeyPath != wantIdentityPath {
+		t.Fatalf("IdentityKeyPath = %q, want %q", reopened.Runtime.IdentityKeyPath, wantIdentityPath)
+	}
+	reopened.Common.Close()
+	if err := reopenedStore.Close(); err != nil {
+		t.Fatalf("Close reopened BoltStore: %v", err)
 	}
 }
 
-func TestLoadStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
+func TestOpenLinuxDaemonStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, _ := writeTestPrivateKey(t, dir, "node-b")
 	rootPub, _, err := ed25519.GenerateKey(nil)
@@ -82,13 +93,13 @@ func TestLoadStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
 	config.TrustedRootPublicKey = rootPub
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
 
-	_, err = rt.LoadState()
+	_, _, err = openLinuxDaemonState(rt)
 	if err == nil {
-		t.Fatal("LoadState accepted auto-join config without gossip.bootstrap")
+		t.Fatal("openLinuxDaemonState accepted auto-join config without gossip.bootstrap")
 	}
 	for _, want := range []string{"cannot initialize empty state for auto-join", "gossip.bootstrap", "at least one peer is required"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("LoadState error = %q, want substring %q", err, want)
+			t.Fatalf("openLinuxDaemonState error = %q, want substring %q", err, want)
 		}
 	}
 }
@@ -132,13 +143,13 @@ func TestValidateAutoJoinBootstrapConfigReportsSpecificMissingFields(t *testing.
 
 func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
-	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
+	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
 	config.Identity.KeyPath = otherKeyPath
@@ -149,13 +160,13 @@ func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 
 func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
 	dir := t.TempDir()
-	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
+	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-a.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
 		t.Fatalf("openLinuxDaemonState managed_zone mismatch error = %v", err)
 	}
@@ -163,13 +174,13 @@ func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) 
 
 func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
 	dir := t.TempDir()
-	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
+	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &Runtime{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	store, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
@@ -214,7 +225,7 @@ func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
 func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
-	state, keyPath := buildIdentityState(t, dir, "node-b.catofes.")
+	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	otherKeyPath := copyTestPrivateKey(t, keyPath, filepath.Join(dir, "copy.key.json"))
 	dataDir := filepath.Join(dir, "data")
 	statePath := filepath.Join(dataDir, "photon.db")
@@ -229,7 +240,6 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	appConfig.StatePath = statePath
 	appConfig.ManagedZone = "node-b.catofes."
 	appConfig.Identity.KeyPath = keyPath
-	verified := verifiedStateForTest(state)
 	runtime := &linuxRuntimeState{}
 	runtime.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
 	rt := &Runtime{Config: appConfig, StatePath: statePath}
@@ -255,7 +265,7 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	}
 }
 
-func buildPendingAutoJoinState(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*stateFile, string) {
+func buildPendingAutoJoinOwners(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*corestate.VerifiedState, *linuxRuntimeState, string) {
 	t.Helper()
 	keyPath, pub := writeTestPrivateKey(t, dir, "identity")
 	if !matchingDelegation {
@@ -330,14 +340,14 @@ func buildPendingAutoJoinState(t *testing.T, dir string, managed zone.ZonePath, 
 	if err != nil {
 		t.Fatalf("readPrivateKeyFile: %v", err)
 	}
-	return &stateFile{
-		ManagedZone:    managed,
-		ZonePrivateKey: key.PrivateKey,
-		Network:        ns,
-	}, keyPath
+	return &corestate.VerifiedState{
+		ManagedZone:        managed,
+		IdentityPrivateKey: key.PrivateKey,
+		Network:            ns,
+	}, &linuxRuntimeState{}, keyPath
 }
 
-func buildIdentityState(t *testing.T, dir string, managed zone.ZonePath) (*stateFile, string) {
+func buildIdentityVerifiedState(t *testing.T, dir string, managed zone.ZonePath) (*corestate.VerifiedState, string) {
 	t.Helper()
 	keyPath, pub := writeTestPrivateKey(t, dir, "identity")
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -384,10 +394,10 @@ func buildIdentityState(t *testing.T, dir string, managed zone.ZonePath) (*state
 	if err != nil {
 		t.Fatalf("readPrivateKeyFile: %v", err)
 	}
-	return &stateFile{
-		ManagedZone:    managed,
-		ZonePrivateKey: key.PrivateKey,
-		Network:        ns,
+	return &corestate.VerifiedState{
+		ManagedZone:        managed,
+		IdentityPrivateKey: key.PrivateKey,
+		Network:            ns,
 	}, keyPath
 }
 

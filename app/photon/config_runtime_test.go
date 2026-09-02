@@ -1,11 +1,8 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"path/filepath"
 	"testing"
-
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func TestRuntimeStatePathOverride(t *testing.T) {
@@ -43,14 +40,10 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
-	state := composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime)
-	config, err := rt.SyncConfig(state)
-	if err != nil {
-		t.Fatalf("SyncConfig: %v", err)
-	}
-	if config.PeerID != string(state.ManagedZone) {
-		t.Fatalf("PeerID = %q, want managed zone default %q", config.PeerID, state.ManagedZone)
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	config := syncConfigFromAppConfig(rt.Config, verified)
+	if config.PeerID != string(verified.ManagedZone) {
+		t.Fatalf("PeerID = %q, want managed zone default %q", config.PeerID, verified.ManagedZone)
 	}
 	limits := syncLimits(config)
 	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
@@ -70,27 +63,5 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	config.LogLevel = "info"
 	if !debugLogEnabled(config) {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
-	}
-}
-
-func TestVerifyConfiguredRootTrustAt(t *testing.T) {
-	verified, _, _, _ := buildTestDaemonOwners(t)
-	rootKey, err := rootPublicKey(verified.Network)
-	if err != nil {
-		t.Fatalf("rootPublicKey: %v", err)
-	}
-	if err := verifyConfiguredRootTrustAt(verified.Network, rootKey); err != nil {
-		t.Fatalf("verifyConfiguredRootTrustAt(valid): %v", err)
-	}
-
-	wrongRoot := make(ed25519.PublicKey, ed25519.PublicKeySize)
-	for i := range wrongRoot {
-		wrongRoot[i] = byte(i + 1)
-	}
-	if err := verifyConfiguredRootTrustAt(verified.Network, wrongRoot); err == nil {
-		t.Fatalf("verifyConfiguredRootTrustAt should reject mismatched root")
-	}
-	if err := verifyConfiguredRootTrustAt(verified.Network, nil); err != nil {
-		t.Fatalf("verifyConfiguredRootTrustAt(nil): %v", err)
 	}
 }

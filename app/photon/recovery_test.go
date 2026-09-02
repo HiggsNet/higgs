@@ -147,7 +147,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err := createIPAMPool(".", "2a0d:2905::/32", ".", true); err != nil {
 		t.Fatalf("createIPAMPool(root): %v", err)
 	}
-	adminState, err := loadState()
+	adminState, err := loadConfiguredVerifiedState()
 	if err != nil {
 		t.Fatalf("loadState(admin): %v", err)
 	}

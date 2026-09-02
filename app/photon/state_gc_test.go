@@ -51,8 +51,13 @@ func TestStateGCEmptyPlanDoesNotMutateState(t *testing.T) {
 }
 
 func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
-	state, trustedRoot := legacyRuntimeMigrationFixture(t)
-	state.BirdInstances = map[string]*BirdInstanceState{
+	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	trustedRoot, err := rootPublicKey(verified.Network)
+	if err != nil {
+		t.Fatalf("rootPublicKey: %v", err)
+	}
+	runtime.BirdInstances = map[string]*BirdInstanceState{
 		"default": {NetNSName: "default"},
 		"photon":  {NetNSName: "photon"},
 	}
@@ -60,7 +65,7 @@ func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
 	appConfig.TrustedRootPublicKey = trustedRoot
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
 	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
-	seedPartitionedStateDB(t, rt.StatePath, verifiedStateForTest(state), testGossipCheckpoint(state.SyncPeers), linuxRuntimeStateFromLegacy(state))
+	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
 
 	plan, err := garbageCollectStateDirect(rt, true)
 	if err != nil {

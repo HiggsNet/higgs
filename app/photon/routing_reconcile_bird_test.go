@@ -404,7 +404,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 }
 
 func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
-	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: cloneTestNetworkState()}
+	verified := &corestate.VerifiedState{}
 	runtime := &linuxRuntimeState{
 		BirdInstances: map[string]*BirdInstanceState{
 			"mesh": {NetNSName: "mesh", State: birdInstanceStateRunning},

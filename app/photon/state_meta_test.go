@@ -4,37 +4,40 @@ import (
 	"path/filepath"
 	"testing"
 
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
 
 func TestSaveStateCommitsMetaAndNetworkInOneTransaction(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
-	initial := composeLinuxStateView(corestate.View{State: verified, Gossip: checkpoint}, runtime)
+	verified, _, _, _ := buildTestDaemonOwners(t)
+	initial := &stateFile{
+		ManagedZone:    verified.ManagedZone,
+		RootPrivateKey: verified.RootPrivateKey,
+		ZonePrivateKey: verified.IdentityPrivateKey,
+		Network:        verified.Network,
+	}
 	path := filepath.Join(t.TempDir(), "photon.db")
 	if err := saveStateAt(path, initial); err != nil {
 		t.Fatalf("save initial state: %v", err)
 	}
 	before := stateDBTxID(t, path)
 
-	next := cloneStateFile(initial)
-	next.IdentityKeyPath = "/new/identity.key"
-	next.Network.Zones["node-b.catofes."].Authority.Epoch++
-	if err := saveStateAt(path, next); err != nil {
+	initial.IdentityKeyPath = "/new/identity.key"
+	initial.Network.Zones["node-b.catofes."].Authority.Epoch++
+	if err := saveStateAt(path, initial); err != nil {
 		t.Fatalf("save updated state: %v", err)
 	}
 	if got := stateDBTxID(t, path); got != before+1 {
 		t.Fatalf("full state save tx id = %d, want one commit after %d", got, before)
 	}
 
-	loaded, err := loadStateAtWithConfig(path, nil)
+	loaded, err := loadLegacyStateAt(path)
 	if err != nil {
 		t.Fatalf("load updated state: %v", err)
 	}
-	if loaded.IdentityKeyPath != next.IdentityKeyPath {
-		t.Fatalf("identity path = %q, want %q", loaded.IdentityKeyPath, next.IdentityKeyPath)
+	if loaded.IdentityKeyPath != initial.IdentityKeyPath {
+		t.Fatalf("identity path = %q, want %q", loaded.IdentityKeyPath, initial.IdentityKeyPath)
 	}
-	if got, want := loaded.Network.Zones["node-b.catofes."].Authority.Epoch, next.Network.Zones["node-b.catofes."].Authority.Epoch; got != want {
+	if got, want := loaded.Network.Zones["node-b.catofes."].Authority.Epoch, initial.Network.Zones["node-b.catofes."].Authority.Epoch; got != want {
 		t.Fatalf("Network epoch = %d, want %d", got, want)
 	}
 }

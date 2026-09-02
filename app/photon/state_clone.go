@@ -38,29 +38,6 @@ func cloneRoutingReconcileState(in *routingReconcileState) *routingReconcileStat
 	return &out
 }
 
-func cloneSyncPeerState(in syncPeerState) syncPeerState {
-	out := in
-	if in.ObservedGraceAddrs != nil {
-		out.ObservedGraceAddrs = make([]observedGraceAddrState, len(in.ObservedGraceAddrs))
-		copy(out.ObservedGraceAddrs, in.ObservedGraceAddrs)
-	}
-	if in.RejectedDigests != nil {
-		out.RejectedDigests = maps.Clone(in.RejectedDigests)
-	}
-	return out
-}
-
-func cloneSyncPeers(in map[string]syncPeerState) map[string]syncPeerState {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]syncPeerState, len(in))
-	for peerID, peer := range in {
-		out[peerID] = cloneSyncPeerState(peer)
-	}
-	return out
-}
-
 func cloneIPsecTransportKeyState(in *ipsecTransportKeyState) *ipsecTransportKeyState {
 	if in == nil {
 		return nil
