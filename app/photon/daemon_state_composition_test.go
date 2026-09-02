@@ -27,7 +27,7 @@ func newDaemonStateStoreTestFixture(t *testing.T, commit corestate.CommitFunc) (
 	return store, zone.ZonePath(managed)
 }
 
-func TestComposedDaemonStateStoreAppliesCommonIntentAndRefreshesReadView(t *testing.T) {
+func TestComposedDaemonStateStoreSerializesCommonIntentWithoutChangingRuntime(t *testing.T) {
 	store, managed := newDaemonStateStoreTestFixture(t, nil)
 	now := time.Unix(1000, 0)
 	intent := corestate.PutRecordIntent{Zone: managed, Key: "apps/composed", Type: "application.test", Value: []byte("value")}

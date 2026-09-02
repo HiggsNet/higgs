@@ -46,7 +46,7 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 	defer runtime.Stop()
 
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
-	service := newTestDaemonServiceFromOwners(&Runtime{}, verified, testGossipCheckpoint(nil), &linuxRuntimeState{}, config, time.Second)
+	service := newTestDaemonServiceFromOwners(&Runtime{}, verified, nil, &linuxRuntimeState{}, config, time.Second)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err != nil {
 		t.Fatalf("object pull failed: %v", completion.Err)

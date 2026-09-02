@@ -197,21 +197,6 @@ func authorityHasPrivateKey(authority *zone.ZoneAuthority, priv ed25519.PrivateK
 	return authorityHasKey(authority, priv.Public().(ed25519.PublicKey))
 }
 
-func testGossipCheckpoint(peers map[string]syncPeerState) *corestate.GossipCheckpoint {
-	out := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint, len(peers))}
-	for peerID, peer := range peers {
-		projected, _ := projectLegacyGossipCheckpoint(map[string]syncPeerState{"fixture-peer.invalid.": peer})
-		if checkpoint, ok := projected.Peers["fixture-peer.invalid."]; ok {
-			out.Peers[peerID] = checkpoint
-		} else {
-			// Preserve membership even when the legacy entry contains no hints;
-			// several migration tests exercise presence-only peer cleanup.
-			out.Peers[peerID] = corestate.PeerCheckpoint{}
-		}
-	}
-	return out
-}
-
 func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (uint64, bool, error) {
 	if store == nil {
 		return 0, false, fmt.Errorf("store is nil")

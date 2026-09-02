@@ -173,7 +173,7 @@ type Provider interface {
 |---|---|
 | `peer_id` / `managed_zone` / `listen_addr` | 本节点身份与 gossip 监听地址 |
 | `daemon_online` | `Sync`/state 可用时为 true；否则整个响应只有 `daemon_online: false` |
-| `state_revision` / `snapshot_time_unix` / `dirty` / `reconcile_progress` | StateStore 快照元数据 |
+| `state_revision` / `dirty` / `reconcile_progress` | common Store revision 与 daemon reconcile 元数据 |
 | `known_zones` / `known_peers` | `state.Network.Zones` / `state.SyncPeers` 计数 |
 | `link_instances` / `desired_links` | 实际 link 实例数 vs IPsec reconcile 期望数 |
 | `last_link_error` / `last_routing_error` | 两个 reconcile 的最近错误 |

@@ -926,7 +926,7 @@ package dependency: app -> host -> gossip -> state -> zone
     等价，错误 root 不推进 verified revision。
   - [x] F0d：`app/photon` 的 CLI/config/root smoke 留在 Linux composition；只有出现 Linux/Windows 真实共同调用点时
     才迁移 typed command/client helper。测试随被测 owner 迁移，不以减少 `app/photon` 文件数作为 F 的前置工作。
-  - [ ] F0e：在连接 Windows UDP 前完成唯一 HostRuntime 的公共 gossip 执行闭环；保持平台 composition 创建 UDP
+  - [x] F0e：在连接 Windows UDP 前完成唯一 HostRuntime 的公共 gossip 执行闭环；保持平台 composition 创建 UDP
     `DatagramIO`、TCP listener/dialer，HostRuntime 独占 receive/accept/worker/event queue 生命周期，gossip 独占 wire
     codec、验证和 FSM。不得把平台 bind 下沉进 HostRuntime，也不得在 Windows 复制 Linux daemon executor。
     - [x] F0e1：把 common Store 作为 HostRuntime 的显式真实依赖；先收回 verified/checkpoint read projection 与 remote
@@ -946,7 +946,7 @@ package dependency: app -> host -> gossip -> state -> zone
       transaction，不覆盖 discovery/reject 等无关字段且不推进 `VerifiedRevision`。object-pull worker completion 继续回投唯一
       HostRuntime queue，并由同一事件路径完成 checkpoint；删除 Linux `syncPeerStateMutationBatch`、controller persistence/backoff
       capability，以及已经失去语义的 `SaveStateAction/SyncPersistenceScope`。
-    - [ ] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action
+    - [x] F0e3：由 HostRuntime 统一消费 packet、gossip timer 和 object-pull completion，删除 Linux daemon 的公共 event/action
       dispatch；平台仅保留 socket 构造、日志/metrics hook 和 verified ChangeSet 触发的平台 reconcile。
       - [x] F0e3a：新增唯一 `HandleGossipHostEvent` 消费入口，packet 直接进入 inbound planner，gossip timer 与
         object-pull completion 统一进入 session FSM。daemon、`sync serve`、`sync once` 和 Windows memory 双节点均已删除
@@ -983,13 +983,13 @@ package dependency: app -> host -> gossip -> state -> zone
       test 等价 I/O glue。Linux/Windows composition 现在用 `StartGossipTransport` 把同一个公共 `gossip.Transport` 直接交给
       HostRuntime；Runtime 直接使用其 Send/SendTo、datagram budget 和可重建 address book，平台只创建底层 DatagramIO。
       通用 receiver capability 已改为 HostRuntime 私有实现细节，不再形成第二条公开 transport 边界。
-    - [ ] F0e5：做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次 wrapper 和
+    - [x] F0e5：做一次“迁移只做加法”反向审计：生产代码中每个 `stateFile`/`DaemonStateStore.Snapshot`、单次 wrapper 和
       legacy alias 都必须列出真实调用方。只被测试构造器使用的兼容入口直接删除；仍串联 common commit 与 Linux runtime
       持久化顺序的方法保留到调用方改用 typed owner，期间不得新增 aggregate view。
       - [x] F0e5a：HostRuntime 直接持有 `*corestate.Store`，删除 `DaemonStateStore` 的 remote-batch/checkpoint/ReadView/
         ZoneDigests 转发和仅供旧 projection 构造的公开 constructor。platform-first protocol publish 改用 common Store 的
         expected-revision intent commit；gossip 若在两步之间推进 verified revision，旧平台计划 fail closed 并交给下一轮 reconcile。
-      - [ ] F0e5b：迁走剩余 production `stateFile` 输入并批量改写依赖 `DaemonStateStore.Snapshot()` 的测试 fixture，随后删除
+      - [x] F0e5b：迁走剩余 production `stateFile` 输入并批量改写依赖 `DaemonStateStore.Snapshot()` 的测试 fixture，随后删除
         aggregate Snapshot/clone、legacy alias 和没有多调用方价值的 runtime commit wrapper；同步更新 runtime migration report。
         - [x] 49 处测试读取已改为 test-only `snapshotTestDaemonState`，生产 `DaemonStateStore.Snapshot()` 已删除；测试需要的
           aggregate shape 不再迫使生产类型暴露 Snapshot API。
@@ -1172,6 +1172,9 @@ package dependency: app -> host -> gossip -> state -> zone
             清单防护改为直接覆盖生产 `cloneLinuxRuntimeState`。authority/join/recovery 流程测试改读 current common owner；auto-join bootstrap
             与 admission restart 测试改走正式 `openLinuxDaemonState` 和 persisted runtime commit。旧 `aggregate_state_fixture_test.go` 已删除，
             仅保留窄 `legacy_state_fixture_test.go` 为 migration/codec 测试读写退役 schema；`stateFile` 测试引用只存在于这些明确 legacy 覆盖。
+          - 删除 `DaemonStateStore` 对 common revision 与 `SnapshotTime` 的重复缓存：revision 始终从唯一 common Store 读取；旧时间字段
+            无法覆盖 HostRuntime 的直接提交，不能冒充完整快照时间。common mutation wrapper 只保留与 Linux runtime completion 共用的
+            提交顺序锁，不再承担 aggregate read-view 刷新。普通测试最后一个借 legacy projector 构造空 checkpoint 的 helper 同步删除。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
@@ -1699,9 +1702,9 @@ package dependency: app -> host -> gossip -> state -> zone
 
 ## 下一步
 
-1. F0a/F0b/F0c 已完成纠偏：没有第二个 client runtime，Windows Store 恢复归 Windows composition/state wiring，memory 双节点直接驱动 HostRuntime/Store/Transport。
-2. 下一步继续收口唯一 HostRuntime：把 Linux daemon 中仍属公共 gossip 的 event drain、state apply/persistence、backoff/checkpoint 和 object-pull completion 执行移入公共边界；Windows 不复制 `daemonGossipActionController`。
-3. 上述收口通过 Linux race/root smoke 与 Windows compile guard 后，才实现 Windows composition root 和真实 UDP adapter；不继续按文件数量搬迁 Linux CLI/config/test。
+1. F0a-F0e 已完成：没有第二个 client runtime；HostRuntime 独占公共 gossip receive/timer/object-pull/event queue，直接持有 common Store/Transport；Linux daemon 不再保留公共协议 executor 或 aggregate state view。
+2. 下一批把当前 Linux runtime state 的 type/clone/codec/commit owner 从 `app/photon` 移到 `internal/photonlinux`，旧 `stateFile` 只留在 app 的单向 migration decoder；不得为搬迁重新建立 aggregate adapter。
+3. Linux runtime owner 边界稳定并通过 race/root smoke 与 Windows compile guard 后，实现 Windows composition root 和真实 UDP adapter；不按文件数量搬迁 Linux CLI/config/test。
 4. Windows 数据面按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization -> Wintun pipeline 推进；每个真实 consumer 出现时再提取窄接口。
 5. 随后接 IP Helper address/route ownership、SCM service、named-pipe IPC 和 network-change/rebind；每层验证 restart/adopt/cleanup。
 6. Photon Android 保持独立后续项目；只复用已经由 Windows 真实使用并稳定的用户态协议/packet core，不预建 Android 工程或抽象。

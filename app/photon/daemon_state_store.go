@@ -27,7 +27,6 @@ type daemonReconcileStatus struct {
 
 type daemonStateStoreMeta struct {
 	Revision          uint64
-	SnapshotTime      time.Time
 	Dirty             daemonDirtyFlags
 	ReconcileProgress daemonReconcileStatus
 }
@@ -38,11 +37,8 @@ type DaemonStateStore struct {
 	common            *corestate.Store
 	runtime           *linuxRuntimeState
 	commitRuntime     func(corestate.VerifiedRevision, *linuxRuntimeState) error
-	revision          uint64
-	snapshotTime      time.Time
 	dirty             daemonDirtyFlags
 	reconcileProgress daemonReconcileStatus
-	now               func() time.Time
 }
 
 type protocolPublishResult struct {
@@ -67,14 +63,12 @@ func newDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, co
 		common:        common,
 		runtime:       cloneLinuxRuntimeState(runtime),
 		commitRuntime: commitRuntime,
-		now:           time.Now,
 	}
-	store.refreshMeta()
 	return store, nil
 }
 
 // ApplyCommonLocalIntent validates, signs and persists through the common
-// owner; the aggregate read view is refreshed only after publication succeeds.
+// owner while sharing the ordering lock used by Linux runtime completions.
 func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent corestate.LocalIntent, dryRun bool, now time.Time) (corestate.LocalIntentResult, error) {
 	if s == nil || s.common == nil {
 		return corestate.LocalIntentResult{}, errors.New("daemon common state store is not initialized")
@@ -84,14 +78,7 @@ func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent co
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	result, err := s.common.ApplyLocalIntent(ctx, intent, now)
-	if err != nil {
-		return corestate.LocalIntentResult{}, err
-	}
-	if result.Committed {
-		s.refreshMeta()
-	}
-	return result, nil
+	return s.common.ApplyLocalIntent(ctx, intent, now)
 }
 
 func (s *DaemonStateStore) ApplyCommonLocalIntents(ctx context.Context, intents []corestate.LocalIntent, now time.Time) (corestate.LocalIntentBatchResult, error) {
@@ -100,14 +87,7 @@ func (s *DaemonStateStore) ApplyCommonLocalIntents(ctx context.Context, intents 
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	result, err := s.common.ApplyLocalIntents(ctx, intents, now)
-	if err != nil {
-		return corestate.LocalIntentBatchResult{}, err
-	}
-	if result.Committed {
-		s.refreshMeta()
-	}
-	return result, nil
+	return s.common.ApplyLocalIntents(ctx, intents, now)
 }
 
 func (s *DaemonStateStore) InstallCommonIdentity(ctx context.Context, install corestate.IdentityInstall, now time.Time) (corestate.CommitResult, error) {
@@ -116,11 +96,7 @@ func (s *DaemonStateStore) InstallCommonIdentity(ctx context.Context, install co
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	result, err := s.common.InstallIdentity(ctx, install, now)
-	if err == nil && result.Committed {
-		s.refreshMeta()
-	}
-	return result, err
+	return s.common.InstallIdentity(ctx, install, now)
 }
 
 func (s *DaemonStateStore) RefreshCommonManagedAuthority(ctx context.Context, now time.Time) (corestate.CommitResult, corestate.ManagedAuthorityResult, error) {
@@ -129,11 +105,7 @@ func (s *DaemonStateStore) RefreshCommonManagedAuthority(ctx context.Context, no
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	commit, authority, err := s.common.RefreshManagedAuthority(ctx, now)
-	if err == nil && commit.Committed {
-		s.refreshMeta()
-	}
-	return commit, authority, err
+	return s.common.RefreshManagedAuthority(ctx, now)
 }
 
 func (s *DaemonStateStore) ImportCommonRecovery(ctx context.Context, input corestate.RecoveryImport, now time.Time) (corestate.RecoveryImportResult, error) {
@@ -142,11 +114,7 @@ func (s *DaemonStateStore) ImportCommonRecovery(ctx context.Context, input cores
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	result, err := s.common.ImportRecoverySnapshot(ctx, input, now)
-	if err == nil && result.Committed {
-		s.refreshMeta()
-	}
-	return result, err
+	return s.common.ImportRecoverySnapshot(ctx, input, now)
 }
 
 func (s *DaemonStateStore) PlanCommonPurge(now time.Time, target zone.ZonePath) (corestate.PurgeRevokedPlan, error) {
@@ -162,11 +130,7 @@ func (s *DaemonStateStore) PurgeCommon(ctx context.Context, now time.Time, targe
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	result, err := s.common.PurgeRevoked(ctx, now, target)
-	if err == nil && result.Committed {
-		s.refreshMeta()
-	}
-	return result, err
+	return s.common.PurgeRevoked(ctx, now, target)
 }
 
 // publishLocalProtocols commits private/platform runtime before publishing
@@ -201,13 +165,9 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 	if len(intents) > 0 {
 		result, err := s.common.ApplyLocalIntentsAtRevision(ctx, intents, now, corestate.VerifiedRevision(sourceRevision))
 		if err != nil {
-			s.refreshMeta()
 			return out, err
 		}
 		out.Common = result
-	}
-	if out.RuntimeCommitted || out.Common.Committed {
-		s.refreshMeta()
 	}
 	return out, nil
 }
@@ -241,11 +201,6 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtime = candidate
-	if s.now != nil {
-		s.snapshotTime = s.now()
-	} else {
-		s.snapshotTime = time.Now()
-	}
 	return sourceRevision, true, nil
 }
 
@@ -297,22 +252,6 @@ func (s *DaemonStateStore) commitPeerCleanupsIfRevision(revision uint64, cleanup
 	})
 }
 
-// refreshMeta records publication metadata after either owner changes.
-func (s *DaemonStateStore) refreshMeta() {
-	if s == nil || s.common == nil {
-		return
-	}
-	revision := s.common.VerifiedRevision()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.revision = uint64(revision)
-	if s.now != nil {
-		s.snapshotTime = s.now()
-	} else {
-		s.snapshotTime = time.Now()
-	}
-}
-
 // readCommonAndRuntime returns detached snapshots of the two actual state
 // owners at one serialized revision.
 func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntimeState) {
@@ -330,8 +269,6 @@ func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntime
 
 func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
 	return daemonStateStoreMeta{
-		Revision:          s.revision,
-		SnapshotTime:      s.snapshotTime,
 		Dirty:             s.dirty,
 		ReconcileProgress: s.reconcileProgress,
 	}

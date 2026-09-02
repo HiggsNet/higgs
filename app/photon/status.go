@@ -110,17 +110,12 @@ func daemonStatusView(d *DaemonService) inspect.DaemonStatusView {
 		peerID = d.Sync.Config.PeerID
 		listenAddr = d.Sync.Config.ListenAddr
 	}
-	snapshotTimeUnix := int64(0)
-	if !meta.SnapshotTime.IsZero() {
-		snapshotTimeUnix = meta.SnapshotTime.Unix()
-	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,
 		ManagedZone:        string(view.State.ManagedZone),
 		ListenAddr:         listenAddr,
 		DaemonOnline:       true,
-		StateRevision:      meta.Revision,
-		SnapshotTimeUnix:   snapshotTimeUnix,
+		StateRevision:      uint64(view.Revision),
 		Dirty:              meta.Dirty,
 		ReconcileProgress:  meta.ReconcileProgress,
 		KnownZones:         knownZones,

@@ -39,7 +39,6 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	srv.daemon.StateStore.common = store
 	srv.daemon.StateStore.runtime = runtime
 	srv.daemon.StateStore.writeMu.Unlock()
-	srv.daemon.StateStore.refreshMeta()
 	srv.daemon.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
 }
 

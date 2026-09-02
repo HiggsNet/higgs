@@ -195,8 +195,8 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `runtime_state_migration.go` | Linux runtime schema/codec 和旧 state 拆分 | codec/type 进 Linux state；旧转换进 migration；启动事务完成单向升级，只有明确停止支持旧 schema 时才删除 |
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
-| `state.go` | stateFile、Linux aliases、CLI Runtime、旧 Load/Save、统计 helper | verified/checkpoint 已归 state；Linux runtime 归 Linux state；CLI context 归 photoncli；stateFile/旧 Load/Save 最终删除 |
-| `state_clone.go` | Linux runtime typed clone | aggregate `cloneStateFile` 已移到 test-only fixture；剩余 clone 随 Linux runtime owner 迁入 platform 包 |
+| `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | `stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump；Linux runtime aliases 及当前类型随 owner 迁入 platform 包 |
+| `state_clone.go` | Linux runtime typed clone | aggregate clone 已删除；剩余 detached candidate clone 随 Linux runtime owner 迁入 platform 包 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
 | `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | daemon、`sync serve`、`sync once` 已共用 HostRuntime 的 event consumer，启动 peer/endpoint/observed 恢复也统一走 HostRuntime discovery；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |
@@ -211,14 +211,14 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
    已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；`state_gc --direct` 也只提交 Linux runtime owner，不再保存聚合状态。
 2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
-4. **删除聚合 stateFile**：protocol projection 与 `linux_state_view.go` 已清理；observer 和普通 state composition 测试已改用 typed owners，aggregate 重组仅保留在明确的 legacy test helper。继续替换 controller input、离线 CLI read path 和其余 legacy fixture，随后删除 `daemon_state_store.go`、aggregate clone 和旧 state loader。
+4. **删除聚合 stateFile**：在线与普通测试迁移已完成；production `stateFile` 只剩旧 schema 单向 migration decoder，legacy test helper 只负责写入退役 schema。`DaemonStateStore` 现只协调 common commit 与 Linux runtime completion 的顺序，不再提供 aggregate snapshot。
 5. **收口 CLI/展示**：`debug_*.go`、`status.go`、`zone.go`、`db.go` 最终只做参数解析、control/read model 调用和 presenter 输出。
 
 迁移过程中不再为单个调用点增加新的 stateFile wrapper。需要过渡时只允许 detached typed DTO，并在同一任务中写明删除条件。
 
 ## 5. E2f/E2g 收口复核
 
-E2f 盘点时 `app/photon` 有 74 个非测试 Go 文件；当前为 72 个。历史上已删除或迁出的
+E2f 盘点时 `app/photon` 有 74 个非测试 Go 文件；当前为 69 个。历史上已删除或迁出的
 `daemon_state_projection.go`、`objectpull.go`、`routing_upstream_routes.go` 和 `health_spool.go` 不再作为当前文件列出。
 production staticcheck 已清零。
 
@@ -254,10 +254,10 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 - health spool 的文件、裁剪、packet count 与 rotate series 测试已迁入 `internal/observability/healthspool`；
 - firewall/BIRD/upstream 等平台实现测试应继续随实现留在 `internal/photonlinux`；
 - `app/photon` 的 CLI flag、Unix control、composition、完整 daemon 顺序和 root smoke 测试仍属于 executable 集成边界，不能迁成底层包单测；
-- 大量使用 `stateFile` fixture 的测试会在 typed owner 输入落地时逐批迁移或删除，不能先搬走测试再保留生产聚合状态。
+- 普通测试已经使用 typed owners；只有旧 schema migration/codec 测试可以继续构造 `stateFile`，不得把该 fixture 用回在线行为测试。
 
-进入 F 前优先继续拆 `health_reconcile.go` 的公共调度、`link_outputs.go` 的 Linux DTO 组合，以及仍依赖
-聚合 `stateFile` 的 daemon/composition 入口。CLI/展示文件数量较多，但不应阻塞 runtime/state 唯一真相收口。
+HostRuntime 公共 gossip 闭环与 aggregate 清理已完成。下一批迁移 Linux runtime state 的 type/clone/codec/commit owner；
+旧 schema decoder 留在 app migration 边界，不能随 current codec 一起误搬成在线兼容层。
 
 ### 5.3 推荐顺序的当前进度
 
@@ -266,7 +266,7 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
    `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。HostRuntime 已直接持有 common Store 和同一个
    gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
 3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
-4. 聚合 `stateFile`：projection 已大量删除，fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
+4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
    在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
@@ -283,6 +283,7 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
    routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
    聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
    不在 HTTP 层重新推导 desired/runtime 状态。
-   `debug rotate --direct` 已改用正式 typed intent/runtime commit。聚合 `Snapshot()` 目前只剩旧 schema 首次迁移引导与测试 fixture；
-   下一步是改写该 migration bootstrap 并迁移测试 fixture，随后删除组合 view 与旧 loader。
+   `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
+   `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。`DaemonStateStore` 也不再缓存第二份
+   common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。
