@@ -9,7 +9,7 @@ import (
 )
 
 func debugLinks(filter string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func debugLinks(filter string) error {
 }
 
 func showLinks(filter string, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func showLinks(filter string, verbose bool) error {
 	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
-func debugLinkRoutingState(rt *Runtime, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
+func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
 	state = "-"
 	neighborCount = "-"
 	bestRouteCount = "-"

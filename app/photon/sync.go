@@ -24,26 +24,11 @@ const syncOnceResponderQuiet = 500 * time.Millisecond
 
 var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
 
-type SyncRuntime struct {
-	App           *Runtime
-	Config        *syncConfigFile
-	Transport     *gossip.Transport
-	TransportDeps *SyncTransportDeps
-}
-
 type SyncTransportDeps struct {
 	KnownPeers map[string]*net.UDPAddr
 	Replay     *gossip.ReplayWindow
 	Quotas     *gossip.PeerQuotas
 	Log        func(gossip.Event)
-}
-
-func newSyncRuntime(config *syncConfigFile, transport *gossip.Transport, app *Runtime) *SyncRuntime {
-	return &SyncRuntime{
-		App:       app,
-		Config:    config,
-		Transport: transport,
-	}
 }
 
 func defaultSyncTransportDeps(config *syncConfigFile) *SyncTransportDeps {
@@ -55,33 +40,15 @@ func defaultSyncTransportDeps(config *syncConfigFile) *SyncTransportDeps {
 	}
 }
 
-func (sr *SyncRuntime) syncTransportDeps() *SyncTransportDeps {
-	if sr.TransportDeps != nil {
-		return sr.TransportDeps
-	}
-	return defaultSyncTransportDeps(sr.Config)
-}
-
-func (sr *SyncRuntime) now() time.Time {
-	if sr != nil && sr.App != nil {
-		return sr.App.Now()
+func (d *Daemon) now() time.Time {
+	if d != nil && d.App != nil {
+		return d.App.Now()
 	}
 	return time.Now()
 }
 
-func (sr *SyncRuntime) logger() *appLogger {
-	if sr == nil {
-		return newAppLogger(nil)
-	}
-	logger := newAppLogger(sr.Config)
-	if sr.App != nil {
-		logger.now = sr.App.Now
-	}
-	return logger
-}
-
 func syncStatus(verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -113,18 +80,18 @@ func syncStatusOptions(config *syncConfigFile, now time.Time, verbose bool) insp
 }
 
 func syncServe(ctx context.Context) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemonService(rt, defaultDaemonInterval)
+	service, boltStore, err := openDaemon(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
 	defer boltStore.Close()
-	config := service.Sync.Config
+	config := service.GossipConfig
 	logger := newAppLogger(config)
-	transport, err := service.Sync.openTransport()
+	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
 	}
@@ -136,7 +103,6 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	defer service.hostRuntime.Stop()
-	service.Sync.Transport = transport
 	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
@@ -163,21 +129,21 @@ func syncServe(ctx context.Context) error {
 }
 
 func syncOnce(peerID string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemonService(rt, defaultDaemonInterval)
+	service, boltStore, err := openDaemon(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
 	defer boltStore.Close()
-	transport, err := service.Sync.openTransport()
+	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
 	}
 	service.updateDiscoveredPeers()
-	logger := newAppLogger(service.Sync.Config)
+	logger := newAppLogger(service.GossipConfig)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
 	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
@@ -187,7 +153,6 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	defer service.hostRuntime.Stop()
-	service.Sync.Transport = transport
 	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
@@ -274,9 +239,9 @@ func (e *syncPendingZonesError) PendingZones() []string {
 	return zonePathStrings(e.zones)
 }
 
-func (sr *SyncRuntime) openTransport() (*gossip.Transport, error) {
-	deps := sr.syncTransportDeps()
-	listenAddr := sr.Config.ListenAddr
+func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
+	deps := defaultSyncTransportDeps(d.GossipConfig)
+	listenAddr := d.GossipConfig.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
 	}
@@ -284,23 +249,26 @@ func (sr *SyncRuntime) openTransport() (*gossip.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := gossip.NewTransport(sr.transportConfig(deps), datagram)
+	transport, err := gossip.NewTransport(gossipTransportConfig(d.GossipConfig, deps, d.now), datagram)
 	if err != nil {
 		_ = datagram.Close()
 		return nil, err
 	}
-	sr.Transport = transport
+	if err := d.hostRuntime.BindGossipTransport(transport); err != nil {
+		_ = datagram.Close()
+		return nil, err
+	}
 	return transport, nil
 }
 
-func (sr *SyncRuntime) transportConfig(deps *SyncTransportDeps) gossip.Config {
+func gossipTransportConfig(config *syncConfigFile, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
 	return gossip.Config{
-		PeerID:          sr.Config.PeerID,
+		PeerID:          config.PeerID,
 		KnownPeers:      deps.KnownPeers,
-		MaxMessageBytes: sr.Config.MaxMessageBytes,
+		MaxMessageBytes: config.MaxMessageBytes,
 		Replay:          deps.Replay,
 		Quotas:          deps.Quotas,
-		Clock:           sr.now,
+		Clock:           clock,
 		Log:             deps.Log,
 	}
 }
@@ -317,24 +285,24 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (sr *SyncRuntime) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	config := sr.Config
+func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
+	config := d.GossipConfig
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || autoJoinPendingVerified(verified) {
 		return nil, nil
 	}
 	if config != nil && config.DisableEndpointPublish {
 		return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
-			Verified: verified, Disabled: true, Now: sr.now(), TTL: config.EndpointTTL,
+			Verified: verified, Disabled: true, Now: d.now(), TTL: config.EndpointTTL,
 		})
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
 	endpoints, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
-		sr.logger().Warn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
+		d.logWarn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
 	}
 	return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
-		Verified: verified, Endpoints: endpoints, Now: sr.now(),
+		Verified: verified, Endpoints: endpoints, Now: d.now(),
 		TTL: config.EndpointTTL, Grace: config.EndpointGrace, Refresh: config.EndpointRefresh,
 	})
 }

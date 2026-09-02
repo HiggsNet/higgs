@@ -42,7 +42,7 @@ func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) 
 	config.Identity.KeyPath = keyPath
 	config.TrustedRootPublicKey = rootPub
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
-	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
+	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
 	store, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestOpenLinuxDaemonStateAutoJoinWithoutBootstrapReportsActionableError(t *t
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	config.TrustedRootPublicKey = rootPub
-	rt := &Runtime{Config: config, StatePath: config.StatePath}
+	rt := &AppContext{Config: config, StatePath: config.StatePath}
 
 	_, _, err = openLinuxDaemonState(rt)
 	if err == nil {
@@ -148,7 +148,7 @@ func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &Runtime{Config: config, StatePath: config.StatePath}
+	rt := &AppContext{Config: config, StatePath: config.StatePath}
 	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
@@ -165,7 +165,7 @@ func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) 
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-a.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &Runtime{Config: config, StatePath: config.StatePath}
+	rt := &AppContext{Config: config, StatePath: config.StatePath}
 	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
 		t.Fatalf("openLinuxDaemonState managed_zone mismatch error = %v", err)
@@ -179,7 +179,7 @@ func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &Runtime{Config: config, StatePath: config.StatePath}
+	rt := &AppContext{Config: config, StatePath: config.StatePath}
 	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 
 	store, startup, err := openLinuxDaemonState(rt)
@@ -242,9 +242,9 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	appConfig.Identity.KeyPath = keyPath
 	runtime := &linuxRuntimeState{}
 	runtime.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
-	rt := &Runtime{Config: appConfig, StatePath: statePath}
+	rt := &AppContext{Config: appConfig, StatePath: statePath}
 	config := syncConfigFromAppConfig(appConfig, verified)
-	service := newTestDaemonServiceFromOwners(rt, verified, nil, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, nil, runtime, config, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})

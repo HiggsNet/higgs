@@ -11,7 +11,7 @@ import (
 )
 
 func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) erro
 	return nil
 }
 
-func cleanupIPsecViaControl(rt *Runtime, includeOrphans bool) (*controlResponse, bool, error) {
+func cleanupIPsecViaControl(rt *AppContext, includeOrphans bool) (*controlResponse, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return nil, false, nil
 	}
@@ -42,7 +42,7 @@ func cleanupIPsecViaControl(rt *Runtime, includeOrphans bool) (*controlResponse,
 	return response, true, err
 }
 
-func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans bool) (int, int, error) {
+func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrphans bool) (int, int, error) {
 	if rt == nil {
 		return 0, 0, errors.New("runtime is nil")
 	}
@@ -96,8 +96,8 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 	return cleaned, orphans, nil
 }
 
-func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.App == nil {
+func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
+	if d == nil || d.StateStore == nil || d.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
 	common, runtimeCandidate := d.StateStore.readCommonAndRuntime()
@@ -113,7 +113,7 @@ func (d *DaemonService) handleIPsecCleanupEvent(ctx context.Context, includeOrph
 
 	cleaned := 0
 	orphans := 0
-	now := d.Sync.now()
+	now := d.now()
 	var err error
 	if len(runtimeCandidate.LinkInstances) > 0 {
 		ids := make([]string, 0, len(runtimeCandidate.LinkInstances))

@@ -9,7 +9,7 @@ import (
 )
 
 func showStatus() error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -25,7 +25,7 @@ func showStatus() error {
 	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, false))
 }
 
-func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRuntimeState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
 	if common.State == nil || runtime == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
@@ -55,8 +55,8 @@ func statusViewFromOwners(rt *Runtime, common corestate.View, runtime *linuxRunt
 // daemonStatusView is the single operational-status projection shared by the
 // local control transport and Observer HTTP. It reads the two state owners
 // once and returns a detached canonical inspect DTO.
-func daemonStatusView(d *DaemonService) inspect.DaemonStatusView {
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspect.DaemonStatusView{DaemonOnline: false}
 	}
 	store := d.StateStore
@@ -106,9 +106,9 @@ func daemonStatusView(d *DaemonService) inspect.DaemonStatusView {
 	}
 	peerID := ""
 	listenAddr := ""
-	if d.Sync.Config != nil {
-		peerID = d.Sync.Config.PeerID
-		listenAddr = d.Sync.Config.ListenAddr
+	if d.GossipConfig != nil {
+		peerID = d.GossipConfig.PeerID
+		listenAddr = d.GossipConfig.ListenAddr
 	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,

@@ -26,12 +26,11 @@ func (datagram *testGossipDatagram) LocalAddr() *net.UDPAddr { return datagram.a
 func (*testGossipDatagram) SetReadDeadline(time.Time) error  { return nil }
 func (*testGossipDatagram) Close() error                     { return nil }
 
-func setTestGossipTransport(t *testing.T, service *DaemonService, transport *gossip.Transport) {
+func setTestGossipTransport(t *testing.T, service *Daemon, transport *gossip.Transport) {
 	t.Helper()
 	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
 		t.Fatal(err)
 	}
-	service.Sync.Transport = transport
 }
 
 func listenTestGossipTransport(listenAddr string, config gossip.Config) (*gossip.Transport, error) {
@@ -94,7 +93,7 @@ func isReceiveTimeout(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
 }
 
-func pumpEventLoopSync(ctx context.Context, services []*DaemonService, transports []*gossip.Transport) {
+func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*gossip.Transport) {
 	for {
 		processed := false
 		for _, service := range services {

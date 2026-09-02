@@ -64,7 +64,7 @@ func TestDirectStateGCOnlyCommitsLinuxRuntime(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.TrustedRootPublicKey = trustedRoot
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
-	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
+	rt := &AppContext{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
 	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
 
 	plan, err := garbageCollectStateDirect(rt, true)
@@ -96,8 +96,8 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	}
 	appConfig := defaultAppConfig()
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{{ID: "main", NetNS: "photon", Enabled: true}}}
-	rt := &Runtime{Config: appConfig}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	rt := &AppContext{Config: appConfig}
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 
 	preview, err := service.handleStateGCEvent(false)
 	if err != nil {

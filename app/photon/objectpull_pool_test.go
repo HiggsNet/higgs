@@ -36,8 +36,8 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipRuntimeConfig{})
-	server := newTestDaemonServiceFromOwners(
-		&Runtime{}, verified, checkpoint, &linuxRuntimeState{}, &syncConfigFile{PeerID: "node-b.catofes."}, time.Second,
+	server := newTestDaemonFromOwners(
+		&AppContext{}, verified, checkpoint, &linuxRuntimeState{}, &syncConfigFile{PeerID: "node-b.catofes."}, time.Second,
 	)
 	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, server.objectPullResponse, 0, 0); err != nil {
 		_ = listener.Close()
@@ -46,7 +46,7 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 	defer runtime.Stop()
 
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
-	service := newTestDaemonServiceFromOwners(&Runtime{}, verified, nil, &linuxRuntimeState{}, config, time.Second)
+	service := newTestDaemonFromOwners(&AppContext{}, verified, nil, &linuxRuntimeState{}, config, time.Second)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err != nil {
 		t.Fatalf("object pull failed: %v", completion.Err)
@@ -62,8 +62,8 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 func TestDaemonObjectPullWorkerReturnsErrorForUnreachable(t *testing.T) {
 	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	config := &syncConfigFile{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}}}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{}, verified, checkpoint, runtime, config, time.Second,
 	)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err == nil {

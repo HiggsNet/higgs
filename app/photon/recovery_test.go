@@ -32,8 +32,8 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
 
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
 	if _, _, err := service.handleRecoveryImportZoneEvent(snapshot); err != nil {
@@ -98,9 +98,9 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 	if err := recoveryImportZone(rootSnapshotPath, true); err != nil {
 		t.Fatalf("recoveryImportZone(root): %v", err)
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("NewRuntime(catofes): %v", err)
+		t.Fatalf("NewAppContext(catofes): %v", err)
 	}
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
@@ -160,16 +160,16 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(catofes): %v", err)
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("NewRuntime(catofes): %v", err)
+		t.Fatalf("NewAppContext(catofes): %v", err)
 	}
 	state, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(catofes): %v", err)
 	}
 	config := syncConfigFromAppConfig(rt.Config, state.State)
-	service := newTestDaemonServiceFromOwners(rt, state.State, state.Gossip, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime, config, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:     daemonEventRecoveryImportZone,

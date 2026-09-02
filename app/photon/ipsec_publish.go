@@ -26,41 +26,41 @@ type localIPsecPublishPlan struct {
 	PortRecord   *ipsecPortRecordState
 }
 
-func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *linuxRuntimeState) (localIPsecPublishPlan, error) {
+func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *linuxRuntimeState) (localIPsecPublishPlan, error) {
 	var plan localIPsecPublishPlan
-	if sr == nil || verified == nil || verified.Network == nil || runtime == nil || sr.App == nil || sr.App.Config == nil {
-		if sr != nil {
-			sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
+	if d == nil || verified == nil || verified.Network == nil || runtime == nil || d.App == nil || d.App.Config == nil {
+		if d != nil {
+			d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
 		}
 		return plan, nil
 	}
-	config := sr.App.Config
+	config := d.App.Config
 	if verified.ManagedZone == zone.RootZone {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
 		return plan, nil
 	}
 	if !verified.ManagedZone.Valid() {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": verified.ManagedZone})
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "invalid_managed_zone", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
 	if len(verified.IdentityPrivateKey) == 0 {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": verified.ManagedZone})
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
 	if autoJoinPendingVerified(verified) {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": verified.ManagedZone})
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
 	if len(config.IPsec.LinkGroups) == 0 {
-		sr.logger().Debug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": verified.ManagedZone})
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "no_link_groups", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
-	sr.logger().Debug("ipsec", "publish_started", map[string]any{
+	d.logDebug("ipsec", "publish_started", map[string]any{
 		"managed_zone": verified.ManagedZone,
 		"role":         config.IPsec.Role,
 		"link_groups":  len(config.IPsec.LinkGroups),
 	})
-	now := sr.now()
+	now := d.now()
 	key, keyRecord, err := ensureIPsecTransportKey(runtime, verified.IdentityPrivateKey, now)
 	if err != nil {
 		return plan, err
@@ -83,7 +83,7 @@ func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runt
 		plan.Intents = append(plan.Intents, corestate.PutProtocolRecordIntent{
 			Kind: corestate.ProtocolRecordIPsec, Zone: verified.ManagedZone, Key: item.key, Type: item.recordType, Value: value,
 		})
-		sr.logger().Debug("ipsec", "publish_record_decision", map[string]any{
+		d.logDebug("ipsec", "publish_record_decision", map[string]any{
 			"managed_zone": verified.ManagedZone,
 			"key":          item.key,
 			"updated":      true,
@@ -107,7 +107,7 @@ func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runt
 			r = portRecord.Range
 		}
 		previousState := runtime.IPsecPortRecord
-		sr.logger().Debug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
+		d.logDebug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
 		plan.PortRecord = &ipsecPortRecordState{
 			Mode:       portRecord.Mode,
 			Range:      r,
@@ -116,10 +116,10 @@ func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runt
 		}
 	}
 	if len(plan.Intents) > 0 || !sameIPsecPublishRuntime(runtime, plan) {
-		sr.logger().Debug("ipsec", "publish_saved", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
+		d.logDebug("ipsec", "publish_saved", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
 		return plan, nil
 	}
-	sr.logger().Debug("ipsec", "publish_unchanged", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
+	d.logDebug("ipsec", "publish_unchanged", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
 	return plan, nil
 }
 

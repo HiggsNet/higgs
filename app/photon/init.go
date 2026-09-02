@@ -10,7 +10,7 @@ import (
 )
 
 func initRootState() error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func initRootState() error {
 	return nil
 }
 
-func initRootStateInRuntime(rt *Runtime) (ed25519.PublicKey, error) {
+func initRootStateInRuntime(rt *AppContext) (ed25519.PublicKey, error) {
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err

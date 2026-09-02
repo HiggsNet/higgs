@@ -35,14 +35,14 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -140,7 +140,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 	// Reconcile routing and verify BIRD config import/export filters.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -198,7 +198,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 	// Reconcile routing and let auto-announce publish the route.
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -303,13 +303,13 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now.Add(time.Second) },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})

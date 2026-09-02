@@ -114,7 +114,7 @@ func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, admission *adm
 }
 
 func debugAdmission() error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

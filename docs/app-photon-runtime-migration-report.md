@@ -195,11 +195,11 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `runtime_state_migration.go` | 旧 `stateFile/stateMeta` 单向 decoder | current RuntimeState/type/clone/codec/commit 已归 `internal/photonlinux`；本文件只保留旧 schema 拆分与原子迁移，停止支持旧库时删除 |
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
-| `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | `stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump；current runtime 类型已由 `internal/photonlinux.RuntimeState` 拥有，app alias 仅待调用签名逐步显式化 |
+| `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | 原 `Runtime` 已改名 `AppContext`，只承载 config/state-path/clock；`stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump，current platform state 类型由 `internal/photonlinux.RuntimeState` 暂时拥有并等待字段收缩 |
 | `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.RuntimeState` 共用；不在迁移后保留两套深拷贝实现 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
-| `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | daemon、`sync serve`、`sync once` 已共用 HostRuntime 的 event consumer，启动 peer/endpoint/observed 恢复也统一走 HostRuntime discovery；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |
+| `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime` 已删除；Daemon 直接持有 AppContext、gossip config/transport 和注入依赖，`sync serve/once` 共用同一 Daemon/GossipDriver 组合；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
 | `verify.go` | chain 验证 CLI | 验证留 crypto/state；CLI 进 photoncli |
 | `version.go` | build info | `internal/buildinfo` 供 Linux/Windows 复用 |
 | `zone.go` | zone/record 列表 CLI | Store read API + inspect/text + photoncli |
@@ -260,7 +260,7 @@ HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
 `photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
 
-目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `DaemonService` 收敛为唯一顶层
+目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
 `Daemon`，`host.Runtime` 是公共 `GossipDriver`，`photonlinux.Runtime` 是具体 `LinuxDriver`，`state.Store` 是公共
 `StateStore`。`DaemonStateStore` 仍是迁移期 common/Linux 顺序协调器，最终必须删除；不能把它描述为长期 Repository，
 也不能通过把同一把 mutex/commit callback 整体搬进 LinuxDriver 来假装完成。单调用方的 Bird GC、revoked purge 和
@@ -273,9 +273,9 @@ peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段�
 ### 5.3 推荐顺序的当前进度
 
 1. direct writer：已完成；record/IPAM/route/service/delegation、fresh join bootstrap 与 Linux state GC 均写入各自 owner，不再通过聚合 `stateFile` 落盘。
-2. 公共 HostRuntime：协议 receive、timer、object-pull、discovery 和 controller 周期调度已完成；`sync.go` 与
-   `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。HostRuntime 已直接持有 common Store 和同一个
-   gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
+2. 公共 GossipDriver：只保留协议 receive/timer、object-pull、discovery 和 gossip observability；IPsec/routing/firewall/health
+   周期调度已回到 Daemon 自己的 scheduler/queue，health completion 也由 Daemon event loop 直接消费。GossipDriver 已直接持有
+   common Store 和同一个 gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
 3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
    current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。

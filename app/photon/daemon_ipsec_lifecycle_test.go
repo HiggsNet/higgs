@@ -29,12 +29,12 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
 	_, latest := service.StateStore.readCommonAndRuntime()
@@ -92,12 +92,12 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 			Established: true,
 		}},
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
@@ -173,12 +173,12 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 			Established: true,
 		}},
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -233,12 +233,12 @@ func TestDaemonStartupRepairsEstablishedSAWhenXFRMLinkMissing(t *testing.T) {
 			InterfaceExists: false,
 		},
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -316,12 +316,12 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 			},
 		},
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now.Add(time.Minute) },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -364,13 +364,13 @@ func TestDaemonStartupRepairsMissingObservedSA(t *testing.T) {
 	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -411,13 +411,13 @@ func TestDaemonStartupRetriesConnectingWithoutObservedSA(t *testing.T) {
 	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
 		persisted.ID: persisted,
 	})
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.recoverIPsecLinksOnStart(context.Background())
@@ -444,13 +444,13 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
@@ -470,7 +470,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		Reason:                "ipsec smoke revoke",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
@@ -549,13 +549,13 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
 	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{"node-b.catofes.": {}}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &ipsec.DryRunDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", true)
@@ -594,7 +594,7 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	verified.ManagedZone = "node-b.catofes."
 	runtime.LinkInstances = nil
 	now := time.Unix(5105, 0)
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -675,13 +675,13 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	spec := plan.Desired[0]
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
 	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)
@@ -717,7 +717,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	runtime.LinkInstances = nil
 	now := time.Unix(5112, 0)
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -725,7 +725,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{{Name: "ipsec-orphan-r3"}},
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)

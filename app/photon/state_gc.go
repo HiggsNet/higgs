@@ -47,15 +47,15 @@ func applyStateGCPlan(runtime *linuxRuntimeState, plan *stateGCPlan) bool {
 	return true
 }
 
-func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil, fmt.Errorf("daemon service is not initialized")
 	}
 	common, runtime := d.StateStore.readCommonAndRuntime()
 	if common.State == nil || runtime == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
-	plan := buildStateGCPlan(d.Sync.App.Config, runtime.BirdInstances)
+	plan := buildStateGCPlan(d.App.Config, runtime.BirdInstances)
 	if !apply {
 		return plan, nil
 	}
@@ -71,7 +71,7 @@ func (d *DaemonService) handleStateGCEvent(apply bool) (*stateGCPlan, error) {
 }
 
 func garbageCollectState(apply, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func garbageCollectState(apply, direct bool) error {
 	return nil
 }
 
-func garbageCollectStateDirect(rt *Runtime, apply bool) (*stateGCPlan, error) {
+func garbageCollectStateDirect(rt *AppContext, apply bool) (*stateGCPlan, error) {
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return nil, err

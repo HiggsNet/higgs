@@ -60,7 +60,7 @@ func parseAuthorityPermission(raw string) (zone.Permission, error) {
 }
 
 func grantDelegationPermissions(path zone.ZonePath, permissions []zone.Permission, outPath string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func writeDelegationGrantBundle(bundle *joinBundle, outPath string) error {
 	return nil
 }
 
-func grantDelegationPermissionsDirect(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
 	if !path.Valid() {
 		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}

@@ -232,8 +232,8 @@ func TestObserverPeersAPIEmpty(t *testing.T) {
 func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	srv.daemon.Sync.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	srv.daemon.App.Clock = func() time.Time { return now }
+	srv.daemon.GossipConfig.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -332,9 +332,9 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	srv.daemon.Sync.Config.PeerID = "node-a.catofes."
-	srv.daemon.Sync.Config.Bootstrap = []syncConfigPeer{
+	srv.daemon.App.Clock = func() time.Time { return now }
+	srv.daemon.GossipConfig.PeerID = "node-a.catofes."
+	srv.daemon.GossipConfig.Bootstrap = []syncConfigPeer{
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
@@ -376,8 +376,8 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	srv.daemon.Sync.Config.PeerID = "node-a.catofes."
+	srv.daemon.App.Clock = func() time.Time { return now }
+	srv.daemon.GossipConfig.PeerID = "node-a.catofes."
 	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
@@ -430,7 +430,7 @@ func TestObserverLinksAPIEmpty(t *testing.T) {
 
 func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.Sync.App.Config = &appConfig{
+	srv.daemon.App.Config = &appConfig{
 		IPsec: ipsecConfig{
 			LinkGroups: []ipsec.LinkGroupSpec{{
 				ID:    "blue",
@@ -576,11 +576,11 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	cfg.MetricsEnabled = true
 	cfg.LocalSpoolPath = t.TempDir()
 	cfg.LocalSpoolMaxAge = time.Hour
-	srv.daemon.Sync.App.Config.Health = cfg
-	srv.daemon.healthSpool = healthspool.New(cfg.spoolConfig())
+	srv.daemon.App.Config.Health = cfg
+	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.spoolConfig())}
 	now := time.Unix(3000, 0)
-	srv.daemon.Sync.App.Clock = func() time.Time { return now }
-	if err := srv.daemon.healthSpool.Append(now, healthSpoolSamples([]healthLinkJSON{{
+	srv.daemon.App.Clock = func() time.Time { return now }
+	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]healthLinkJSON{{
 		InstanceID: "link-1",
 		State:      "healthy",
 		ProbeType:  "icmp",

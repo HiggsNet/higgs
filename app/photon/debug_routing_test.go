@@ -189,7 +189,7 @@ func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:         appConfig,
 		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
 		Clock:          func() time.Time { return now },
@@ -229,7 +229,7 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:         appConfig,
 		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
 		Clock:          func() time.Time { return now },
@@ -263,7 +263,7 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 func TestDebugBabelRequiresOnlineDaemon(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:         appConfig,
 		Clock:          func() time.Time { return time.Unix(4000, 0) },
 		DisableControl: true,

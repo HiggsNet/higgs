@@ -8,7 +8,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
+func TestDaemonGossipTransportConfigUsesInjectedDeps(t *testing.T) {
 	_, _, _, config := buildTestDaemonOwners(t)
 	knownAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}
 	replay := gossip.NewReplayWindow(time.Minute)
@@ -16,17 +16,16 @@ func TestSyncRuntimeTransportConfigUsesInjectedDeps(t *testing.T) {
 	var logged bool
 	logger := func(gossip.Event) { logged = true }
 	now := time.Unix(1234, 0)
-	rt := &Runtime{Clock: func() time.Time { return now }}
+	rt := &AppContext{Clock: func() time.Time { return now }}
 
-	syncRuntime := newSyncRuntime(config, nil, rt)
-	syncRuntime.TransportDeps = &SyncTransportDeps{
+	deps := &SyncTransportDeps{
 		KnownPeers: map[string]*net.UDPAddr{"node-b.catofes.": knownAddr},
 		Replay:     replay,
 		Quotas:     quotas,
 		Log:        logger,
 	}
 
-	transportConfig := syncRuntime.transportConfig(syncRuntime.syncTransportDeps())
+	transportConfig := gossipTransportConfig(config, deps, rt.Now)
 	if transportConfig.KnownPeers["node-b.catofes."] != knownAddr {
 		t.Fatalf("KnownPeers did not use injected map")
 	}

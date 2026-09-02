@@ -540,17 +540,17 @@ func ipamDiagnosticsContain(values []inspect.IPAMGetDiagnosticRow, want string) 
 	return false
 }
 
-func buildIPAMTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
+func buildIPAMTestRuntime(t *testing.T) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	return buildIPAMTestRuntimeWithNetwork(t, true, nil)
 }
 
-func buildIPAMTestRuntimeWithoutIPAMCapability(t *testing.T) (*Runtime, zone.ZonePath) {
+func buildIPAMTestRuntimeWithoutIPAMCapability(t *testing.T) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	return buildIPAMTestRuntimeWithNetwork(t, false, nil)
 }
 
-func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zone.NetworkState)) (*Runtime, zone.ZonePath) {
+func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zone.NetworkState)) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -645,7 +645,7 @@ func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zo
 	config := defaultAppConfig()
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
-	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
+	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
 	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
 		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
 	}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})

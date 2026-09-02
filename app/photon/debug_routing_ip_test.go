@@ -60,7 +60,7 @@ func TestDebugRoutingIPRouteShowsKernelFIBByFamily(t *testing.T) {
 	config.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "main", NetNS: "mesh", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
-	rt := &Runtime{Config: config}
+	rt := &AppContext{Config: config}
 
 	var commands []string
 	runner := func(_ context.Context, name string, args ...string) ([]byte, error) {

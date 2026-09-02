@@ -24,9 +24,8 @@ const (
 )
 
 var (
-	ErrEventQueueFull    = errors.New("host event queue full")
-	ErrRuntimeStopped    = errors.New("host runtime stopped")
-	ErrInvalidCompletion = errors.New("invalid host completion")
+	ErrEventQueueFull = errors.New("host event queue full")
+	ErrRuntimeStopped = errors.New("host runtime stopped")
 )
 
 // Event is delivered to the single-writer HostRuntime event loop.
@@ -49,17 +48,6 @@ type GossipPacketReceived struct {
 }
 
 func (GossipPacketReceived) isHostEvent() {}
-
-// Completion wakes the single-writer loop after asynchronous runtime work.
-// Namespace/owner/key identify the producer without coupling Runtime to a
-// specific controller or protocol result type.
-type Completion struct {
-	Namespace string
-	Owner     string
-	Key       string
-}
-
-func (Completion) isHostEvent() {}
 
 // Runtime owns the common gossip engine, bounded event queue and scheduler.
 // Platform composition roots inject datagram I/O around this object;
@@ -143,33 +131,6 @@ func (runtime *Runtime) PostGossip(event gossip.SyncEvent) error {
 	}
 }
 
-// PostCompletion queues an asynchronous completion at the common runtime
-// boundary. It waits for bounded-queue capacity or context cancellation so a
-// completed operation is not silently lost under temporary backpressure.
-func (runtime *Runtime) PostCompletion(ctx context.Context, completion Completion) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
-	}
-	if completion.Namespace == "" || completion.Owner == "" || completion.Key == "" {
-		return ErrInvalidCompletion
-	}
-	runtime.mu.RLock()
-	stopped := runtime.stopped
-	runtime.mu.RUnlock()
-	if stopped {
-		return ErrRuntimeStopped
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case runtime.events <- completion:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 // GossipSessionEventFor converts a host event into one session-FSM event. Timer
 // generations are accepted here, at the single-writer boundary, so a queued
 // timeout made stale by cancel/replace cannot advance a session.
@@ -241,26 +202,6 @@ func (runtime *Runtime) CancelGossipTimers(peerID string) {
 		return
 	}
 	runtime.schedulerForRead().CancelOwner(GossipTimerNamespace, peerID)
-}
-
-// ScheduleTimer registers a protocol or controller deadline in Runtime's one
-// scheduler. Callers choose a stable namespace/owner/key and consume the
-// resulting TimerFired event through AcceptTimer at the single-writer boundary.
-func (runtime *Runtime) ScheduleTimer(id TimerID, deadline time.Time) (uint64, error) {
-	if runtime == nil {
-		return 0, ErrRuntimeStopped
-	}
-	return runtime.schedulerForRead().Schedule(id, deadline)
-}
-
-func (runtime *Runtime) CancelTimer(id TimerID) {
-	if runtime != nil {
-		runtime.schedulerForRead().Cancel(id)
-	}
-}
-
-func (runtime *Runtime) AcceptTimer(fired TimerFired) bool {
-	return runtime != nil && runtime.schedulerForRead().Accept(fired)
 }
 
 // ResetScheduler replaces only the runtime scheduling resource. It is used by

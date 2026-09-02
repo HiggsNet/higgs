@@ -58,7 +58,7 @@ func validateGenericRecordPut(key, recordType string) error {
 }
 
 func putRecord(path zone.ZonePath, key string, value []byte, recordType string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string, 
 	return putRecordDirect(rt, path, key, value, recordType)
 }
 
-func putRecordDirect(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) error {
+func putRecordDirect(rt *AppContext, path zone.ZonePath, key string, value []byte, recordType string) error {
 	if err := validateGenericRecordPut(key, recordType); err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func debugRecord(path zone.ZonePath, key string, history int) error {
 }
 
 func loadRecord(path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func loadRecord(path zone.ZonePath, key string, history int) (*inspect.RecordDet
 	return getRecordDirect(rt, path, key, history)
 }
 
-func getRecordDirect(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
+func getRecordDirect(rt *AppContext, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
 	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return nil, err

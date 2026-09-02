@@ -16,7 +16,7 @@ import (
 type routingIPCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 func debugRoutingIPRoute(ctx context.Context, netnsName, family string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -29,7 +29,7 @@ func runRoutingIPCommand(ctx context.Context, name string, args ...string) ([]by
 
 func debugRoutingIPRouteWithRuntime(
 	ctx context.Context,
-	rt *Runtime,
+	rt *AppContext,
 	w io.Writer,
 	netnsName string,
 	family string,

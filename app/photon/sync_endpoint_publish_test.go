@@ -22,8 +22,11 @@ func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
 	}
 	t.Cleanup(func() { collectSyncLocalEndpoints = oldCollect })
 
-	runtime := newSyncRuntime(config, nil, &Runtime{Clock: func() time.Time { return now }})
-	intent, err := runtime.endpointProtocolIntent(verified)
+	daemon := &Daemon{
+		App:          &AppContext{Clock: func() time.Time { return now }},
+		GossipConfig: config,
+	}
+	intent, err := daemon.endpointProtocolIntent(verified)
 	if err != nil || intent == nil {
 		t.Fatalf("endpoint intent/error = %#v/%v", intent, err)
 	}

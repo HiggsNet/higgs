@@ -27,7 +27,7 @@ type manualPortRotateResult struct {
 }
 
 func debugRotatePort(direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func debugRotatePort(direct bool) error {
 }
 
 func debugRotate(ctx context.Context, filter string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -123,7 +123,7 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 	})
 }
 
-func rotateIPsecPortDirect(rt *Runtime) (*manualPortRotateResult, error) {
+func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return nil, err

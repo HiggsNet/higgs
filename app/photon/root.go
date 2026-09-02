@@ -8,7 +8,7 @@ import (
 )
 
 func rootPubkey() error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

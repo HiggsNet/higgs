@@ -390,7 +390,7 @@ func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config, signers
 }
 
-func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey, *Runtime) {
+func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey, *AppContext) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -502,7 +502,7 @@ func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *cores
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(4000, 0) },
 	}
@@ -584,7 +584,7 @@ func readFileString(path string) (string, error) {
 	return string(data), nil
 }
 
-func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*corestate.VerifiedState, *Runtime) {
+func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*corestate.VerifiedState, *AppContext) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -707,7 +707,7 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		IdentityPrivateKey: managedPriv,
 		RootPrivateKey:     rootPriv,
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
 		Clock:  func() time.Time { return time.Unix(1000, 0) },
 	}

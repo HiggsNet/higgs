@@ -15,7 +15,7 @@ import (
 const socks5RecordName = "socks5"
 
 func showServices(filter string, includeAll, localOnly, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ const (
 )
 
 func publishSOCKS5Endpoints(endpoints []photonservice.SOCKS5Endpoint, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func publishSOCKS5Endpoints(endpoints []photonservice.SOCKS5Endpoint, direct boo
 	return publishSOCKS5EndpointsWithRuntime(rt, endpoints)
 }
 
-func publishSOCKS5EndpointsWithRuntime(rt *Runtime, endpoints []photonservice.SOCKS5Endpoint) error {
+func publishSOCKS5EndpointsWithRuntime(rt *AppContext, endpoints []photonservice.SOCKS5Endpoint) error {
 	return submitServiceMutation(rt, serviceMutationRequest{
 		Operation: serviceOperationPublish,
 		Endpoints: append([]photonservice.SOCKS5Endpoint(nil), endpoints...),
@@ -88,7 +88,7 @@ func parseSOCKS5EndpointFlags(values []string, legacyRegion, legacyAddress strin
 }
 
 func withdrawSOCKS5Service(direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -96,11 +96,11 @@ func withdrawSOCKS5Service(direct bool) error {
 	return withdrawSOCKS5ServiceWithRuntime(rt)
 }
 
-func withdrawSOCKS5ServiceWithRuntime(rt *Runtime) error {
+func withdrawSOCKS5ServiceWithRuntime(rt *AppContext) error {
 	return submitServiceMutation(rt, serviceMutationRequest{Operation: serviceOperationWithdraw}, "withdrew")
 }
 
-func submitServiceMutation(rt *Runtime, request serviceMutationRequest, operation string) error {
+func submitServiceMutation(rt *AppContext, request serviceMutationRequest, operation string) error {
 	if version, ok, err := mutateServiceViaControl(rt, request); ok {
 		if err != nil {
 			return err

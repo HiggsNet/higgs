@@ -23,11 +23,11 @@ func objectPullTCPAddr(udpAddr string) string {
 	return (&net.TCPAddr{IP: udp.IP, Port: udp.Port}).String()
 }
 
-func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+func (d *Daemon) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 	if d == nil || d.hostRuntime == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	response := d.hostRuntime.GossipObjectPullResponse(req, d.Sync.now())
+	response := d.hostRuntime.GossipObjectPullResponse(req, d.now())
 	if req != nil && response != nil && response.OK && response.Snapshot != nil {
 		encoded, _ := gossip.EncodeZoneSnapshotObject(response.Snapshot)
 		d.logDebug("object_pull", "lookup_snapshot", map[string]any{
@@ -37,23 +37,23 @@ func (d *DaemonService) objectPullResponse(req *gossip.ObjectPullRequest) *gossi
 	return response
 }
 
-func newDaemonObjectPullExecutor(d *DaemonService) *corehost.GossipObjectPullExecutor {
+func newDaemonObjectPullExecutor(d *Daemon) *corehost.GossipObjectPullExecutor {
 	return corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client: photonlinux.GossipObjectPullClient{},
 		Discovery: func() corehost.GossipDiscoveryInput {
 			return d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
 		},
-		Now: d.Sync.now,
+		Now: d.now,
 	})
 }
 
 // startObjectPullServer binds the platform listener and gives its lifecycle to
 // HostRuntime.
-func startObjectPullServer(ctx context.Context, d *DaemonService) error {
-	if d == nil || d.Sync == nil || d.Sync.Transport == nil || d.hostRuntime == nil {
+func startObjectPullServer(ctx context.Context, d *Daemon) error {
+	if d == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
 		return errors.New("object-pull server runtime is not configured")
 	}
-	addr := objectPullTCPAddr(d.Sync.Transport.LocalAddr().String())
+	addr := objectPullTCPAddr(d.hostRuntime.Transport().LocalAddr().String())
 	if addr == "" {
 		return nil
 	}
@@ -71,26 +71,26 @@ func startObjectPullServer(ctx context.Context, d *DaemonService) error {
 
 // event-loop sync path is the only daemon sync path; this helper remains for
 // tests that need a fake clock.
-func (d *DaemonService) EnableEventLoopSync(clock corehost.Clock) {
+func (d *Daemon) EnableEventLoopSync(clock corehost.Clock) {
 	if clock == nil {
-		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Clock != nil {
-			clock = corehost.NewClock(d.Sync.App.Clock)
+		if d.App != nil && d.App.Clock != nil {
+			clock = corehost.NewClock(d.App.Clock)
 		} else {
 			clock = corehost.NewClock(nil)
 		}
 	}
 	if d.hostRuntime == nil {
-		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipHostRuntimeConfig(d.Sync.Config))
+		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipHostRuntimeConfig(d.GossipConfig))
 		return
 	}
 	d.hostRuntime.ResetScheduler(clock)
 }
 
-func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) error {
-	if d == nil || d.Sync == nil {
+func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
+	if d == nil {
 		return nil
 	}
-	now := d.Sync.now()
+	now := d.now()
 	input := d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
 	peers := corehost.GossipOutboundPeers(input, now)
 	if len(peers) == 0 {
@@ -130,16 +130,16 @@ func (d *DaemonService) handleSyncTimerEvent(ctx context.Context, force bool) er
 	return nil
 }
 
-func (d *DaemonService) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
+func (d *Daemon) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	_, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.Sync.now(), d.currentGossipSuppressions())
+	_, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.currentGossipSuppressions())
 	return err
 }
 
-func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
-	eventNow := d.Sync.now()
+func (d *Daemon) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
+	eventNow := d.now()
 	hostResult, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.currentGossipSuppressions())
 	if err != nil {
 		return false
@@ -147,8 +147,8 @@ func (d *DaemonService) handleSyncEvent(ctx context.Context, event gossip.SyncEv
 	return d.observeSyncEventResult(hostResult.Session)
 }
 
-func (d *DaemonService) handleHostRuntimeGossipEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
-	now := d.Sync.now()
+func (d *Daemon) handleHostRuntimeGossipEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
+	now := d.now()
 	result, err := d.hostRuntime.HandleGossipHostEvent(ctx, hostEvent, now, d.currentGossipSuppressions())
 	if result.Session.PeerID != "" && err == nil {
 		d.observeSyncEventResult(result.Session)
@@ -156,19 +156,20 @@ func (d *DaemonService) handleHostRuntimeGossipEvent(ctx context.Context, hostEv
 	return result, err
 }
 
-func (d *DaemonService) observeSyncEventResult(result corehost.GossipEventResult) bool {
+func (d *Daemon) observeSyncEventResult(result corehost.GossipEventResult) bool {
 	peerID := result.PeerID
 	if result.Done {
 		// Address health and the ephemeral reply route belong to the platform
 		// transport. The common Runtime has already removed the session, queued
 		// any deferred hint and scheduled relay work before returning here.
-		if result.TerminalErr != nil && d.Sync.Transport != nil && strings.Contains(result.TerminalErr.Error(), "timeout") {
-			if lastAddr := d.Sync.Transport.LastSendAddr(peerID); lastAddr != nil {
-				d.Sync.Transport.RecordAddrFailure(peerID, lastAddr)
+		transport := d.hostRuntime.Transport()
+		if result.TerminalErr != nil && transport != nil && strings.Contains(result.TerminalErr.Error(), "timeout") {
+			if lastAddr := transport.LastSendAddr(peerID); lastAddr != nil {
+				transport.RecordAddrFailure(peerID, lastAddr)
 			}
 		}
 		if result.NetworkChanged {
-			if d.Sync.Transport != nil {
+			if transport != nil {
 				d.updateDiscoveredPeers()
 			}
 			d.notifyStateChanged()

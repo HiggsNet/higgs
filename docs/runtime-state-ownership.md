@@ -4,7 +4,7 @@
 
 ## 1. 顶层结构
 
-每个平台产品只有一个顶层生命周期所有者，统一称为 `Daemon`。Linux 当前对应 `app/photon.DaemonService` 及其 `Run` 方法；后续直接收敛和改名，不在外面再套一个 supervisor/runtime。
+每个平台产品只有一个顶层生命周期所有者，统一称为 `Daemon`。Linux 当前由 `app/photon.Daemon` 及其 `Run` 方法承担，没有在外面再套一个 supervisor/runtime。
 
 ```text
 Daemon
@@ -27,11 +27,15 @@ Daemon
 
 `Daemon` 是唯一产品生命周期和平台 mutation 编排者。子组件可以拥有接收 channel、bounded worker 和协议 timer，但不得再形成持有 Daemon、StateStore、平台 Driver 与 BoltStore 的第二个产品 Runtime。
 
+Daemon 和 GossipDriver 各自拥有队列：GossipDriver 的队列只排序 packet、协议 timer、object-pull 等 gossip 事件；Daemon 的 queue/scheduler 处理 IPsec、routing、firewall、health 等平台工作。健康探测完成信号直接回到 Daemon event loop，不通过 GossipDriver 包装或转发。
+
+Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是所有平台必须具备的公共能力。Linux 可安装 healthDriver（manager、spool、运行标志和 Linux prober），Android 可以完全不创建它；同理 HTTP observer 只在需要的平台 composition 中启动。Gossip transport/address book 只由 GossipDriver 持有，Daemon 不保存第二份 transport 指针。
+
 ## 2. 名称与当前实现
 
 | 目标名称 | 当前实现 | 处理方式 |
 |---|---|---|
-| `Daemon` | `app/photon.DaemonService` | 直接收敛为顶层 owner；`DaemonService.Run` 是当前主事件循环 |
+| `Daemon` | `app/photon.Daemon` | 已直接收敛为顶层 owner；`Daemon.Run` 是当前主事件循环 |
 | `GossipDriver` | `pkg/core/host.Runtime` | 保留公共 gossip 闭环，逐步移出非 gossip 的 controller timer/completion |
 | `StateStore` | `pkg/core/state.Store` | 保留；它是公共可信状态 owner，不是 Gossip 专属 Store |
 | `LinuxDriver` | `internal/photonlinux.Runtime` | 改名并保持具体 Linux API；不预建统一 `PlatformDriver` 接口 |
@@ -39,8 +43,8 @@ Daemon
 | `WindowsDriver` | `internal/photonwindows` 后续真实平台实现 | 只按真实调用点增加 API，不要求与 Linux 方法对称 |
 | `WindowsState` | Windows 平台持久分区 | 只在有真实跨重启数据时增加字段 |
 | `BoltStore` | `pkg/core/state.BoltStore` | 每进程唯一 bbolt handle/事务/关闭边界 |
-| 删除 | `app/photon.SyncRuntime` | 配置、transport 和 clock 归各自 owner |
-| 改名或拆分 | `app/photon.Runtime` | 实际是 CLI/config/state-path 上下文，不能继续冒充产品 Runtime |
+| 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有 AppContext、gossip config/transport 和注入依赖 |
+| `AppContext` | 原 `app/photon.Runtime` | 已改名；只承载 CLI/config/state-path/clock，不是产品 Runtime |
 | 删除 | `app/photon.DaemonStateStore` | 迁移期 common/Linux 顺序协调器，不属于终态 |
 
 以前文档中的 `CommonRuntime` 只是“Linux/Windows 共用的 gossip 执行闭环”的概念名，当前实现就是 `pkg/core/host.Runtime`。它不是额外组件，也不是顶层 Daemon。后续文档统一使用 `GossipDriver`；“common”只描述代码可跨平台复用，不再作为一个 Runtime 名称。

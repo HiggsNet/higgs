@@ -10,7 +10,7 @@ Photon daemon 是长期运行的控制循环。它把所有子系统——gossip
 ## 目录
 
 1. [架构概览](#1-架构概览)
-2. [DaemonService 结构](#2-daemonservice-结构)
+2. [Daemon 结构](#2-daemon-结构)
 3. [事件循环](#3-事件循环)
    - 3.1 [Packet Demuxer](#31-packet-demuxer)
    - 3.2 [Timer Manager](#32-timer-manager)
@@ -75,28 +75,29 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 
 ---
 
-## 2. DaemonService 结构
+## 2. Daemon 结构
 
-`DaemonService` 定义在 [`app/photon/daemon.go`](../../app/photon/daemon.go) 中，是 daemon 的核心结构体。
+`Daemon` 定义在 [`app/photon/daemon.go`](../../app/photon/daemon.go) 中，是 daemon 的唯一顶层生命周期和事件循环 owner。
 
 主要字段：
 
 | 字段 | 类型 | 作用 |
 |------|------|------|
-| `Sync` | `*SyncRuntime` | gossip sync 运行时封装，持有 `Config`、`Transport` 和落盘文件标记；不持有状态 |
-| `StateStore` | `*DaemonStateStore` | 状态中心：committed snapshot + revision + dirty 标记 |
+| `App` | `*AppContext` | config、state path、clock 等应用上下文；不是产品 Runtime |
+| `GossipConfig` | `*syncConfigFile` | GossipDriver 的固定配置输入 |
+| `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
+| `StateStore` | `*DaemonStateStore` | 迁移期 common/Linux 顺序协调器，最终删除 |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
 | `ControlSocketPath` | `string` | Unix domain socket 路径 |
-| `IPsecDriver` | `ipsec.IPsecDriver` | StrongSwan VICI 驱动 |
-| `XFRMDriver` | `ipsec.XFRMDriver` | XFRM interface 驱动 |
+| `linuxRuntime` | `*photonlinux.Runtime` | 当前 LinuxDriver；持有 IPsec/XFRM/BIRD/firewall/health 平台实现 |
 | `health` | `*health.Manager` | 链路健康探测管理器 |
 | `observerHub` | `*observer.Hub` | Observer SSE 事件广播 |
 | `ipsecDirty` | `bool` | IPsec reconcile 待调度标记 |
 | `routingDirty` | `bool` | Routing reconcile 待调度标记 |
 | `firewallDirty` | `bool` | Firewall reconcile 待调度标记 |
-| `hostRuntime` | `*host.Runtime` | 公共 bounded gossip event queue、Scheduler 与纯 `gossip.Engine` owner |
-| `objectPullPool` | `*objectPullPool` | TCP object pull 连接池 |
+| `hostRuntime` | `*host.Runtime` | 当前 GossipDriver：协议 queue/scheduler/Engine/transport/object-pull owner |
+| `objectPullExecutor` | `*host.GossipObjectPullExecutor` | Linux TCP exchange 注入点；worker 生命周期由 GossipDriver 管理 |
 
 **DaemonEvent 类型**（[`daemon.go:70-95`](../../app/photon/daemon.go#L70-L95)）：
 
@@ -122,7 +123,7 @@ Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go#L1522-L1540)）
 daemonRun()
  ├─ NewRuntime()          加载应用配置
  ├─ rt.LoadState()        加载 BoltDB 状态文件
- ├─ newDaemonService()    创建 DaemonService
+ ├─ openDaemon()          创建 Daemon 与唯一 BoltStore
  ├─ configureIPsecDriversFromConfig()
  └─ service.Run()         进入事件循环
 ```
@@ -247,78 +248,31 @@ TCP object pull 在独立的 worker pool 中执行，避免阻塞事件循环：
 
 ### 4.1 核心原则
 
-Daemon 是 **本机唯一的状态 writer**。CLI admin 操作（如 record put、delegate issue）不会直接修改 BoltDB 文件，而是通过 control socket 把请求发给 daemon 的事件循环，由事件循环串行提交到 `DaemonStateStore`。
+Daemon 是在线进程唯一的平台 mutation 编排者。CLI admin 操作（如 record put、delegate issue）不会绕过在线 daemon 另开 BoltDB，而是通过 control socket 把请求发给事件循环，再提交给对应 typed owner。
 
 这样可以避免多个写者同时修改同一份本地状态。
 
-### 4.2 DaemonStateStore
+### 4.2 当前状态 owner
 
-`DaemonStateStore` 是 daemon 的状态中心，定义在 [`daemon_state_store.go`](../../app/photon/daemon_state_store.go)。它维护：
+Daemon 当前组合三个真实 owner：
 
-| 字段 | 作用 |
-|------|------|
-| `committed` | 当前已提交的 `*stateFile` 快照 |
-| `revision` | 单调递增的版本号 |
-| `dirty` | IPsec / routing / firewall 的 dirty 标记 |
-| `reconcileProgress` | 各层 reconcile 是否在进行中 |
+- `pkg/core/state.Store`：VerifiedState 与 loss-tolerant GossipCheckpoint；
+- `internal/photonlinux.RuntimeState`：待收缩的 Linux 本地持久 state；
+- 唯一 `state.BoltStore`：同一进程的 bbolt handle 和事务边界。
 
-daemon 进程内只有这一套权威状态。`SyncRuntime` 不含 `State` 字段；transport 初始化和 standalone helper 所需状态必须显式传入，避免产生一个可能落后于 committed revision 的隐式副本。
-
-主要接口：
-
-- `Snapshot()` — 返回 committed 状态的深拷贝 + 当前 revision。control socket、observer、debug 以及需要隔离 workspace 的 reconcile 使用它。
-- `ReadCommitted(fn)` — 在短只读 callback 中访问 immutable committed view；daemon 热路径在 callback 内只生成 summary、digest、page 或其他 detached projection，不 retain committed 子结构，也不执行 transport/磁盘副作用。
-- `Meta()` — 返回 revision、snapshot time、dirty 标记、reconcile progress。
-- `BeginUpdate()` — 基于当前 committed 状态创建一个 workspace 克隆，不阻塞其他 reader。
-- `Update(fn)` / `CommitIfRevision(rev, fn)` — 在 workspace 上执行变更，然后以乐观锁方式提交。只有 committed revision 仍等于 base rev 时才替换成功，否则返回 stale revision 错误。
-- `ReplaceCommitted(state)` — 用外部加载的最新状态无条件替换 committed 快照。
-
-`stateFile` 本身仍内嵌 `sync.RWMutex`，但它现在主要保护单个克隆在本地修改时的并发安全；跨 goroutine 的同步由 `DaemonStateStore` 的版本号 + 快照机制负责。
+`DaemonStateStore` 只在迁移期为 common mutation 与 Linux completion 提供顺序锁、detached read 和 candidate commit，已经不拥有聚合 `stateFile` 快照。终态由 Daemon 直接持有 StateStore、LinuxState、LinuxObservation、LinuxDriver 和 BoltStore，然后删除该协调器。完整边界见 [`runtime-state-ownership.md`](../runtime-state-ownership.md)。
 
 ### 4.3 写路径
 
-事件循环中的写事件 handler（`record_put`、`delegate_issue`、`join_accept` 等）通过 `runStateStoreWrite()` 执行：
+本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 StateStore；平台 reconcile completion 只更新 LinuxState。两者都必须先由唯一 BoltStore 持久化，再发布对应内存状态。耗时 Observe/Plan/Apply 可在状态锁外执行，但 completion 要回到 Daemon owner；磁盘中的上次平台结果不能冒充当前 observation。
 
-1. 从磁盘加载最新状态（`Sync.loadState()`）
-2. 用 `ReplaceCommitted()` 刷新 StateStore
-3. 通过 `StateStore.Update(fn)` 在 workspace 上完成业务修改
-4. 调用 `saveCommittedState()` 从 committed snapshot 保存回磁盘
-5. 通知 observer，设置 dirty 标记并触发 reconcile
+### 4.4 Reconcile 与 Observation
 
-可能 no-op 的周期性写入（如 endpoint timer）使用 `runStateStoreWriteIfChanged()`：只有 `fn` 报告状态确实变化时，才会提交、递增 revision 并触发下游 flush。
+IPsec、routing、firewall 使用 `Observe -> Plan -> Apply -> Re-observe`：desired 来自 VerifiedState、配置和最小 LinuxState，实际 SA/route/BIRD/firewall/health 状态只存在于在线 Daemon 的 LinuxObservation。CLI/HTTP 查询平台运行状态必须经过在线 Daemon；离线只允许读取 verified/common 与明确标记的 GossipCheckpoint last-known 数据。
 
-### 4.4 Reconcile 与 StateStore
+### 4.5 持久化分区
 
-IPsec、routing、firewall 的 reconcile 不再长时间持有 committed state 锁：
-
-1. `snapshotState()` 从 `StateStore.Snapshot()` 拿到 committed 快照和 revision
-2. reconcile 基于快照计算 desired state 并执行数据面操作
-3. 结果通过 `StateStore.CommitIfRevision(rev, fn)` 写回；如果期间状态已被其他写者更新，本轮 reconcile 结果会被丢弃，由下一轮重新计算
-
-这样长 reconcile 不会阻塞 control socket、observer 和其他只读诊断路径。
-
-### 4.5 状态文件
-
-状态持久化在 BoltDB 文件中（路径由 `config.yaml` 的 `state_path` 指定，默认 `<data_dir>/photon.db`）。
-
-`stateFile` 结构包含（[`state.go:18-34`](../../app/photon/state.go#L18-L34)）：
-
-| 字段 | 作用 |
-|------|------|
-| `ManagedZone` | 本机管理的 Zone |
-| `IdentityKeyPath` | 身份密钥路径 |
-| `RootPrivateKey` | Root zone 私钥（仅 root 节点持有） |
-| `ZonePrivateKey` | 本 zone 私钥 |
-| `Network` | 完整的 Zone 数据库（`*zone.NetworkState`） |
-| `SyncPeers` | 每个 peer 的 sync 状态、观测地址、backoff |
-| `IPsecTransportKey` | IPsec 传输密钥 |
-| `IPsecPortRecord` | IPsec 端口记录状态 |
-| `LinkInstances` | IPsec 链路实例 |
-| `IPsecReconcile` | IPsec reconcile 结果快照 |
-| `RoutingReconcile` | Routing reconcile 结果快照 |
-| `FirewallReconcile` | Firewall reconcile 结果快照 |
-| `BirdInstances` | BIRD 进程实例状态 |
-| `Admission` | Auto-join 准入诊断 |
+状态持久化在唯一 BoltDB 文件中：common verified、common gossip-checkpoint 与 linux/state 使用不同 bucket，但共享一个 handle。旧 `stateFile/stateMeta` 仅供旧库单向 migration 和 legacy dump；不再参与在线读写，停止支持旧 schema 时整组删除。
 
 ### 4.6 状态变化通知
 
@@ -552,17 +506,17 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 ### 7.1 Gossip Sync
 
 - **输入**：UDP 包（从 transport.Receive() 接收）、定时器事件、object pull 结果
-- **输出**：通过 `StateStore.Update()` / `CommitIfRevision()` 更新 `Network`（Zone 数据库）和 peer runtime 状态
-- **集成点**：`SyncRuntime` 只持有 config、transport 和 I/O 依赖；状态由 `DaemonStateStore` 提供。`handleSyncEvent()` 在 event loop 中驱动 `SyncSession` FSM，通过 `executeSyncActions()` 执行 apply snapshot / send message / start object pull / start timer 等动作
-- **状态范围**：gossip 操作的是全网 verified signed state，进入 `Network` 字段
+- **输出**：GossipDriver 直接调用公共 StateStore 的 remote batch/checkpoint API，并通过同一 transport 发送协议响应
+- **集成点**：`pkg/core/host.Runtime` 是当前 GossipDriver，拥有 Engine、协议 queue/scheduler、transport、object-pull、chunk/session runtime 和 gossip observability；Daemon 只消费其事件并接收需要触发平台 reconcile 的终态结果
+- **状态范围**：verified signed facts 进入 VerifiedState；retry/backoff/observed endpoint 等 restart hint 进入 GossipCheckpoint；session/chunk/address book 等只在内存
 
 **稳态 unsolicited ping 短路**：收到对端主动发来的 `MessagePing` 时，如果 ping 携带的 catalog root 与本端一致，`maybeShortcutSyncFromPingSummary` 直接记录 peer sync 状态并返回，不再创建 SyncSession。只有 root 不一致或 summary 生成失败时，才回退到完整 sync round。respondPing 仍正常回复 PONG，让对端拿到本端 summary。
 
 ### 7.2 IPsec Transport
 
-- **输入**：`StateStore.Snapshot()` 中的 endpoint、transport key 记录，本地 `overlays[]` mesh policy
-- **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口；结果通过 `StateStore.CommitIfRevision()` 写回
-- **集成点**：`reconcileIPsecLinks(ctx)` 在 daemon.go 中调用，使用 `ipsec.PlanTransportLinks()` → `ipsec.ReconcileLinkInstances()` → `ipsec.ApplyReconcileAction()`
+- **输入**：detached VerifiedState、最小 LinuxState、本地配置和 LinuxDriver observation
+- **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口；只有不可重建的最小 journal 才写 LinuxState
+- **集成点**：Daemon 编排 reconcile，`internal/photonlinux.Runtime`（目标名 LinuxDriver）直接执行 SA/XFRM observe、apply 和 cleanup；实际 SA、动作和错误进入内存 Observation
 - **状态范围**：LinkInstances、IPsecReconcile 仅存在于本机 state file，不进入 gossip
 
 **XFRM 维护短路**：在 `maintainExistingXFRMInterfaces` 中，如果 observed 状态与期望状态已经匹配，则跳过 `EnsureInterface`/`AssignAddress` 等冗余命令，只保留诊断地址分配。这减少了 reconcile 周期中对已有接口的无意义重写。

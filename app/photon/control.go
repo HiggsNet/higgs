@@ -188,15 +188,15 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 	return &response, nil
 }
 
-func daemonStatusViaControl(rt *Runtime) (inspect.DaemonStatusView, bool, error) {
+func daemonStatusViaControl(rt *AppContext) (inspect.DaemonStatusView, bool, error) {
 	return readCanonicalViewViaControl[inspect.DaemonStatusView](rt, controlRequest{Method: "daemon_status_view"})
 }
 
-func rootPublicKeyViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
+func rootPublicKeyViaControl(rt *AppContext) (ed25519.PublicKey, bool, error) {
 	return readCanonicalViewViaControl[ed25519.PublicKey](rt, controlRequest{Method: "root_public_key"})
 }
 
-func readCanonicalViewViaControl[T any](rt *Runtime, request controlRequest) (T, bool, error) {
+func readCanonicalViewViaControl[T any](rt *AppContext, request controlRequest) (T, bool, error) {
 	var zero T
 	if rt == nil || rt.DisableControl {
 		return zero, false, nil
@@ -217,12 +217,12 @@ func readCanonicalViewViaControl[T any](rt *Runtime, request controlRequest) (T,
 	return response.View, true, nil
 }
 
-func verifyChainViaControl(rt *Runtime, path zone.ZonePath) (bool, error) {
+func verifyChainViaControl(rt *AppContext, path zone.ZonePath) (bool, error) {
 	_, online, err := readCanonicalViewViaControl[bool](rt, controlRequest{Method: "verify_chain", Zone: path.String()})
 	return online, err
 }
 
-func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
+func routingReloadViaControl(rt *AppContext) (*controlResponse, bool, error) {
 	path := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routing_reload"})
 	if err != nil && isControlSocketUnavailable(err) {
@@ -231,11 +231,11 @@ func routingReloadViaControl(rt *Runtime) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func admissionStatusViaControl(rt *Runtime) (inspect.AdmissionDiagnosis, bool, error) {
+func admissionStatusViaControl(rt *AppContext) (inspect.AdmissionDiagnosis, bool, error) {
 	return readCanonicalViewViaControl[inspect.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
 }
 
-func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) {
+func stateGCViaControl(rt *AppContext, apply bool) (*controlResponse, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return nil, false, nil
 	}
@@ -250,7 +250,7 @@ func stateGCViaControl(rt *Runtime, apply bool) (*controlResponse, bool, error) 
 	return response, true, err
 }
 
-func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspect.BirdRoutesView {
+func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspect.BirdRoutesView {
 	if d == nil || dump == nil {
 		return nil
 	}
@@ -301,7 +301,7 @@ func (d *DaemonService) birdRoutesForControl(ctx context.Context, dump *inspect.
 	return views
 }
 
-func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {
+func putRecordViaControl(rt *AppContext, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return 0, false, nil
 	}
@@ -322,7 +322,7 @@ func putRecordViaControl(rt *Runtime, path zone.ZonePath, key string, value []by
 	return response.Version, true, nil
 }
 
-func mutateIPAMViaControl(rt *Runtime, request ipamMutationRequest) (uint64, bool, error) {
+func mutateIPAMViaControl(rt *AppContext, request ipamMutationRequest) (uint64, bool, error) {
 	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "ipam_mutate", IPAM: &request})
 	if err != nil || !ok {
 		return 0, ok, err
@@ -330,7 +330,7 @@ func mutateIPAMViaControl(rt *Runtime, request ipamMutationRequest) (uint64, boo
 	return response.Version, true, nil
 }
 
-func mutateRouteViaControl(rt *Runtime, request routeMutationRequest) (uint64, bool, error) {
+func mutateRouteViaControl(rt *AppContext, request routeMutationRequest) (uint64, bool, error) {
 	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "route_mutate", Route: &request})
 	if err != nil || !ok {
 		return 0, ok, err
@@ -338,7 +338,7 @@ func mutateRouteViaControl(rt *Runtime, request routeMutationRequest) (uint64, b
 	return response.Version, true, nil
 }
 
-func mutateServiceViaControl(rt *Runtime, request serviceMutationRequest) (uint64, bool, error) {
+func mutateServiceViaControl(rt *AppContext, request serviceMutationRequest) (uint64, bool, error) {
 	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "service_mutate", Service: &request})
 	if err != nil || !ok {
 		return 0, ok, err
@@ -346,7 +346,7 @@ func mutateServiceViaControl(rt *Runtime, request serviceMutationRequest) (uint6
 	return response.Version, true, nil
 }
 
-func sendMutationControlRequest(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+func sendMutationControlRequest(rt *AppContext, request controlRequest) (*controlResponse, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return nil, false, nil
 	}
@@ -361,7 +361,7 @@ func sendMutationControlRequest(rt *Runtime, request controlRequest) (*controlRe
 	return response, true, err
 }
 
-func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
+func getRecordViaControl(rt *AppContext, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
 	record, ok, err := readCanonicalViewViaControl[*inspect.RecordDetailView](rt, controlRequest{
 		Method:  "record_get",
 		Zone:    path.String(),
@@ -377,7 +377,7 @@ func getRecordViaControl(rt *Runtime, path zone.ZonePath, key string, history in
 	return record, true, nil
 }
 
-func rotateIPsecPortViaControl(rt *Runtime) (*manualPortRotateResult, bool, error) {
+func rotateIPsecPortViaControl(rt *AppContext) (*manualPortRotateResult, bool, error) {
 	socketPath := controlSocketPath(rt.Config)
 	response, err := sendControlRequest(socketPath, controlRequest{Method: "ipsec_rotate_port"})
 	if err != nil {
@@ -392,7 +392,7 @@ func rotateIPsecPortViaControl(rt *Runtime) (*manualPortRotateResult, bool, erro
 	return response.PortRotate, true, nil
 }
 
-func issueDelegationViaControl(rt *Runtime, request *joinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
+func issueDelegationViaControl(rt *AppContext, request *joinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:      "delegate_issue",
 		JoinRequest: request,
@@ -407,7 +407,7 @@ func issueDelegationViaControl(rt *Runtime, request *joinRequest, permissions []
 	return response.JoinBundle, true, nil
 }
 
-func grantDelegationPermissionsViaControl(rt *Runtime, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
+func grantDelegationPermissionsViaControl(rt *AppContext, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:      "delegate_grant",
 		Zone:        path.String(),
@@ -419,7 +419,7 @@ func grantDelegationPermissionsViaControl(rt *Runtime, path zone.ZonePath, permi
 	return response.JoinBundle, true, nil
 }
 
-func importRecoveryZoneViaControl(rt *Runtime, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, bool, error) {
+func importRecoveryZoneViaControl(rt *AppContext, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:   "recovery_import_zone",
 		Snapshot: snapshot,
@@ -435,7 +435,7 @@ func importRecoveryZoneViaControl(rt *Runtime, snapshot *corestate.ZoneSnapshot)
 	}, response.Revocations, true, nil
 }
 
-func revokeDelegationViaControl(rt *Runtime, path zone.ZonePath, reason string) (bool, error) {
+func revokeDelegationViaControl(rt *AppContext, path zone.ZonePath, reason string) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method: "delegate_revoke",
 		Zone:   path.String(),
@@ -444,7 +444,7 @@ func revokeDelegationViaControl(rt *Runtime, path zone.ZonePath, reason string) 
 	return ok, err
 }
 
-func purgeRevokedViaControl(rt *Runtime, apply bool, target zone.ZonePath) (*purgePlan, bool, error) {
+func purgeRevokedViaControl(rt *AppContext, apply bool, target zone.ZonePath) (*purgePlan, bool, error) {
 	response, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method: "recovery_purge_revoked",
 		Zone:   target.String(),
@@ -456,7 +456,7 @@ func purgeRevokedViaControl(rt *Runtime, apply bool, target zone.ZonePath) (*pur
 	return response.PurgePlan, true, nil
 }
 
-func acceptJoinBundleViaControl(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (bool, error) {
+func acceptJoinBundleViaControl(rt *AppContext, bundle *joinBundle, key *privateKeyFile) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{
 		Method:     "join_accept",
 		JoinBundle: bundle,
@@ -465,7 +465,7 @@ func acceptJoinBundleViaControl(rt *Runtime, bundle *joinBundle, key *privateKey
 	return ok, err
 }
 
-func initRootViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
+func initRootViaControl(rt *AppContext) (ed25519.PublicKey, bool, error) {
 	// root init is an offline bootstrap operation. Probe an existing daemon only
 	// to prevent resetting state it has already loaded; a missing socket is the
 	// normal initialization case and must not require --direct.
@@ -483,7 +483,7 @@ func initRootViaControl(rt *Runtime) (ed25519.PublicKey, bool, error) {
 	return response.RootPublicKey, true, nil
 }
 
-func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlResponse, bool, error) {
+func sendAdminControlRequest(rt *AppContext, request controlRequest) (*controlResponse, bool, error) {
 	if rt != nil && rt.DisableControl {
 		return nil, false, nil
 	}
@@ -501,17 +501,17 @@ func sendAdminControlRequest(rt *Runtime, request controlRequest) (*controlRespo
 	return response, true, nil
 }
 
-func endpointACLApplyViaControl(rt *Runtime, acl endpointACL) (bool, error) {
+func endpointACLApplyViaControl(rt *AppContext, acl endpointACL) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
 	return ok, err
 }
 
-func endpointACLRemoveViaControl(rt *Runtime, name string) (bool, error) {
+func endpointACLRemoveViaControl(rt *AppContext, name string) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_remove", Key: name})
 	return ok, err
 }
 
-func endpointACLListViaControl(rt *Runtime) ([]endpointACL, bool, error) {
+func endpointACLListViaControl(rt *AppContext) ([]endpointACL, bool, error) {
 	return readCanonicalViewViaControl[[]endpointACL](rt, controlRequest{Method: "endpoint_acl_list"})
 }
 

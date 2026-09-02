@@ -166,7 +166,7 @@ func TestAdmissionStatePersistsAcrossReload(t *testing.T) {
 	config.Identity.KeyPath = keyPath
 	config.TrustedRootPublicKey = rootPub
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
-	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
+	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {

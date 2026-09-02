@@ -38,17 +38,17 @@ type testLinuxDrivers struct {
 	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
 }
 
-// newTestDaemonServiceFromOwners is the normal fixture for tests of current
+// newTestDaemonFromOwners is the normal fixture for tests of current
 // daemon behavior. New tests must construct the common and Linux owners
 // explicitly instead of passing the retired aggregate stateFile shape.
-func newTestDaemonServiceFromOwners(
-	rt *Runtime,
+func newTestDaemonFromOwners(
+	rt *AppContext,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *linuxRuntimeState,
 	config *syncConfigFile,
 	interval time.Duration,
-) *DaemonService {
+) *Daemon {
 	if verified == nil {
 		verified = &corestate.VerifiedState{}
 	}
@@ -62,7 +62,7 @@ func newTestDaemonServiceFromOwners(
 	if err != nil {
 		panic(err)
 	}
-	service := newDaemonServiceWithStore(rt, store, config, interval)
+	service := newDaemonWithStore(rt, store, config, interval)
 	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
 	if verified.Network != nil {
 		for path := range verified.Network.Zones {
@@ -95,27 +95,26 @@ func newTestDaemonServiceFromOwners(
 	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
 		panic(err)
 	}
-	service.Sync.Transport = transport
 	dryRun := &ipsec.DryRunDriver{}
 	installTestIPsecDrivers(service, dryRun, dryRun)
 	return service
 }
 
-func installTestIPsecDrivers(service *DaemonService, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
+func installTestIPsecDrivers(service *Daemon, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
 	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: ipsecDriver, xfrm: xfrmDriver})
 }
 
-func installTestFirewallDriver(service *DaemonService, firewallDriver firewall.FirewallDriver) {
+func installTestFirewallDriver(service *Daemon, firewallDriver firewall.FirewallDriver) {
 	dryRun := &ipsec.DryRunDriver{}
 	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, firewall: firewallDriver})
 }
 
-func installTestBirdDrivers(service *DaemonService, process bird.ProcessManager, clientFactory func(string, time.Duration) photonlinux.BirdClient) {
+func installTestBirdDrivers(service *Daemon, process bird.ProcessManager, clientFactory func(string, time.Duration) photonlinux.BirdClient) {
 	dryRun := &ipsec.DryRunDriver{}
 	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, birdProcess: process, birdClientFactory: clientFactory})
 }
 
-func installTestLinuxDrivers(service *DaemonService, drivers testLinuxDrivers) {
+func installTestLinuxDrivers(service *Daemon, drivers testLinuxDrivers) {
 	if service == nil {
 		return
 	}
@@ -980,7 +979,7 @@ func freeDaemonTestUDPAddr(t *testing.T) string {
 	return addr
 }
 
-func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *DaemonService, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, *linuxRuntimeState, corestate.View, *linuxRuntimeState) {
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *Daemon, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, *linuxRuntimeState, corestate.View, *linuxRuntimeState) {
 	t.Helper()
 	var commonA, commonB corestate.View
 	var runtimeA, runtimeB *linuxRuntimeState
@@ -1192,7 +1191,7 @@ func unsignedIPsecRecord(t *testing.T, peer zone.ZonePath, key, recordType strin
 	}
 }
 
-func pumpDaemonEvents(ctx context.Context, service *DaemonService) {
+func pumpDaemonEvents(ctx context.Context, service *Daemon) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1205,7 +1204,7 @@ func pumpDaemonEvents(ctx context.Context, service *DaemonService) {
 	}
 }
 
-func controlRequestViaPipe(t *testing.T, service *DaemonService, request controlRequest) controlResponse {
+func controlRequestViaPipe(t *testing.T, service *Daemon, request controlRequest) controlResponse {
 	t.Helper()
 	client, server := net.Pipe()
 	defer client.Close()
@@ -1227,7 +1226,7 @@ func controlRequestViaPipe(t *testing.T, service *DaemonService, request control
 	return response
 }
 
-func controlViewRequestViaPipe[T any](t *testing.T, service *DaemonService, request controlRequest) controlViewResponse[T] {
+func controlViewRequestViaPipe[T any](t *testing.T, service *Daemon, request controlRequest) controlViewResponse[T] {
 	t.Helper()
 	client, server := net.Pipe()
 	defer client.Close()

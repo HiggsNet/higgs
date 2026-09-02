@@ -10,16 +10,16 @@ import (
 // updateDiscoveredPeers supplies detached owner data to HostRuntime. Peer
 // selection, endpoint ordering, checkpoint patches and address-book updates
 // are common runtime responsibilities.
-func (d *DaemonService) updateDiscoveredPeers() {
-	if d == nil || d.Sync == nil || d.Sync.Config == nil || d.Sync.Transport == nil || d.StateStore == nil || d.hostRuntime == nil {
+func (d *Daemon) updateDiscoveredPeers() {
+	if d == nil || d.GossipConfig == nil || d.StateStore == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
 		return
 	}
-	if err := d.hostRuntime.RefreshGossipDiscovery(context.Background(), d.currentGossipSuppressions(), d.Sync.now(), d.Sync.Transport); err != nil {
+	if err := d.hostRuntime.RefreshGossipDiscovery(context.Background(), d.currentGossipSuppressions(), d.now(), d.hostRuntime.Transport()); err != nil {
 		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
 	}
 }
 
-func (d *DaemonService) currentGossipSuppressions() map[string]bool {
+func (d *Daemon) currentGossipSuppressions() map[string]bool {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}

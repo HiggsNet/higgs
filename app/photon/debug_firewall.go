@@ -18,14 +18,14 @@ func debugFirewall(_ context.Context, cmd *cli.Command) error {
 	if cmd.Bool("host") && cmd.String("netns") != "" {
 		return fmt.Errorf("--host and --netns cannot be used together")
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return debugFirewallWithRuntimeFiltered(rt, os.Stdout, cmd.String("netns"), cmd.Bool("host"), cmd.Bool("json"))
 }
 
-func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
+func debugFirewallWithRuntimeFiltered(rt *AppContext, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
 	view, err := firewallViewWithRuntime(rt, netns, hostOnly)
 	if err != nil {
 		return err
@@ -39,7 +39,7 @@ func debugFirewallWithRuntimeFiltered(rt *Runtime, w io.Writer, netns string, ho
 }
 
 func showFirewall(filter string, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func showFirewall(filter string, verbose bool) error {
 	return inspecttext.WriteFirewall(os.Stdout, view, filter, verbose)
 }
 
-func firewallViewWithRuntime(rt *Runtime, netns string, hostOnly bool) (inspect.FirewallDebugView, error) {
+func firewallViewWithRuntime(rt *AppContext, netns string, hostOnly bool) (inspect.FirewallDebugView, error) {
 	view, ok, err := readCanonicalViewViaControl[inspect.FirewallDebugView](rt, controlRequest{Method: "firewall_view", NetNS: netns, Host: hostOnly})
 	if err != nil {
 		return inspect.FirewallDebugView{}, err

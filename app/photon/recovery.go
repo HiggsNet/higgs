@@ -133,7 +133,7 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	if !path.Valid() {
 		return zone.ErrInvalidZonePath
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func recoveryImportZone(input string, direct bool) error {
 	if err := readBase64JSONOrJSON(input, &snapshot); err != nil {
 		return err
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -254,7 +254,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if timeout <= 0 {
 		return errors.New("recovery timeout must be positive")
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func recoveryChainZones(path zone.ZonePath) []zone.ZonePath {
 }
 
 func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -384,7 +384,7 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	return nil
 }
 
-func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *Runtime, runtime *linuxRuntimeState, plan *purgePlan) error {
+func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *AppContext, runtime *linuxRuntimeState, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}

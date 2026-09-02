@@ -48,12 +48,12 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
-	rtA := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	rtB := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rtA := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rtB := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
-	serviceA := newTestDaemonServiceFromOwners(rtA, verifiedA, nil, &linuxRuntimeState{}, configA, time.Second)
+	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, &linuxRuntimeState{}, configA, time.Second)
 	setTestGossipTransport(t, serviceA, transportA)
-	serviceB := newTestDaemonServiceFromOwners(rtB, verifiedB, nil, &linuxRuntimeState{}, configB, time.Second)
+	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &linuxRuntimeState{}, configB, time.Second)
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
 	serviceA.EnableEventLoopSync(clock)
@@ -83,7 +83,7 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 
 	for {
-		pumpEventLoopSync(ctx, []*DaemonService{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+		pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
 		a := serviceA.hostRuntime.Gossip.Session(configB.PeerID)
 		b := serviceB.hostRuntime.Gossip.Session(configA.PeerID)
 		if (a == nil || a.Done()) && (b == nil || b.Done()) {
@@ -121,8 +121,8 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 	peerID := "bootstrap.catofes."
 	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{peerID: {BackoffUntilUnix: now.Add(-time.Minute).Unix()}}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, time.Minute,
 	)
 	for {

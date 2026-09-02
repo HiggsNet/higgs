@@ -23,7 +23,7 @@ import (
 )
 
 type observerServer struct {
-	daemon   *DaemonService
+	daemon   *Daemon
 	config   observerConfig
 	provider *observerProvider
 	server   *observer.Server
@@ -31,12 +31,12 @@ type observerServer struct {
 }
 
 type observerProvider struct {
-	daemon *DaemonService
+	daemon *Daemon
 }
 
 // newObserverServer creates a new read-only HTTP observer from the daemon
 // service and observer configuration. Returns nil if observer is disabled.
-func newObserverServer(d *DaemonService, cfg observerConfig) *observerServer {
+func newObserverServer(d *Daemon, cfg observerConfig) *observerServer {
 	if !cfg.Enabled || d == nil {
 		return nil
 	}
@@ -61,11 +61,11 @@ func newObserverServer(d *DaemonService, cfg observerConfig) *observerServer {
 
 // startObserverServer starts the HTTP observer if enabled. It returns a
 // cleanup function that gracefully shuts down the server.
-func (d *DaemonService) startObserverServer(_ context.Context) (func(), error) {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return func() {}, nil
 	}
-	cfg := d.Sync.App.Config.Observer
+	cfg := d.App.Config.Observer
 	if !cfg.Enabled {
 		return func() {}, nil
 	}
@@ -100,7 +100,7 @@ func (d *DaemonService) startObserverServer(_ context.Context) (func(), error) {
 
 // notifyObserver broadcasts an SSE event to all subscribers. Safe to call
 // even when the observer is disabled (no-op if hub is nil).
-func (d *DaemonService) notifyObserver(eventType string, payload any) {
+func (d *Daemon) notifyObserver(eventType string, payload any) {
 	if d == nil || d.observerHub == nil {
 		return
 	}
@@ -119,7 +119,7 @@ func observerIDsPayload(key string, ids []string) map[string]any {
 }
 
 // observerLinkIDsPayload returns {link_ids: [...]} from Linux runtime state.
-func (d *DaemonService) observerLinkIDsPayload() any {
+func (d *Daemon) observerLinkIDsPayload() any {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
@@ -137,7 +137,7 @@ func (d *DaemonService) observerLinkIDsPayload() any {
 
 // observerPeerIDsPayload returns {peer_ids: [...]} from the common gossip
 // checkpoint.
-func (d *DaemonService) observerPeerIDsPayload() any {
+func (d *Daemon) observerPeerIDsPayload() any {
 	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return nil
 	}
@@ -157,11 +157,11 @@ func (d *DaemonService) observerPeerIDsPayload() any {
 
 // observerHealthLinkIDsPayload returns {link_ids: [...]} derived from the
 // health manager's current target snapshot.
-func (d *DaemonService) observerHealthLinkIDsPayload() any {
-	if d == nil || d.health == nil || d.Sync == nil {
+func (d *Daemon) observerHealthLinkIDsPayload() any {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return nil
 	}
-	snapshot := d.health.Snapshot(d.Sync.now())
+	snapshot := d.health.Snapshot(d.now())
 	ids := make([]string, 0, len(snapshot))
 	for _, h := range snapshot {
 		if h.InstanceID != "" {
@@ -183,10 +183,10 @@ func (p *observerProvider) Status() (any, error) {
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspect.ZonesView{Zones: []inspect.ZoneSummaryView{}}, nil
 	}
-	now := d.Sync.now()
+	now := d.now()
 	zp := zone.ZonePath(zoneFilter)
 	view := d.StateStore.common.ReadView()
 	if view.State == nil || view.State.Network == nil {
@@ -204,16 +204,16 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
 	view := d.StateStore.common.ReadView()
 	if view.State == nil {
 		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
-	now := d.Sync.now()
+	now := d.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.Sync.Config, observabilitySnapshots, now))
+	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.GossipConfig, observabilitySnapshots, now))
 	if peerFilter != "" {
 		for _, peer := range peers.Peers {
 			if peer.PeerID == peerFilter {
@@ -225,20 +225,20 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	return peers, nil
 }
 
-func (d *DaemonService) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
+func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
 	if d == nil || d.hostRuntime == nil || d.hostRuntime.Observability == nil {
 		return nil
 	}
 	now := time.Now()
-	if d.Sync != nil {
-		now = d.Sync.now()
+	if d != nil {
+		now = d.now()
 	}
 	return d.hostRuntime.Observability.Snapshots(now)
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.StateStore == nil {
+	if d == nil || d.StateStore == nil {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
 	health := d.healthStatusResponse()
@@ -258,16 +258,16 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	return inspecthttp.LinksFromInspection(view), nil
 }
 
-func observerRuntime(d *DaemonService) *Runtime {
-	if d == nil || d.Sync == nil {
+func observerRuntime(d *Daemon) *AppContext {
+	if d == nil {
 		return nil
 	}
-	return d.Sync.App
+	return d.App
 }
 
-func healthLinksWithContext(d *DaemonService, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
+func healthLinksWithContext(d *Daemon, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
 	input := inspecthttp.HealthContextInput{HealthLinks: inspectHealthLinks(links)}
-	if d == nil || d.Sync == nil || d.StateStore == nil {
+	if d == nil || d.StateStore == nil {
 		return inspecthttp.BuildHealthContext(input), nil
 	}
 	d.StateStore.mu.RLock()
@@ -362,7 +362,7 @@ func (p *observerProvider) OpenMetrics() (string, error) {
 	if config == nil || !config.Health.MetricsEnabled {
 		return "", fmt.Errorf("health metrics are not enabled")
 	}
-	if d == nil || d.health == nil {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return "", fmt.Errorf("health manager is not configured")
 	}
 	links := d.health.Snapshot(observerNow(d))
@@ -394,10 +394,10 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	if p.daemon == nil || p.daemon.healthSpool == nil {
+	if p.daemon == nil || p.daemon.health == nil || p.daemon.health.spool == nil {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
 	}
-	result, err := p.daemon.healthSpool.Query(linkID, healthspool.SeriesQuery{
+	result, err := p.daemon.health.spool.Query(linkID, healthspool.SeriesQuery{
 		Metric:    query["metric"],
 		ProbeRole: query["probe_role"],
 		Range:     rng,
@@ -411,29 +411,29 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
 	return inspecthttp.HealthSeriesResponse{
-		Datasource: p.daemon.healthSpool.Config().Datasource(),
+		Datasource: p.daemon.health.spool.Config().Datasource(),
 		LinkID:     linkID,
 		Series:     result,
 	}, nil
 }
 
-func daemonHealthDatasource(d *DaemonService) map[string]any {
-	if d == nil || d.healthSpool == nil {
+func daemonHealthDatasource(d *Daemon) map[string]any {
+	if d == nil || d.health == nil || d.health.spool == nil {
 		return healthspool.Config{}.Datasource()
 	}
-	return d.healthSpool.Config().Datasource()
+	return d.health.spool.Config().Datasource()
 }
 
-func observerAppConfig(d *DaemonService) *appConfig {
-	if d == nil || d.Sync == nil || d.Sync.App == nil {
+func observerAppConfig(d *Daemon) *appConfig {
+	if d == nil || d.App == nil {
 		return nil
 	}
-	return d.Sync.App.Config
+	return d.App.Config
 }
 
-func observerNow(d *DaemonService) time.Time {
-	if d != nil && d.Sync != nil {
-		return d.Sync.now()
+func observerNow(d *Daemon) time.Time {
+	if d != nil {
+		return d.now()
 	}
 	return time.Now()
 }
@@ -454,14 +454,14 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
 	view := d.StateStore.common.ReadView()
 	if view.State == nil || view.State.Network == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.Sync.now())
+	ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.now())
 	if err != nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
@@ -470,7 +470,7 @@ func (p *observerProvider) Routes() (any, error) {
 
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
-	if d == nil || d.Sync == nil || d.StateStore == nil {
+	if d == nil || d.StateStore == nil {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	d.StateStore.mu.RLock()

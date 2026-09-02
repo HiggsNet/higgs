@@ -58,7 +58,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}}
 	appConfig.Routing, _ = parseRoutingConfigInstances(upstreamYAML, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -76,7 +76,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
 
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		veth: fakeVM, upstreamRoutes: fakeRM, birdProcess: pm,
 		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return client },
@@ -336,13 +336,13 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 		},
 	}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
 	fakeRM := &fakeUpstreamRouteManager{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		veth: &fakeVethManager{}, upstreamRoutes: fakeRM, birdProcess: &fakeBirdProcessManager{running: false},
 		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },

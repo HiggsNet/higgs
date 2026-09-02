@@ -50,8 +50,8 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	runtime.IPsecReconcile = &ipsecReconcileState{DesiredLinks: 1}
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
 	)
 	srv := newObserverServer(service, appConfig.Observer)
 	if srv == nil {

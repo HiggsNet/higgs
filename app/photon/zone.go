@@ -12,7 +12,7 @@ import (
 )
 
 func showZones(filter string, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func writeZoneDetails(details []inspect.ZoneDetail, filter string, verbose bool)
 }
 
 func showRecords(path zone.ZonePath, filter string, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

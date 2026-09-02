@@ -18,12 +18,12 @@ import (
 
 func newPersistedIPsecPublishTestService(
 	t *testing.T,
-	rt *Runtime,
+	rt *AppContext,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *linuxRuntimeState,
 	config *syncConfigFile,
-) (*DaemonService, func()) {
+) (*Daemon, func()) {
 	t.Helper()
 	// These tests isolate IPsec protocol publication. Endpoint publication is
 	// covered separately and can legitimately add a new address family between
@@ -53,7 +53,7 @@ func newPersistedIPsecPublishTestService(
 		_ = store.Close()
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
-	service := newDaemonServiceWithStore(rt, stateStore, config, time.Second)
+	service := newDaemonWithStore(rt, stateStore, config, time.Second)
 	var once sync.Once
 	closeStore := func() {
 		once.Do(func() {
@@ -76,7 +76,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	appConfig.ListenAddr = "198.51.100.10:4500"
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -166,7 +166,7 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.Role = ipsec.RoleBoth
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -230,7 +230,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.Role = ipsec.RoleBoth
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -292,7 +292,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortRotateInterval = time.Hour
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -360,7 +360,7 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortRotateInterval = time.Hour
 	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -410,7 +410,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },
@@ -465,7 +465,7 @@ func TestDirectIPsecPortRotateRejectsFixedMode(t *testing.T) {
 	config.PeerID = string(verified.ManagedZone)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.PortMode = ipsec.PortModeFixed
-	rt := &Runtime{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return time.Unix(5000, 0) }}
+	rt := &AppContext{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return time.Unix(5000, 0) }}
 	_, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	closeStore()
 
@@ -478,7 +478,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return time.Unix(5100, 0) },
@@ -740,7 +740,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	appConfig.ListenAddr = "198.51.100.10:4500"
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
 		Clock:     func() time.Time { return now },

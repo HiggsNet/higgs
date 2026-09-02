@@ -38,8 +38,8 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {FailureCount: 1}, "leaf.node-b.catofes.": {FailureCount: 1}, "node-c.catofes.": {FailureCount: 1},
 	}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
+	service := newTestDaemonFromOwners(
+		&AppContext{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", false)

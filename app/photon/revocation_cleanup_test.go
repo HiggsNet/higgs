@@ -209,11 +209,11 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	}
 
 	appConfig := defaultAppConfig()
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	// Flush revocation cleanup.
 	service.flushRevocationCleanup()
@@ -231,10 +231,10 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 
 func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: defaultAppConfig(),
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	before := service.StateStore.Meta().Revision
 
 	service.flushRevocationCleanup()
@@ -259,8 +259,8 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 		RevokedAuthorityHash:  delegation.AuthorityHash,
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	rt := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	rt := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
 	})
@@ -291,8 +291,8 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 		RevokedAuthorityHash:  delegation.AuthorityHash,
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, time.Second,
 	)
 	b.ReportAllocs()
@@ -349,7 +349,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
@@ -365,7 +365,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	}
 
 	driver := &observedIPsecDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
 	// Create the link first.
@@ -383,7 +383,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 		Reason:                "test revoke cleanup",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
@@ -444,14 +444,14 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		XFRMTunnelPattern: "phx*",
 	}}
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
 		birdProcess:       &fakeBirdProcessManager{running: false},
@@ -490,7 +490,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
 		},
 	}
-	service = newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
 		birdProcess:       &fakeBirdProcessManager{running: false},

@@ -168,7 +168,7 @@ func configuredJoinRequest(config *appConfig) (*joinRequest, error) {
 }
 
 func writeJoinRequestFromConfig(outPath string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

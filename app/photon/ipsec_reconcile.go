@@ -18,8 +18,8 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
 	common, runtime := d.StateStore.readCommonAndRuntime()
@@ -28,11 +28,11 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	rev := uint64(common.Revision)
 	verified := common.State
-	groups := append([]ipsec.LinkGroupSpec(nil), d.Sync.App.Config.IPsec.LinkGroups...)
+	groups := append([]ipsec.LinkGroupSpec(nil), d.App.Config.IPsec.LinkGroups...)
 	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
 		return nil
 	}
-	now := d.Sync.now()
+	now := d.now()
 	dnsResolver := d.ipsecReconcileDNSResolver()
 	plan := ipsec.LinkPlan{}
 	if len(groups) > 0 {
@@ -41,7 +41,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 			Now:                 now,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, common.Gossip, now, d.Sync.App.Config.PeerLifecycle),
+			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, common.Gossip, now, d.App.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -61,7 +61,7 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	instances := linkInstancesToIPsec(runtime.LinkInstances)
-	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.Sync.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
+	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
@@ -142,13 +142,13 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 	return nil
 }
 
-func (d *DaemonService) ipsecReconcileDNSResolver() ipsec.DNSResolver {
+func (d *Daemon) ipsecReconcileDNSResolver() ipsec.DNSResolver {
 	if d != nil && d.ipsecDNSResolver != nil {
 		return d.ipsecDNSResolver
 	}
 	now := time.Now
-	if d != nil && d.Sync != nil {
-		now = d.Sync.now
+	if d != nil {
+		now = d.now
 	}
 	resolver := ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{Now: now})
 	if d != nil {
@@ -279,11 +279,11 @@ func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
 	}
 }
 
-func (d *DaemonService) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || verified == nil || verified.Network == nil {
+func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {
+	if d == nil || d.App == nil || d.App.Config == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
-	if !ipamAutoAnnounceEnabled(d.Sync.App.Config.IPAM) {
+	if !ipamAutoAnnounceEnabled(d.App.Config.IPAM) {
 		return nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
@@ -291,7 +291,7 @@ func (d *DaemonService) localIPv6DiagnosticPrefixes(verified *corestate.Verified
 		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
 		return nil
 	}
-	prefixes := autoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.Sync.App.Config.IPAM)
+	prefixes := autoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.App.Config.IPAM)
 	out := prefixes[:0]
 	for _, prefix := range prefixes {
 		if prefix.Addr().Is6() && prefix.Bits() == 64 {
@@ -301,15 +301,15 @@ func (d *DaemonService) localIPv6DiagnosticPrefixes(verified *corestate.Verified
 	return out
 }
 
-func (d *DaemonService) ipsecRotateCutoverReady() map[string]bool {
-	if d == nil || d.health == nil {
+func (d *Daemon) ipsecRotateCutoverReady() map[string]bool {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	return d.health.RotateCutoverReadiness()
 }
 
-func (d *DaemonService) ipsecRotateActivationReady() map[string]bool {
-	if d == nil || d.health == nil {
+func (d *Daemon) ipsecRotateActivationReady() map[string]bool {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	return d.health.RotateActivationReadiness()
@@ -373,7 +373,7 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 	}
 }
 
-func (d *DaemonService) commitIPsecReconcileResult(rev uint64, runtime *linuxRuntimeState, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
+func (d *Daemon) commitIPsecReconcileResult(rev uint64, runtime *linuxRuntimeState, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
 	if d == nil || d.StateStore == nil || runtime == nil {
 		return nil
 	}
@@ -449,7 +449,7 @@ func normalizeIPsecReconcileForComparison(summary *ipsecReconcileState) {
 	})
 }
 
-func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err error) {
+func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	if d == nil || d.StateStore == nil || err == nil {
 		return
 	}
@@ -497,11 +497,11 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 // map from the gossip transport's runtime reachability state. This lets the
 // IPsec planner deprioritize addresses that are currently in backoff or have
 // recent failures, matching the gossip transport's own dialing preferences.
-func (d *DaemonService) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
-	if d == nil || d.Sync == nil || d.Sync.Transport == nil || verified == nil || verified.Network == nil {
+func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
+	if d == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
-	transport := d.Sync.Transport
+	transport := d.hostRuntime.Transport()
 	ns := verified.Network
 	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
 

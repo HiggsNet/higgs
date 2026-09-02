@@ -11,7 +11,7 @@ import (
 )
 
 func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 }
 
 func debugRecords(path zone.ZonePath, prefix string, values bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

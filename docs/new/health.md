@@ -375,7 +375,7 @@ RTT 聚合规则固定为：每个 burst 记录最后一个成功回复的 RTT�
 
 ```text
 health.Manager.RotateCutoverReadiness()
-  → DaemonService.ipsecRotateCutoverReady()        # app/photon/ipsec_reconcile.go
+  → Daemon.ipsecRotateCutoverReady()               # app/photon/ipsec_reconcile.go
   → ipsec.ReconcileInputs.RotateCutoverReady       # map[instanceID]bool
   → handleRotate 中决定是否允许 cutover
 ```

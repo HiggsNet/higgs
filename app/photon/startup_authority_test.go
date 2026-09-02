@@ -21,7 +21,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	state.Network.Zones[managed.Parent()].Delegations[managed] = cloneDelegationForJoinBundle(snapshot.Delegations[managed])
 	config.DisableEndpointPublish = true
 
-	rt := &Runtime{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
+	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
 	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -46,7 +46,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 		_ = boltStore.Close()
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
-	service := newDaemonServiceWithStore(rt, stateStore, config, defaultDaemonInterval)
+	service := newDaemonWithStore(rt, stateStore, config, defaultDaemonInterval)
 	if changed, err := service.prepareStartupState(); err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	} else if !changed {

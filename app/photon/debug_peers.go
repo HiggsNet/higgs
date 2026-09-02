@@ -14,7 +14,7 @@ import (
 // status of every known peer, including state, reason, last sync, link counts
 // and cleanup timers. It prioritizes daemon committed state when available.
 func debugPeers(_ context.Context) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func debugPeers(_ context.Context) error {
 }
 
 func showPeers(filter string, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func showPeers(filter string, verbose bool) error {
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *Runtime, common corestate.View, runtime *linuxRuntimeState) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime *linuxRuntimeState) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
@@ -74,13 +74,13 @@ func buildPeerLifecycleDebugView(rt *Runtime, common corestate.View, runtime *li
 	return inspect.BuildPeerLifecycleDebug(cfg, statuses)
 }
 
-func (d *DaemonService) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.StateStore.common == nil {
+func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
+	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return nil
 	}
 	view := d.StateStore.common.ReadView()
 	if view.State == nil {
 		return nil
 	}
-	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.Sync.Config, d.peerObservabilitySnapshots(), d.Sync.now()))
+	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.GossipConfig, d.peerObservabilitySnapshots(), d.now()))
 }

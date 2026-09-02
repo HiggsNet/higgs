@@ -10,7 +10,7 @@ import (
 )
 
 func debugPeer(peerID string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

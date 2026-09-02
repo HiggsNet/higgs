@@ -13,15 +13,15 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func TestNewDaemonServiceDefaultsInterval(t *testing.T) {
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, 0,
+func TestNewDaemonDefaultsInterval(t *testing.T) {
+	service := newTestDaemonFromOwners(
+		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, 0,
 	)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
-	if service.Sync == nil {
-		t.Fatal("sync runtime is nil")
+	if service.App == nil || service.GossipConfig == nil {
+		t.Fatal("daemon app or gossip config is nil")
 	}
 }
 
@@ -36,9 +36,9 @@ func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsUsesDryRunObservation(t *te
 	}
 }
 
-func TestDaemonServiceReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+func TestDaemonReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
+	service := newTestDaemonFromOwners(
+		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
 	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
@@ -87,9 +87,9 @@ func TestDaemonServiceReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
 	}
 }
 
-func TestDaemonServiceStateChangedHook(t *testing.T) {
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{},
+func TestDaemonStateChangedHook(t *testing.T) {
+	service := newTestDaemonFromOwners(
+		&AppContext{},
 		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
 		nil,
 		&linuxRuntimeState{},
@@ -106,10 +106,10 @@ func TestDaemonServiceStateChangedHook(t *testing.T) {
 	}
 }
 
-func TestDaemonServiceStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.T) {
+func TestDaemonStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	if err := service.closeLinuxRuntime(); err != nil {
 		t.Fatalf("close Linux runtime: %v", err)
@@ -131,8 +131,8 @@ func TestDaemonServiceStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *t
 
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	service.drainingEvents = true
 	var flushed []string
@@ -152,8 +152,8 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 
 func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	beforeRevision := service.StateStore.Meta().Revision
 
@@ -198,12 +198,12 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
 	appConfig.StatePath = statePath
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: statePath,
 		Clock:     func() time.Time { return now },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
@@ -257,8 +257,8 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
 		t.Fatalf("ipsec reconcile after reload = %+v, want create", latest.IPsecReconcile)
 	}
-	if len(service.Sync.App.Config.IPsec.LinkGroups) != 1 || service.Sync.Config.PeerID != config.PeerID {
-		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.Sync.App.Config.IPsec.LinkGroups, service.Sync.Config)
+	if len(service.App.Config.IPsec.LinkGroups) != 1 || service.GossipConfig.PeerID != config.PeerID {
+		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, service.GossipConfig)
 	}
 }
 
@@ -275,12 +275,12 @@ func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("data_dir: "+otherDir+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(config): %v", err)
 	}
-	rt := &Runtime{
+	rt := &AppContext{
 		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(dataDir, "photon.db"),
 		Clock:     func() time.Time { return time.Unix(4300, 0) },
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {

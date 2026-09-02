@@ -21,8 +21,8 @@ const (
 	defaultCharonNATTPort uint16 = 4500
 )
 
-func (d *DaemonService) firewallReconcileInterval() time.Duration {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil || len(firewallInstancesEnabled(d.Sync.App.Config)) == 0 {
+func (d *Daemon) firewallReconcileInterval() time.Duration {
+	if d == nil || d.App == nil || d.App.Config == nil || len(firewallInstancesEnabled(d.App.Config)) == 0 {
 		return 0
 	}
 	return defaultFirewallReconcileInterval
@@ -39,8 +39,8 @@ func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time 
 // It computes the desired state from verified active state + local config,
 // diffs against observed owned objects, and applies the plan via the driver.
 // The default driver is DryRunDriver; real nft/iptables drivers are added later.
-func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) reconcileFirewall(ctx context.Context) error {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
 	common, runtime := d.StateStore.readCommonAndRuntime()
@@ -48,7 +48,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		return nil
 	}
 	rev := uint64(common.Revision)
-	config := d.Sync.App.Config
+	config := d.App.Config
 	instances := firewallInstancesEnabled(config)
 	if len(instances) == 0 {
 		return nil
@@ -57,7 +57,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 		return nil
 	}
 
-	now := d.Sync.now()
+	now := d.now()
 	summary := photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile)
 	if summary == nil {
 		summary = &firewallReconcileState{}
@@ -177,7 +177,7 @@ func getOrCreateFirewallEntry(state *firewallReconcileState, id string) *firewal
 	return entry
 }
 
-func (d *DaemonService) commitFirewallReconcileResult(rev uint64, endpointACLs map[string]endpointACL, summary *firewallReconcileState) error {
+func (d *Daemon) commitFirewallReconcileResult(rev uint64, endpointACLs map[string]endpointACL, summary *firewallReconcileState) error {
 	if d == nil || d.StateStore == nil || summary == nil {
 		return nil
 	}
@@ -368,7 +368,7 @@ func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZon
 }
 
 // flushFirewallReconcile runs firewall reconcile if dirty.
-func (d *DaemonService) flushFirewallReconcile(ctx context.Context) bool {
+func (d *Daemon) flushFirewallReconcile(ctx context.Context) bool {
 	flushed, err := d.flushFirewallReconcileResult(ctx)
 	if err != nil {
 		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
@@ -378,7 +378,7 @@ func (d *DaemonService) flushFirewallReconcile(ctx context.Context) bool {
 
 // flushFirewallReconcileResult is used by security-sensitive control writes
 // that must not report success before the new policy reaches the backend.
-func (d *DaemonService) flushFirewallReconcileResult(ctx context.Context) (bool, error) {
+func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error) {
 	if d == nil || !d.firewallDirty {
 		return false, nil
 	}
@@ -391,7 +391,7 @@ func (d *DaemonService) flushFirewallReconcileResult(ctx context.Context) (bool,
 }
 
 // recoverFirewallOnStart triggers an initial firewall reconcile at daemon start.
-func (d *DaemonService) recoverFirewallOnStart(ctx context.Context) {
+func (d *Daemon) recoverFirewallOnStart(ctx context.Context) {
 	if d == nil {
 		return
 	}

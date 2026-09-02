@@ -201,7 +201,7 @@ func cmdIPAM() *cli.Command {
 }
 
 func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath
 	return createIPAMPoolWithRuntime(rt, path, prefix, delegatedTo)
 }
 
-func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, delegatedTo zone.ZonePath) error {
+func createIPAMPoolWithRuntime(rt *AppContext, path zone.ZonePath, prefix string, delegatedTo zone.ZonePath) error {
 	return submitIPAMMutation(rt, ipamMutationRequest{
 		Operation: ipamOperationPoolCreate,
 		Zone:      path, Prefix: prefix, Target: delegatedTo,
@@ -217,7 +217,7 @@ func createIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, d
 }
 
 func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, sha
 	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, tag)
 }
 
-func assignIPAMWithRuntimeTag(rt *Runtime, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string) error {
+func assignIPAMWithRuntimeTag(rt *AppContext, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string) error {
 	return submitIPAMMutation(rt, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      path, Prefix: prefix, Target: assignedTo, Shared: shared, Tag: tag,
@@ -233,7 +233,7 @@ func assignIPAMWithRuntimeTag(rt *Runtime, path zone.ZonePath, prefix string, as
 }
 
 func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
 	return revokeIPAMPoolWithRuntime(rt, path, prefix)
 }
 
-func revokeIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) error {
+func revokeIPAMPoolWithRuntime(rt *AppContext, path zone.ZonePath, prefix string) error {
 	return submitIPAMMutation(rt, ipamMutationRequest{
 		Operation: ipamOperationPoolRevoke,
 		Zone:      path, Prefix: prefix,
@@ -249,7 +249,7 @@ func revokeIPAMPoolWithRuntime(rt *Runtime, path zone.ZonePath, prefix string) e
 }
 
 func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -257,14 +257,14 @@ func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.Z
 	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, assignedTo)
 }
 
-func revokeIPAMAssignmentWithRuntimeTo(rt *Runtime, path zone.ZonePath, prefix string, target zone.ZonePath) error {
+func revokeIPAMAssignmentWithRuntimeTo(rt *AppContext, path zone.ZonePath, prefix string, target zone.ZonePath) error {
 	return submitIPAMMutation(rt, ipamMutationRequest{
 		Operation: ipamOperationAssignmentRevoke,
 		Zone:      path, Prefix: prefix, Target: target,
 	}, "revoked")
 }
 
-func submitIPAMMutation(rt *Runtime, request ipamMutationRequest, operation string) error {
+func submitIPAMMutation(rt *AppContext, request ipamMutationRequest, operation string) error {
 	if version, ok, err := mutateIPAMViaControl(rt, request); ok {
 		if err != nil {
 			return err
@@ -288,18 +288,18 @@ func submitIPAMMutation(rt *Runtime, request ipamMutationRequest, operation stri
 }
 
 func listIPAMAssignments(filterZone zone.ZonePath) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return listIPAMAssignmentsWithRuntime(rt, filterZone)
 }
 
-func listIPAMAssignmentsWithRuntime(rt *Runtime, filterZone zone.ZonePath) error {
+func listIPAMAssignmentsWithRuntime(rt *AppContext, filterZone zone.ZonePath) error {
 	return listIPAMAssignmentsWithRuntimeTo(os.Stdout, rt, filterZone)
 }
 
-func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *Runtime, filterZone zone.ZonePath) error {
+func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *AppContext, filterZone zone.ZonePath) error {
 	if rows, ok, err := readCanonicalViewViaControl[[]inspect.IPAMAssignmentRow](rt, controlRequest{Method: "ipam_assignments_view", Zone: filterZone.String()}); err != nil {
 		return err
 	} else if ok {
@@ -380,14 +380,14 @@ func writeIPAMAssignments(w io.Writer, rows []inspect.IPAMAssignmentRow) error {
 }
 
 func showLocalIPAM(jsonOut bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return showLocalIPAMWithRuntime(rt, jsonOut)
 }
 
-func showLocalIPAMWithRuntime(rt *Runtime, jsonOut bool) error {
+func showLocalIPAMWithRuntime(rt *AppContext, jsonOut bool) error {
 	report, err := buildIPAMMineReport(rt)
 	if err != nil {
 		return err
@@ -436,7 +436,7 @@ func writeIPAMMineReport(w io.Writer, report *inspect.IPAMMineReport) error {
 	return table.Flush()
 }
 
-func buildIPAMMineReport(rt *Runtime) (*inspect.IPAMMineReport, error) {
+func buildIPAMMineReport(rt *AppContext) (*inspect.IPAMMineReport, error) {
 	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMMineReport](rt, controlRequest{Method: "ipam_mine_view"}); err != nil {
 		return nil, err
 	} else if ok {
@@ -526,7 +526,7 @@ func localIPAMPoolRelation(entry *routing.PoolEntry, managed zone.ZonePath) []st
 }
 
 func getIPAM(query string, jsonOut bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -545,7 +545,7 @@ func getIPAM(query string, jsonOut bool) error {
 	return writeIPAMGetReport(os.Stdout, report)
 }
 
-func buildIPAMGetReport(rt *Runtime, query string) (*inspect.IPAMGetReport, error) {
+func buildIPAMGetReport(rt *AppContext, query string) (*inspect.IPAMGetReport, error) {
 	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMGetReport](rt, controlRequest{Method: "ipam_get_view", ValueText: query}); err != nil {
 		return nil, err
 	} else if ok {

@@ -22,7 +22,7 @@ const (
 )
 
 func applyEndpointACL(name, destination, scope, protocol string, port uint16, selectors []string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -40,7 +40,7 @@ func applyEndpointACL(name, destination, scope, protocol string, port uint16, se
 }
 
 func removeEndpointACL(name string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func removeEndpointACL(name string) error {
 }
 
 func listEndpointACLs() error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func canonicalEndpointPrefixes(prefixes []netip.Prefix) []netip.Prefix {
 	return out
 }
 
-func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
+func (d *Daemon) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
 	validated, err := validateEndpointACL(acl)
 	if err != nil {
 		return false, err
@@ -202,7 +202,7 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, erro
 	if current, ok := runtime.EndpointACLs[validated.Name]; ok && endpointACLEqual(current, validated) {
 		return false, nil
 	}
-	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, d.Sync.now())
+	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, d.now())
 	if err != nil {
 		return false, fmt.Errorf("build route authorization: %w", err)
 	}
@@ -227,7 +227,7 @@ func (d *DaemonService) handleEndpointACLApplyEvent(acl endpointACL) (bool, erro
 	return true, nil
 }
 
-func (d *DaemonService) handleEndpointACLRemoveEvent(name string) (bool, error) {
+func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	name, err := photonservice.NormalizeID(name)
 	if err != nil {
 		return false, err
@@ -255,7 +255,7 @@ func endpointACLEqual(left, right endpointACL) bool {
 		slices.Equal(left.Selectors, right.Selectors)
 }
 
-func (d *DaemonService) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL, reconcile *firewallReconcileState) error {
+func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL, reconcile *firewallReconcileState) error {
 	if d == nil || d.StateStore == nil {
 		return errors.New("daemon service is not initialized")
 	}
@@ -264,18 +264,18 @@ func (d *DaemonService) commitEndpointACLMutation(rev uint64, acls map[string]en
 	} else if !committed {
 		return errDaemonStateRevisionStale
 	}
-	if d.Sync != nil && d.Sync.Transport != nil {
+	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
 	return nil
 }
 
-func (d *DaemonService) hasEnforcingHostFirewall() bool {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) hasEnforcingHostFirewall() bool {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return false
 	}
-	for _, instance := range firewallInstancesEnabled(d.Sync.App.Config) {
+	for _, instance := range firewallInstancesEnabled(d.App.Config) {
 		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
 			backend, _, err := d.linuxRuntime.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,

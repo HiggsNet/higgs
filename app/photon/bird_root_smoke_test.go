@@ -69,13 +69,13 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
 	// Use real process manager and birdc client.
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -175,12 +175,12 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
-	service1 := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	service1 := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager1 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service1, processManager1, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -211,7 +211,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	}
 
 	common, restartedRuntime := service1.StateStore.readCommonAndRuntime()
-	service2 := newTestDaemonServiceFromOwners(rt, common.State, common.Gossip, restartedRuntime, syncConfig, time.Second)
+	service2 := newTestDaemonFromOwners(rt, common.State, common.Gossip, restartedRuntime, syncConfig, time.Second)
 	processManager2 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service2, processManager2, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}
@@ -361,10 +361,9 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newDaemonStateStore: %v", err)
 	}
-	service := &DaemonService{
-		health:     manager,
+	service := &Daemon{
+		health:     &healthDriver{Manager: manager},
 		StateStore: stateStore,
-		Sync:       &SyncRuntime{},
 	}
 	_, runtime := service.StateStore.readCommonAndRuntime()
 	service.recordBirdHealthObservationUnavailableForLinks(runtime.LinkInstances, runtime.IPsecReconcile, nsA, []string{"main"})
@@ -570,13 +569,13 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return time.Unix(123, 0) },
 	}
 
 	// Use real process manager.
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service, processManager, func(socketPath string, timeout time.Duration) birdClient {
 		return &realBirdClient{socketPath: socketPath, timeout: timeout}

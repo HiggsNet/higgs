@@ -12,7 +12,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func applyOfflineCommonIntent(rt *Runtime, intent corestate.LocalIntent, dryRun bool) (corestate.LocalIntentResult, error) {
+func applyOfflineCommonIntent(rt *AppContext, intent corestate.LocalIntent, dryRun bool) (corestate.LocalIntentResult, error) {
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return corestate.LocalIntentResult{}, err
@@ -30,7 +30,7 @@ func applyOfflineCommonIntent(rt *Runtime, intent corestate.LocalIntent, dryRun 
 // of the two persisted owners. This is only the fallback for an unavailable
 // daemon or an explicit direct operation; online readers use command-oriented
 // control views and never contend for the daemon's Bolt handle.
-func loadOfflineOwnerViews(rt *Runtime) (corestate.View, *linuxRuntimeState, error) {
+func loadOfflineOwnerViews(rt *AppContext) (corestate.View, *linuxRuntimeState, error) {
 	boltStore, startup, err := openLinuxDaemonState(rt)
 	if err != nil {
 		return corestate.View{}, nil, err
@@ -71,7 +71,7 @@ type linuxStartupState struct {
 	Migrated        bool
 }
 
-func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState, error) {
+func openLinuxDaemonState(rt *AppContext) (*corestate.BoltStore, linuxStartupState, error) {
 	var startup linuxStartupState
 	if rt == nil || rt.Config == nil || rt.StatePath == "" {
 		return nil, startup, errors.New("daemon runtime state path is not configured")

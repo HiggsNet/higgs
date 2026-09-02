@@ -12,7 +12,6 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/urfave/cli/v3"
@@ -26,6 +25,15 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 		return nil
 	}
 	return health.NewManager(cfg.probeConfig(), cfg.hysteresisConfig(), prober)
+}
+
+// healthDriver is the optional daemon-owned health subsystem. Platforms that
+// do not want background health probing do not install one.
+type healthDriver struct {
+	*health.Manager
+	spool          *healthspool.Store
+	runtimeManaged bool
+	asyncRunning   bool
 }
 
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel
@@ -52,11 +60,11 @@ func scopedNetNS(s string) string {
 // reconcileHealth updates the health manager with the current link targets.
 // In a running daemon, the independent health scheduler picks up due probes;
 // the synchronous fallback supports one-shot callers and tests.
-func (d *DaemonService) reconcileHealth(ctx context.Context) int {
-	if d == nil || d.health == nil {
+func (d *Daemon) reconcileHealth(ctx context.Context) int {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return 0
 	}
-	if d.Sync == nil {
+	if d == nil {
 		return 0
 	}
 	d.StateStore.writeMu.Lock()
@@ -69,7 +77,7 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 	targets := linkstate.HealthTargets(buildLinkOutputs(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile), localZone)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
-	now := d.Sync.now()
+	now := d.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)
 }
@@ -77,11 +85,11 @@ func (d *DaemonService) reconcileHealth(ctx context.Context) int {
 // tickHealth runs due probes without rebuilding the target set. Keeping this
 // separate from reconcileHealth lets the daemon honor health.interval even
 // when IPsec reconciliation is infrequent.
-func (d *DaemonService) tickHealth(ctx context.Context, now time.Time) int {
-	if d == nil || d.health == nil {
+func (d *Daemon) tickHealth(ctx context.Context, now time.Time) int {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return 0
 	}
-	if d.healthAsyncRunning {
+	if d.health.asyncRunning {
 		return 0
 	}
 	dispatched := d.health.Tick(ctx, now)
@@ -91,36 +99,14 @@ func (d *DaemonService) tickHealth(ctx context.Context, now time.Time) int {
 	return dispatched
 }
 
-// forwardHealthCompletions puts asynchronous probe wakeups on HostRuntime's
-// bounded queue. The health manager remains the result owner; the event only
-// tells the single-writer loop to persist and publish its latest snapshot.
-func (d *DaemonService) forwardHealthCompletions(ctx context.Context, updates <-chan struct{}) {
-	if d == nil || d.hostRuntime == nil || updates == nil {
+func (d *Daemon) handleHealthUpdate(now time.Time) {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return
 	}
-	completion := corehost.Completion{
-		Namespace: daemonRuntimeNamespace,
-		Owner:     daemonCompletionHealthOwner,
-		Key:       daemonCompletionHealth,
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-updates:
-			if err := d.hostRuntime.PostCompletion(ctx, completion); err != nil {
-				return
-			}
+	if d.health.spool != nil {
+		if err := d.health.spool.Append(now, healthSpoolSamples(d.healthStatusResponse())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
+			d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 		}
-	}
-}
-
-func (d *DaemonService) handleHealthUpdate(now time.Time) {
-	if d == nil || d.health == nil {
-		return
-	}
-	if err := d.healthSpool.Append(now, healthSpoolSamples(d.healthStatusResponse())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
-		d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 	}
 	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 }
@@ -147,11 +133,11 @@ func healthSpoolSamples(links []healthLinkJSON) []healthspool.Sample {
 }
 
 // healthStatusResponse builds the control API response for `health_status`.
-func (d *DaemonService) healthStatusResponse() []healthLinkJSON {
-	if d == nil || d.health == nil {
+func (d *Daemon) healthStatusResponse() []healthLinkJSON {
+	if d == nil || d.health == nil || d.health.Manager == nil {
 		return nil
 	}
-	now := d.Sync.now()
+	now := d.now()
 	snapshot := d.health.Snapshot(now)
 	out := make([]healthLinkJSON, 0, len(snapshot))
 	for _, h := range snapshot {
@@ -188,7 +174,7 @@ func showHealth(sortBy string, verbose bool) error {
 	if sortBy != inspect.HealthSortPeer && sortBy != inspect.HealthSortRTT {
 		return cli.Exit("--sort must be peer or rtt", 1)
 	}
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

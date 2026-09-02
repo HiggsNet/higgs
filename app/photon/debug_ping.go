@@ -18,7 +18,7 @@ import (
 // (current SA, plus old and new SA during a rotate) across IPv4/IPv6. It runs
 // the pings directly in the CLI process via the health ICMP prober.
 func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Options) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

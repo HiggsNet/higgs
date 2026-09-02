@@ -14,7 +14,7 @@ import (
 // configured-but-revoked peers, IPAM prefixes and per-layer cleanup status)
 // for all currently-revoked zones, or for a single zone if specified.
 func debugRevokeImpact(_ context.Context, zoneArg string) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

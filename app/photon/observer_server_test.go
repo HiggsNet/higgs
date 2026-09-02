@@ -14,10 +14,8 @@ import (
 )
 
 func TestObserverStartObserverServerDisabled(t *testing.T) {
-	d := &DaemonService{
-		Sync: &SyncRuntime{
-			App: &Runtime{Config: &appConfig{Observer: observerConfig{Enabled: false}}},
-		},
+	d := &Daemon{
+		App: &AppContext{Config: &appConfig{Observer: observerConfig{Enabled: false}}},
 	}
 	stop, err := d.startObserverServer(context.TODO())
 	if err != nil {
@@ -33,16 +31,14 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
-	d := &DaemonService{
-		StateStore: newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
-		Sync: &SyncRuntime{
-			Config: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
-			App: &Runtime{Config: &appConfig{Observer: observerConfig{
-				Enabled:  true,
-				BindAddr: "127.0.0.1",
-				Port:     port,
-			}}},
-		},
+	d := &Daemon{
+		StateStore:   newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
+		GossipConfig: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
+		App: &AppContext{Config: &appConfig{Observer: observerConfig{
+			Enabled:  true,
+			BindAddr: "127.0.0.1",
+			Port:     port,
+		}}},
 	}
 	stop, err := d.startObserverServer(context.Background())
 	if err != nil {
@@ -79,7 +75,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 }
 
 func TestObserverNotifyObserverNoHub(t *testing.T) {
-	d := &DaemonService{}
+	d := &Daemon{}
 	// Should not panic when observerHub is nil
 	d.notifyObserver("test", nil)
 }

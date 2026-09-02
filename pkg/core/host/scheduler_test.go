@@ -268,35 +268,3 @@ func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 		t.Fatalf("timer event = %#v", event)
 	}
 }
-
-func TestRuntimePostCompletionUsesCommonQueue(t *testing.T) {
-	runtime := NewRuntime(NewClock(nil), 1, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
-	want := Completion{Namespace: "controller", Owner: "health", Key: "probe_completed"}
-	if err := runtime.PostCompletion(t.Context(), want); err != nil {
-		t.Fatalf("PostCompletion: %v", err)
-	}
-	select {
-	case got := <-runtime.Events():
-		if got != want {
-			t.Fatalf("completion = %#v, want %#v", got, want)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("completion was not queued")
-	}
-}
-
-func TestRuntimeSchedulesControllerTimerInSharedQueue(t *testing.T) {
-	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 1, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
-	id := TimerID{Namespace: "controller", Owner: "daemon", Key: "routing"}
-	if _, err := runtime.ScheduleTimer(id, clock.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	clock.Advance(time.Second)
-	fired := receiveTimer(t, runtime.Events())
-	if fired.ID != id || !runtime.AcceptTimer(fired) || runtime.AcceptTimer(fired) {
-		t.Fatalf("controller timer acceptance = %#v", fired)
-	}
-}

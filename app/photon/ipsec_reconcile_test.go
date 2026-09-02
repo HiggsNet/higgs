@@ -94,11 +94,11 @@ func TestDaemonIPsecRotateCutoverReadyUsesHealthManager(t *testing.T) {
 		ProbeRole:       "staged",
 	}}, now)
 
-	got := (&DaemonService{health: manager}).ipsecRotateCutoverReady()
+	got := (&Daemon{health: &healthDriver{Manager: manager}}).ipsecRotateCutoverReady()
 	if ready, ok := got["link-1"]; !ok || ready {
 		t.Fatalf("cutover readiness = %#v, want link-1=false while staged health is unknown", got)
 	}
-	if got := (&DaemonService{}).ipsecRotateCutoverReady(); got != nil {
+	if got := (&Daemon{}).ipsecRotateCutoverReady(); got != nil {
 		t.Fatalf("nil health readiness = %#v, want nil", got)
 	}
 }

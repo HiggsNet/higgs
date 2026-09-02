@@ -379,17 +379,17 @@ func TestRouteUsesSharedAssignment(t *testing.T) {
 	}
 }
 
-func buildRouteTestRuntime(t *testing.T) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntime(t *testing.T) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	return buildRouteTestRuntimeWithNetwork(t, true, nil)
 }
 
-func buildRouteTestRuntimeWithoutWriteCapability(t *testing.T) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntimeWithoutWriteCapability(t *testing.T) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	return buildRouteTestRuntimeWithNetwork(t, false, nil)
 }
 
-func buildRouteTestRuntimeWithNetwork(t *testing.T, writeCap bool, mutate func(*zone.NetworkState)) (*Runtime, zone.ZonePath) {
+func buildRouteTestRuntimeWithNetwork(t *testing.T, writeCap bool, mutate func(*zone.NetworkState)) (*AppContext, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -484,7 +484,7 @@ func buildRouteTestRuntimeWithNetwork(t *testing.T, writeCap bool, mutate func(*
 	config := defaultAppConfig()
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
-	rt := &Runtime{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
+	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
 	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
 		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
 	}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})

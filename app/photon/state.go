@@ -108,14 +108,14 @@ type syncConfigPeer struct {
 	Addr string `json:"addr" yaml:"addr"`
 }
 
-type Runtime struct {
+type AppContext struct {
 	Config         *appConfig
 	StatePath      string
 	Clock          func() time.Time
 	DisableControl bool
 }
 
-func NewRuntime() (*Runtime, error) {
+func NewAppContext() (*AppContext, error) {
 	config, err := loadAppConfig()
 	if err != nil {
 		return nil, err
@@ -124,14 +124,14 @@ func NewRuntime() (*Runtime, error) {
 	if override := statePathOverride(); override != "" {
 		path = override
 	}
-	return &Runtime{
+	return &AppContext{
 		Config:    config,
 		StatePath: path,
 		Clock:     time.Now,
 	}, nil
 }
 
-func (rt *Runtime) Now() time.Time {
+func (rt *AppContext) Now() time.Time {
 	if rt != nil && rt.Clock != nil {
 		return rt.Clock()
 	}

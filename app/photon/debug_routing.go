@@ -17,7 +17,7 @@ import (
 )
 
 func debugBabel(_ context.Context, _ *cli.Command) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -25,14 +25,14 @@ func debugBabel(_ context.Context, _ *cli.Command) error {
 }
 
 func debugRoutingReload(_ context.Context, _ *cli.Command) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return debugRoutingReloadWithRuntime(rt, os.Stdout)
 }
 
-func debugRoutingReloadWithRuntime(rt *Runtime, w io.Writer) error {
+func debugRoutingReloadWithRuntime(rt *AppContext, w io.Writer) error {
 	response, ok, err := routingReloadViaControl(rt)
 	if err != nil {
 		return err
@@ -58,14 +58,14 @@ const (
 )
 
 func debugBird(_ context.Context, netnsName string, view birdDebugView) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return debugBirdWithRuntime(rt, netnsName, view, os.Stdout)
 }
 
-func debugBirdWithRuntime(rt *Runtime, netnsName string, view birdDebugView, w io.Writer) error {
+func debugBirdWithRuntime(rt *AppContext, netnsName string, view birdDebugView, w io.Writer) error {
 	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](rt, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)})
 	if err != nil {
 		return err
@@ -287,7 +287,7 @@ func writeDebugBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 	return inspecttext.WriteBirdDump(w, dump)
 }
 
-func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
+func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
 	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](rt, controlRequest{Method: "babel_view"})
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func debugBabelWithRuntime(rt *Runtime, w io.Writer) error {
 	return fmt.Errorf("daemon control socket unavailable; BIRD runtime state requires a running daemon")
 }
 
-func buildBabelDebugView(rt *Runtime, instances map[string]*BirdInstanceState, lastRoutingError string) inspect.BabelDebugView {
+func buildBabelDebugView(rt *AppContext, instances map[string]*BirdInstanceState, lastRoutingError string) inspect.BabelDebugView {
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
@@ -322,14 +322,14 @@ func buildBabelDebugView(rt *Runtime, instances map[string]*BirdInstanceState, l
 }
 
 func debugRoutes(_ context.Context, _ *cli.Command) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return debugRoutesWithRuntime(rt, os.Stdout)
 }
 
-func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
+func debugRoutesWithRuntime(rt *AppContext, w io.Writer) error {
 	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
 	if err != nil {
 		return err
@@ -356,14 +356,14 @@ func debugRoutesWithRuntime(rt *Runtime, w io.Writer) error {
 }
 
 func debugRoute(_ context.Context, cmd *cli.Command) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
 	return debugRouteWithRuntime(rt, cmd.Args().First(), os.Stdout)
 }
 
-func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
+func debugRouteWithRuntime(rt *AppContext, prefixArg string, w io.Writer) error {
 	canonical, err := routing.CanonicalizePrefix(prefixArg)
 	if err != nil {
 		return fmt.Errorf("invalid prefix %q: %w", prefixArg, err)
@@ -399,7 +399,7 @@ func debugRouteWithRuntime(rt *Runtime, prefixArg string, w io.Writer) error {
 
 // routingNetnsForOverlay returns the netns name for a given overlay group ID.
 // Used by debug links routing state lookup.
-func routingNetnsForOverlay(rt *Runtime, overlayID string) string {
+func routingNetnsForOverlay(rt *AppContext, overlayID string) string {
 	if rt == nil || rt.Config == nil {
 		return ""
 	}

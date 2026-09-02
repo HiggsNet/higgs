@@ -138,15 +138,15 @@ func applyPeerLifecycleCleanup(network *zone.NetworkState, peers map[string]core
 	return removed, changed
 }
 
-func (d *DaemonService) flushPeerLifecycleCleanup() bool {
-	if d == nil || d.StateStore == nil || d.Sync == nil {
+func (d *Daemon) flushPeerLifecycleCleanup() bool {
+	if d == nil || d.StateStore == nil || d.GossipConfig == nil {
 		return false
 	}
 	cfg := inspect.PeerLifecycleConfig{}
-	if d.Sync.App != nil && d.Sync.App.Config != nil {
-		cfg = d.Sync.App.Config.PeerLifecycle
+	if d.App != nil && d.App.Config != nil {
+		cfg = d.App.Config.PeerLifecycle
 	}
-	now := d.Sync.now()
+	now := d.now()
 	d.StateStore.writeMu.Lock()
 	view := d.StateStore.common.ReadView()
 	d.StateStore.mu.RLock()
@@ -178,7 +178,9 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 		return false
 	}
 	for _, peerID := range removed {
-		d.hostRuntime.Observability.Delete(peerID)
+		if d.hostRuntime != nil && d.hostRuntime.Observability != nil {
+			d.hostRuntime.Observability.Delete(peerID)
+		}
 	}
 	d.logInfo("peer_lifecycle", "cleanup_applied", map[string]any{"peers": removed})
 	return true

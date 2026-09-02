@@ -23,7 +23,7 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 
 func TestObserverLinkIDsPayload(t *testing.T) {
 	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-b": {}, "link-a": {}}}
-	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, nil, runtime)}
+	d := &Daemon{StateStore: newTestDaemonStateStore(nil, nil, runtime)}
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerLinkIDsPayload should return a map payload")
@@ -35,7 +35,7 @@ func TestObserverLinkIDsPayload(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayloadEmptyState(t *testing.T) {
-	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, nil, nil)}
+	d := &Daemon{StateStore: newTestDaemonStateStore(nil, nil, nil)}
 	if got := d.observerLinkIDsPayload(); got != nil {
 		t.Errorf("payload = %v, want nil with no link instances", got)
 	}
@@ -46,7 +46,7 @@ func TestObserverPeerIDsPayload(t *testing.T) {
 		"peer-b": {LastSyncUnix: 1},
 		"peer-a": {LastSyncUnix: 1},
 	}}
-	d := &DaemonService{StateStore: newTestDaemonStateStore(nil, checkpoint, nil)}
+	d := &Daemon{StateStore: newTestDaemonStateStore(nil, checkpoint, nil)}
 	payload, ok := d.observerPeerIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerPeerIDsPayload should return a map payload")
@@ -58,7 +58,7 @@ func TestObserverPeerIDsPayload(t *testing.T) {
 }
 
 func TestObserverHealthLinkIDsPayloadWithoutManager(t *testing.T) {
-	d := &DaemonService{}
+	d := &Daemon{}
 	if got := d.observerHealthLinkIDsPayload(); got != nil {
 		t.Errorf("payload = %v, want nil without health manager", got)
 	}
@@ -68,7 +68,7 @@ func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
 	hub := observer.NewHub()
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
-	d := &DaemonService{observerHub: hub}
+	d := &Daemon{observerHub: hub}
 	d.notifyObserver("link_updated", map[string]any{"link_ids": []string{"link-a"}})
 	select {
 	case received := <-ch:
@@ -97,7 +97,7 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 		"peer-a": {LastSyncUnix: 1},
 	}}
 	hub := observer.NewHub()
-	d := &DaemonService{
+	d := &Daemon{
 		StateStore:  newTestDaemonStateStore(nil, checkpoint, runtime),
 		observerHub: hub,
 		// Sync and Linux runtime are nil: common peer notifications remain,

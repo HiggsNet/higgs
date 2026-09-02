@@ -14,9 +14,9 @@ func TestRuntimeStatePathOverride(t *testing.T) {
 	t.Setenv("PHOTON_CONFIG", configPath)
 	t.Setenv("PHOTON_STATE", overridePath)
 
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
+		t.Fatalf("NewAppContext: %v", err)
 	}
 	if rt.StatePath != overridePath {
 		t.Fatalf("StatePath = %q, want override %q", rt.StatePath, overridePath)
@@ -36,9 +36,9 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	})
 	t.Setenv("PHOTON_CONFIG", configPath)
 
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
+		t.Fatalf("NewAppContext: %v", err)
 	}
 	verified, _, _, _ := buildTestDaemonOwners(t)
 	config := syncConfigFromAppConfig(rt.Config, verified)

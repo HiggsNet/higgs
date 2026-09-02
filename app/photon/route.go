@@ -26,7 +26,7 @@ type routeMutationRequest struct {
 }
 
 func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -35,7 +35,7 @@ func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
 }
 
 func withdrawRoute(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func withdrawRoute(path zone.ZonePath, prefix string, direct bool) error {
 }
 
 func showRoutes(filter string, includeAll bool, verbose bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func showRoutes(filter string, includeAll bool, verbose bool) error {
 	return printRouteShowReport(os.Stdout, report, includeAll, filter, verbose)
 }
 
-func mutateRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, active bool) error {
+func mutateRouteWithRuntime(rt *AppContext, path zone.ZonePath, prefix string, active bool) error {
 	request := routeMutationRequest{Zone: path, Prefix: prefix, Active: active}
 	if version, ok, err := mutateRouteViaControl(rt, request); ok {
 		if err != nil {
@@ -75,7 +75,7 @@ func mutateRouteWithRuntime(rt *Runtime, path zone.ZonePath, prefix string, acti
 	return nil
 }
 
-func buildRouteShowReport(rt *Runtime, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {
+func buildRouteShowReport(rt *AppContext, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {
 	if report, ok, err := readCanonicalViewViaControl[inspect.RouteShowReport](rt, controlRequest{Method: "route_view", Zone: filterZone.String(), IncludeAll: includeAll}); err != nil {
 		return nil, err
 	} else if ok {

@@ -25,14 +25,14 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -122,14 +122,14 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: true}
 	client := &fakeBirdClient{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -166,14 +166,14 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -215,7 +215,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
@@ -224,7 +224,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		startedCh: make(chan struct{}),
 		unblock:   make(chan struct{}),
 	}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -297,13 +297,13 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
 	client := &fakeBirdClient{}
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		return client
 	})
@@ -336,12 +336,12 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 
-	rt := &Runtime{
+	rt := &AppContext{
 		Config: appConfig,
 		Clock:  func() time.Time { return now },
 	}
 
-	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
@@ -357,8 +357,8 @@ func TestRoutingReconcileInterval(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
 		t.Fatalf("routingReconcileInterval = %s, want 30s", got)
@@ -370,8 +370,8 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	appConfig.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)

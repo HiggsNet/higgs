@@ -71,7 +71,7 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 }
 
 func issueDelegation(requestInput string, outPath string, permissions []zone.Permission, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	return nil
 }
 
-func issueDelegationDirect(rt *Runtime, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
 }
 
 func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
 	return nil
 }
 
-func revokeDelegationDirect(rt *Runtime, path zone.ZonePath, reason string) error {
+func revokeDelegationDirect(rt *AppContext, path zone.ZonePath, reason string) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid revoke zone: %s", path)
 	}
@@ -221,7 +221,7 @@ func revokeDelegationDirect(rt *Runtime, path zone.ZonePath, reason string) erro
 }
 
 func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 	return nil
 }
 
-func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
+func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
 	if rt == nil || rt.Config == nil || rt.StatePath == "" {
 		return nil, errors.New("runtime state path is not configured")
 	}
@@ -323,7 +323,7 @@ func acceptJoinBundleInState(rt *Runtime, bundle *joinBundle, key *privateKeyFil
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-func optionalJoinAcceptKey(_ *Runtime, keyPath string) (*privateKeyFile, error) {
+func optionalJoinAcceptKey(_ *AppContext, keyPath string) (*privateKeyFile, error) {
 	if keyPath != "" {
 		return readPrivateKeyFile(keyPath)
 	}

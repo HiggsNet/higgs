@@ -21,7 +21,7 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	parent := managed.Parent()
 	removeIPAMPoolForTest(committed.State.Network, parent, "10.0.0.0/16")
 
-	service := newTestDaemonServiceFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -66,7 +66,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 	removeIPAMPoolForTest(olderDisk.State.Network, managed.Parent(), "10.0.0.0/16")
 	replacePersistedCommonForTest(t, rt, olderDisk.State)
 
-	service := newTestDaemonServiceFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -115,7 +115,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	}
 	replacePersistedCommonForTest(t, rt, activeDisk)
 
-	service := newTestDaemonServiceFromOwners(rt, state, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, state), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:  daemonEventRouteMutation,
@@ -139,7 +139,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	}
 }
 
-func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
+func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 	committed, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestDaemonServiceMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing
 	}
 	replacePersistedCommonForTest(t, rt, disk)
 
-	service := newTestDaemonServiceFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventServiceMutation,
@@ -186,7 +186,7 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonServiceFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -223,7 +223,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
 	}
 	_, directErr := applyAuthoritativeVerifiedTestIntent(view.State, commonIPAMIntentForTest(t, request), rt.Now())
-	service := newTestDaemonServiceFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
 	if directErr == nil || result.Error == nil {
 		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
@@ -269,7 +269,7 @@ func applyAuthoritativeTestIntentAs(state *corestate.VerifiedState, managedZone 
 // differ from a daemon's in-memory common owner. These tests exercise that
 // conflict boundary, so write the current common schema instead of reviving
 // the legacy aggregate buckets.
-func replacePersistedCommonForTest(t *testing.T, rt *Runtime, verified *corestate.VerifiedState) {
+func replacePersistedCommonForTest(t *testing.T, rt *AppContext, verified *corestate.VerifiedState) {
 	t.Helper()
 	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
@@ -317,7 +317,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonServiceFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
@@ -340,8 +340,8 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 
 func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonServiceFromOwners(
-		&Runtime{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
 	)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{

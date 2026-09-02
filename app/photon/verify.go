@@ -8,7 +8,7 @@ import (
 )
 
 func verifyChain(path zone.ZonePath) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}

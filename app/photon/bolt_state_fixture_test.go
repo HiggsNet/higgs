@@ -8,7 +8,7 @@ import (
 )
 
 func loadConfiguredVerifiedState() (*corestate.VerifiedState, error) {
-	runtime, err := NewRuntime()
+	runtime, err := NewAppContext()
 	if err != nil {
 		return nil, err
 	}

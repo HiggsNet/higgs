@@ -143,9 +143,9 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	}
 
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("NewRuntime(admin): %v", err)
+		t.Fatalf("NewAppContext(admin): %v", err)
 	}
 	var request joinRequest
 	if err := readBase64JSONOrJSON(requestText, &request); err != nil {

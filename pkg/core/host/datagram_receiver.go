@@ -55,6 +55,13 @@ func (runtime *Runtime) gossipTransportForRead() *gossip.Transport {
 	return runtime.gossipTransport
 }
 
+// Transport returns the common gossip transport owned by Runtime. Callers may
+// inspect or update its address book, but must not keep a second transport
+// pointer as an independent source of truth.
+func (runtime *Runtime) Transport() *gossip.Transport {
+	return runtime.gossipTransportForRead()
+}
+
 // datagramReceiver is the receive/close capability owned by Runtime.
 // Protocol decoding and peer validation may still live in the adapter; the
 // common runtime owns the single blocking receive goroutine, event-queue

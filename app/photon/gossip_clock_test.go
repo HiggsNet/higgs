@@ -7,8 +7,8 @@ import (
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
-// fakeClock is the daemon integration adapter for the shared host scheduler
-// contract. Scheduler behavior itself is tested in pkg/core/host.
+// fakeClock is the deterministic clock used by daemon and gossip scheduler
+// integration tests. Scheduler behavior itself is tested in pkg/core/host.
 type fakeClock struct {
 	mu     sync.Mutex
 	now    time.Time

@@ -25,13 +25,13 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-type DaemonService struct {
-	Sync                   *SyncRuntime
+type Daemon struct {
+	App                    *AppContext
+	GossipConfig           *syncConfigFile
 	Interval               time.Duration
 	ControlSocketPath      string
 	Events                 chan daemonEvent
@@ -39,10 +39,7 @@ type DaemonService struct {
 	StateStore             *DaemonStateStore
 	linuxRuntime           *photonlinux.Runtime
 	ipsecDNSResolver       ipsec.DNSResolver
-	health                 *health.Manager
-	healthRuntimeManaged   bool
-	healthAsyncRunning     bool
-	healthSpool            *healthspool.Store
+	health                 *healthDriver
 	observerHub            *observer.Hub
 	Log                    *appLogger
 	LogLimiter             *repeatedLogLimiter
@@ -54,6 +51,8 @@ type DaemonService struct {
 	routingForceReload     bool
 	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
+	daemonTimers           *corehost.Scheduler
+	daemonTimerEvents      chan corehost.Event
 
 	hostRuntime        *corehost.Runtime
 	objectPullExecutor *corehost.GossipObjectPullExecutor
@@ -80,8 +79,6 @@ const (
 	daemonTimerRouting                               = "routing_reconcile"
 	daemonTimerFirewall                              = "firewall_reconcile"
 	daemonTimerHealth                                = "health_probe"
-	daemonCompletionHealthOwner                      = "health"
-	daemonCompletionHealth                           = "probe_completed"
 	daemonEventRecordPut             daemonEventType = "record_put"
 	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
 	daemonEventRouteMutation         daemonEventType = "route_mutate"
@@ -154,7 +151,7 @@ type daemonEventResult struct {
 	Error          error
 }
 
-func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config *syncConfigFile, interval time.Duration) *DaemonService {
+func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *syncConfigFile, interval time.Duration) *Daemon {
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
@@ -167,31 +164,35 @@ func newDaemonServiceWithStore(rt *Runtime, stateStore *DaemonStateStore, config
 	if rt != nil && rt.Config != nil {
 		spoolConfig = rt.Config.Health.spoolConfig()
 	}
-	syncRuntime := newSyncRuntime(config, nil, rt)
-	hostRuntime := corehost.NewRuntime(corehost.NewClock(syncRuntime.now), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config))
-	d := &DaemonService{
-		Sync:              syncRuntime,
+	clock := time.Now
+	if rt != nil {
+		clock = rt.Now
+	}
+	hostRuntime := corehost.NewRuntime(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config))
+	d := &Daemon{
+		App:               rt,
+		GossipConfig:      config,
 		Interval:          interval,
 		ControlSocketPath: socketPath,
 		Events:            make(chan daemonEvent, 64),
 		Log:               newAppLogger(config),
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        stateStore,
-		healthSpool:       healthspool.New(spoolConfig),
+		health:            &healthDriver{spool: healthspool.New(spoolConfig)},
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
-		Now: d.Sync.now,
+		Now: d.now,
 	})
 	if runtime != nil && runtime.RoutingReconcile != nil {
 		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
 	}
-	d.ipsecTakeoverNotBefore = d.Sync.now().Add(2 * time.Minute)
+	d.ipsecTakeoverNotBefore = d.now().Add(2 * time.Minute)
 	d.hostRuntime = hostRuntime
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	return d
 }
 
-func openDaemonService(rt *Runtime, interval time.Duration) (*DaemonService, *corestate.BoltStore, error) {
+func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, *corestate.BoltStore, error) {
 	if rt == nil {
 		return nil, nil, errors.New("daemon runtime is nil")
 	}
@@ -210,33 +211,36 @@ func openDaemonService(rt *Runtime, interval time.Duration) (*DaemonService, *co
 		return nil, nil, errors.New("daemon common state is not initialized")
 	}
 	config := syncConfigFromAppConfig(rt.Config, common.State)
-	return newDaemonServiceWithStore(rt, stateStore, config, interval), boltStore, nil
+	return newDaemonWithStore(rt, stateStore, config, interval), boltStore, nil
 }
 
 // configureHealthManager initializes the health probe manager from app config.
-// When health probing is disabled (the default), d.health remains nil and all
-// health-related operations become no-ops.
-func (d *DaemonService) configureHealthManager() {
-	if d != nil {
-		d.health = nil
-		d.healthRuntimeManaged = false
+// When probing is disabled (the default), the optional subsystem has no
+// Manager and therefore creates no scheduler, goroutine or platform probe.
+func (d *Daemon) configureHealthManager() {
+	if d != nil && d.health != nil {
+		d.health.Manager = nil
+		d.health.runtimeManaged = false
 	}
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return
 	}
-	cfg := d.Sync.App.Config.Health
+	cfg := d.App.Config.Health
 	if !cfg.Enabled {
 		return
 	}
 	if d.linuxRuntime == nil {
 		return
 	}
-	d.health = newHealthManager(cfg, d.linuxRuntime.HealthProber())
-	d.healthRuntimeManaged = d.health != nil
+	if d.health == nil {
+		d.health = &healthDriver{}
+	}
+	d.health.Manager = newHealthManager(cfg, d.linuxRuntime.HealthProber())
+	d.health.runtimeManaged = d.health.Manager != nil
 }
 
-func (d *DaemonService) Run(ctx context.Context) error {
-	if d == nil || d.Sync == nil || d.StateStore == nil || d.Sync.Config == nil {
+func (d *Daemon) Run(ctx context.Context) error {
+	if d == nil || d.StateStore == nil || d.GossipConfig == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	if initial := d.StateStore.common.ReadView(); initial.State == nil {
@@ -250,6 +254,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if d.hostRuntime != nil {
 		defer d.hostRuntime.Stop()
 	}
+	d.daemonTimerEvents = make(chan corehost.Event, corehost.DefaultEventBuffer)
+	d.daemonTimers = corehost.NewScheduler(corehost.NewClock(d.now), d.daemonTimerEvents)
+	defer func() {
+		d.daemonTimers.Stop()
+		d.daemonTimers = nil
+		d.daemonTimerEvents = nil
+	}()
 	defer d.closeLinuxRuntime()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -258,7 +269,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			d.logWarn("routing", "bird_shutdown_failed", map[string]any{"error": err})
 		}
 	}()
-	transport, err := d.Sync.openTransport()
+	transport, err := d.openGossipTransport()
 	if err != nil {
 		return err
 	}
@@ -288,20 +299,20 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	defer stopObserver()
 	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(ctx)
 	defer stopIPsecEvents()
-	if d.health != nil {
-		updates := d.health.StartAsync(ctx)
-		d.healthAsyncRunning = true
-		defer func() { d.healthAsyncRunning = false }()
-		go d.forwardHealthCompletions(ctx, updates)
+	var healthUpdates <-chan struct{}
+	if d.health != nil && d.health.Manager != nil {
+		healthUpdates = d.health.StartAsync(ctx)
+		d.health.asyncRunning = true
+		defer func() { d.health.asyncRunning = false }()
 	}
 	startFields := map[string]any{
-		"peer_id":  d.Sync.Config.PeerID,
+		"peer_id":  d.GossipConfig.PeerID,
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
 	}
-	if d.Sync.App != nil {
+	if d.App != nil {
 		startFields["config_path"] = configPath()
-		startFields["state_path"] = d.Sync.App.StatePath
+		startFields["state_path"] = d.App.StatePath
 	}
 	maps.Copy(startFields, buildInfoFields())
 	d.logInfo("daemon", "started", startFields)
@@ -312,7 +323,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	d.logDebug("daemon", "startup_publish_done", nil)
 	logAutoJoinPending(d.Log, d.StateStore.common.ReadView().State)
 
-	startupNow := d.Sync.now()
+	startupNow := d.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
 	routingReconcileInterval := d.routingReconcileInterval()
 	firewallReconcileInterval := d.firewallReconcileInterval()
@@ -347,7 +358,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(startupNow, firewallReconcileInterval)); err != nil {
 		return err
 	}
-	if d.health != nil {
+	if d.health != nil && d.health.Manager != nil {
 		if err := d.scheduleDaemonTimer(daemonTimerHealth, startupNow); err != nil {
 			return err
 		}
@@ -357,7 +368,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		now := d.Sync.now()
+		now := d.now()
 		syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := d.processEvents(ctx)
 		if shutdown {
 			return nil
@@ -414,22 +425,22 @@ func (d *DaemonService) Run(ctx context.Context) error {
 			}
 			if triggerSync {
 				forceSync = true
-				if err := d.scheduleDaemonTimer(daemonTimerSync, d.Sync.now()); err != nil {
+				if err := d.scheduleDaemonTimer(daemonTimerSync, d.now()); err != nil {
 					return err
 				}
 			}
-		case hostEvent := <-d.hostRuntime.Events():
-			if completion, ok := hostEvent.(corehost.Completion); ok && completion.Namespace == daemonRuntimeNamespace {
-				if completion.Owner == daemonCompletionHealthOwner && completion.Key == daemonCompletionHealth {
-					d.handleHealthUpdate(d.Sync.now())
-				}
+		case _, ok := <-healthUpdates:
+			if !ok {
+				healthUpdates = nil
 				continue
 			}
-			if fired, ok := hostEvent.(corehost.TimerFired); ok && fired.ID.Namespace == daemonRuntimeNamespace {
-				if !d.hostRuntime.AcceptTimer(fired) {
+			d.handleHealthUpdate(d.now())
+		case timerEvent := <-d.daemonTimerEvents:
+			if fired, ok := timerEvent.(corehost.TimerFired); ok {
+				if !d.daemonTimers.Accept(fired) {
 					continue
 				}
-				now := d.Sync.now()
+				now := d.now()
 				switch fired.ID.Key {
 				case daemonTimerEndpoint:
 					result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
@@ -442,7 +453,7 @@ func (d *DaemonService) Run(ctx context.Context) error {
 							return err
 						}
 					}
-					interval := d.Sync.Config.ReflectorInterval
+					interval := d.GossipConfig.ReflectorInterval
 					if interval <= 0 {
 						interval = 5 * time.Minute
 					}
@@ -491,12 +502,13 @@ func (d *DaemonService) Run(ctx context.Context) error {
 				}
 				continue
 			}
+		case hostEvent := <-d.hostRuntime.Events():
 			_, _ = d.handleHostRuntimeGossipEvent(ctx, hostEvent)
 		}
 	}
 }
 
-func (d *DaemonService) startControlServer(ctx context.Context) (func(), error) {
+func (d *Daemon) startControlServer(ctx context.Context) (func(), error) {
 	if d.ControlSocketPath == "" {
 		return func() {}, nil
 	}
@@ -557,7 +569,7 @@ func prepareControlSocketPath(path string) error {
 	return nil
 }
 
-func (d *DaemonService) serveControl(ctx context.Context, listener net.Listener, done chan<- struct{}) {
+func (d *Daemon) serveControl(ctx context.Context, listener net.Listener, done chan<- struct{}) {
 	defer close(done)
 	for {
 		conn, err := listener.Accept()
@@ -572,7 +584,7 @@ func (d *DaemonService) serveControl(ctx context.Context, listener net.Listener,
 	}
 }
 
-func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
+func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var request controlRequest
 	_ = conn.SetReadDeadline(time.Now().Add(controlConnDeadline))
@@ -599,7 +611,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
-		writeCanonicalView(conn, statusViewFromOwners(d.Sync.App, common, runtime, d.healthStatusResponse(), true))
+		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -686,14 +698,14 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		writeCanonicalView(conn, buildZoneDetails(view.State.Network, d.Sync.now()))
+		writeCanonicalView(conn, buildZoneDetails(view.State.Network, d.now()))
 	case "services_view":
 		view := d.StateStore.common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		services := inspect.BuildServiceInspection(view.State, d.Sync.now())
+		services := inspect.BuildServiceInspection(view.State, d.now())
 		writeCanonicalView(conn, services)
 	case "route_view":
 		view := d.StateStore.common.ReadView()
@@ -701,7 +713,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		report, err := buildRouteShowReportFromState(view.State, d.Sync.now(), zone.ZonePath(request.Zone), request.IncludeAll)
+		report, err := buildRouteShowReportFromState(view.State, d.now(), zone.ZonePath(request.Zone), request.IncludeAll)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -709,7 +721,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, *report)
 	case "ipam_assignments_view":
 		view := d.StateStore.common.ReadView()
-		rows, err := buildIPAMAssignmentRows(view.State, d.Sync.now(), zone.ZonePath(request.Zone))
+		rows, err := buildIPAMAssignmentRows(view.State, d.now(), zone.ZonePath(request.Zone))
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -717,7 +729,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, rows)
 	case "ipam_mine_view":
 		view := d.StateStore.common.ReadView()
-		report, err := buildIPAMMineReportFromState(view.State, d.Sync.now())
+		report, err := buildIPAMMineReportFromState(view.State, d.now())
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -725,7 +737,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, *report)
 	case "ipam_get_view":
 		view := d.StateStore.common.ReadView()
-		report, err := buildIPAMGetReportFromState(view.State, d.Sync.now(), request.ValueText)
+		report, err := buildIPAMGetReportFromState(view.State, d.now(), request.ValueText)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -737,7 +749,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		endpoints := inspect.BuildEndpointDebug(view.State, d.Sync.now())
+		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
 		writeCanonicalView(conn, endpoints)
 	case "ping_targets":
 		common, runtime := d.StateStore.readCommonAndRuntime()
@@ -753,7 +765,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.Sync.Config, d.Sync.now(), request.Verbose))
+		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.GossipConfig, d.now(), request.Verbose))
 		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common, _ := d.StateStore.readCommonAndRuntime()
@@ -761,7 +773,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.Sync.Config, d.peerObservabilitySnapshots(), d.Sync.now()), request.Zone)
+		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.GossipConfig, d.peerObservabilitySnapshots(), d.now()), request.Zone)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return
@@ -775,7 +787,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		path := zone.ZonePath(request.Zone)
 		configureValidation(common.State.Network)
-		inspection, ok := inspect.BuildZoneInspection(common.State.Network, path, d.Sync.now(), request.History > 0)
+		inspection, ok := inspect.BuildZoneInspection(common.State.Network, path, d.now(), request.History > 0)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)))
 			return
@@ -788,7 +800,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		configureValidation(view.State.Network)
-		if err := photoncrypto.VerifyChain(view.State.Network, zone.ZonePath(request.Zone), d.Sync.now()); err != nil {
+		if err := photoncrypto.VerifyChain(view.State.Network, zone.ZonePath(request.Zone), d.now()); err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
@@ -974,7 +986,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.StateStore.runtime.RoutingReconcile != nil {
 			lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
 		}
-		view := buildBabelDebugView(d.Sync.App, d.StateStore.runtime.BirdInstances, lastRoutingError)
+		view := buildBabelDebugView(d.App, d.StateStore.runtime.BirdInstances, lastRoutingError)
 		d.StateStore.mu.RUnlock()
 		writeCanonicalView(conn, view)
 	case "bird_dump":
@@ -986,8 +998,8 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, *dump)
 	case "routes_view":
 		var routingInstances []RoutingInstance
-		if d.Sync != nil && d.Sync.App != nil && d.Sync.App.Config != nil {
-			routingInstances = append([]RoutingInstance(nil), d.Sync.App.Config.Routing.Instances...)
+		if d.App != nil && d.App.Config != nil {
+			routingInstances = append([]RoutingInstance(nil), d.App.Config.Routing.Instances...)
 		}
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
@@ -999,7 +1011,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.Sync.now())
+		ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.now())
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
@@ -1018,7 +1030,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		diagnosis := diagnoseAutoJoinAdmission(view.State, admission, d.Sync.now())
+		diagnosis := diagnoseAutoJoinAdmission(view.State, admission, d.now())
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		d.StateStore.mu.RLock()
@@ -1026,8 +1038,8 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.mu.RUnlock()
 		instances := []FirewallInstanceConfig(nil)
 		var appCfg *appConfig
-		if d.Sync.App != nil && d.Sync.App.Config != nil {
-			appCfg = d.Sync.App.Config
+		if d.App != nil && d.App.Config != nil {
+			appCfg = d.App.Config
 			instances = appCfg.Firewall.Instances
 		}
 		instances = filterFirewallDebugInstances(instances, request.NetNS, request.Host)
@@ -1037,7 +1049,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.mu.RLock()
 		view := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
 		d.StateStore.mu.RUnlock()
-		if d.linuxRuntime != nil && d.Sync.App != nil && d.Sync.App.Config != nil && d.Sync.App.Config.IPsec.Driver != ipsecDriverDryRun {
+		if d.linuxRuntime != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
 			sas, err := d.linuxRuntime.ListIPsecSAs(ctx)
 			if err != nil {
 				view.LiveSAError = err.Error()
@@ -1052,7 +1064,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Sync.App, common, runtime))
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, runtime))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
@@ -1067,9 +1079,9 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		var impacts []inspect.RevocationImpact
 		if request.Zone != "" {
-			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, zone.ZonePath(request.Zone), d.Sync.now())}
+			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, zone.ZonePath(request.Zone), d.now())}
 		} else {
-			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, d.Sync.Config, d.Sync.now())
+			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, d.GossipConfig, d.now())
 		}
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
@@ -1082,7 +1094,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
-func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) daemonEventResult {
+func (d *Daemon) enqueueEvent(ctx context.Context, event daemonEvent) daemonEventResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1100,7 +1112,7 @@ func (d *DaemonService) enqueueEvent(ctx context.Context, event daemonEvent) dae
 	}
 }
 
-func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool, firewallFlushed bool) {
+func (d *Daemon) processEvents(ctx context.Context) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool, firewallFlushed bool) {
 	d.drainingEvents = true
 	defer func() {
 		d.drainingEvents = false
@@ -1151,7 +1163,7 @@ func (d *DaemonService) processEvents(ctx context.Context) (syncNow bool, shutdo
 	}
 }
 
-func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
+func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
 	switch event.Type {
 	case daemonEventRecordPut:
 		version, err := d.handleRecordPutEvent(event.RecordPut)
@@ -1268,8 +1280,8 @@ func (d *DaemonService) handleEvent(event daemonEvent) (daemonEventResult, bool,
 	}
 }
 
-func (d *DaemonService) handleReloadConfigEvent() error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil {
+func (d *Daemon) handleReloadConfigEvent() error {
+	if d == nil || d.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	config, err := loadAppConfig()
@@ -1280,8 +1292,8 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if override := statePathOverride(); override != "" {
 		statePath = override
 	}
-	if d.Sync.App.StatePath != "" && statePath != d.Sync.App.StatePath {
-		return fmt.Errorf("reload would change state path from %s to %s; restart daemon to switch state", d.Sync.App.StatePath, statePath)
+	if d.App.StatePath != "" && statePath != d.App.StatePath {
+		return fmt.Errorf("reload would change state path from %s to %s; restart daemon to switch state", d.App.StatePath, statePath)
 	}
 	socketPath := controlSocketPath(config)
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
@@ -1308,15 +1320,15 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	if err != nil {
 		return err
 	}
-	d.Sync.App.Config = config
-	d.Sync.App.StatePath = statePath
-	d.Sync.Config = syncConfig
+	d.App.Config = config
+	d.App.StatePath = statePath
+	d.GossipConfig = syncConfig
 	if err := d.installLinuxRuntime(linuxRuntime); err != nil {
 		return err
 	}
 	d.Log = nextLogger
 	d.ControlSocketPath = socketPath
-	if d.Sync.Transport != nil {
+	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
@@ -1324,7 +1336,7 @@ func (d *DaemonService) handleReloadConfigEvent() error {
 	return nil
 }
 
-func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
@@ -1342,11 +1354,11 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissio
 		Keys: []zone.AuthorizedKey{{Key: append([]byte(nil), request.PublicKey...), Capabilities: delegationCapabilities(permissions)}}}
 	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), corestate.PutDelegationIntent{
 		Parent: parent, Authority: authority,
-	}, false, d.Sync.now())
+	}, false, d.now())
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, request.Zone, d.Sync.now())
+	bundle, err := joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, request.Zone, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1357,7 +1369,7 @@ func (d *DaemonService) handleDelegateIssueEvent(request *joinRequest, permissio
 	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
 }
 
-func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
 	if !path.Valid() || len(permissions) == 0 {
 		return nil, errors.New("valid delegated zone and at least one permission are required")
 	}
@@ -1374,7 +1386,7 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 	} else {
 		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
 	}
-	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, false, d.Sync.now())
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, false, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1385,7 +1397,7 @@ func (d *DaemonService) handleDelegateGrantEvent(path zone.ZonePath, permissions
 	if path.IsRoot() {
 		return nil, nil
 	}
-	return joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, path, d.Sync.now())
+	return joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, path, d.now())
 }
 
 func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now time.Time) (*joinBundle, error) {
@@ -1407,11 +1419,11 @@ func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now t
 	return &joinBundle{Version: 1, Zone: path, RootPublicKey: rootKey, Network: bundleNetwork}, nil
 }
 
-func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
+func (d *Daemon) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
 	result, err := d.StateStore.ImportCommonRecovery(context.Background(), corestate.RecoveryImport{
 		Snapshot: snapshot,
-		Limits:   syncLimits(d.Sync.Config),
-	}, d.Sync.now())
+		Limits:   syncLimits(d.GossipConfig),
+	}, d.now())
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1430,10 +1442,10 @@ func (d *DaemonService) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSn
 	return result.Apply, revocations, nil
 }
 
-func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
+func (d *Daemon) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
 	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
 		Parent: path.Parent(), Child: path, Reason: reason,
-	}, false, d.Sync.now())
+	}, false, d.now())
 	if err != nil {
 		return err
 	}
@@ -1448,11 +1460,11 @@ func (d *DaemonService) handleDelegateRevokeEvent(path zone.ZonePath, reason str
 // computes the plan (returned for reporting); when apply is true it also
 // executes the deletions, persists, and notifies subsystems so the running node
 // reconciles (e.g. tears down orphaned IPsec for removed link instances).
-func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zone.ZonePath, apply bool) (*purgePlan, error) {
+func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zone.ZonePath, apply bool) (*purgePlan, error) {
 	if d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	now := d.Sync.now()
+	now := d.now()
 	commonPlan, err := d.StateStore.PlanCommonPurge(now, target)
 	if err != nil {
 		return nil, err
@@ -1485,7 +1497,7 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	for _, peerID := range plan.SyncPeers {
 		d.hostRuntime.Observability.Delete(peerID)
 	}
-	if d.Sync.Transport != nil {
+	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	if result.Committed || len(plan.LinkInstances) > 0 {
@@ -1494,23 +1506,23 @@ func (d *DaemonService) handleRecoveryPurgeRevokedEvent(ctx context.Context, tar
 	return plan, nil
 }
 
-func (d *DaemonService) cleanupPurgePlanIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, plan *purgePlan) error {
+func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
-	if d == nil || d.Sync == nil || runtime == nil || d.Sync.App == nil {
+	if d == nil || runtime == nil || d.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	platformRuntime := d.linuxRuntime
 	if platformRuntime == nil {
 		return errors.New("linux runtime is not initialized")
 	}
-	_, err := cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, platformRuntime, d.Sync.now())
+	_, err := cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, platformRuntime, d.now())
 	return err
 }
 
-func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.StateStore == nil {
+func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
+	if d == nil || d.App == nil || d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	if bundle == nil || bundle.Version != 1 || bundle.Network == nil {
@@ -1529,11 +1541,11 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	commit, err := d.StateStore.InstallCommonIdentity(context.Background(), corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,
 		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
-	}, d.Sync.now())
+	}, d.now())
 	if err != nil {
 		return nil, err
 	}
-	if commit.Committed && d.Sync.Transport != nil {
+	if commit.Committed && d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	if commit.Committed {
@@ -1542,7 +1554,7 @@ func (d *DaemonService) handleJoinAcceptEvent(bundle *joinBundle, key *privateKe
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
+func (d *Daemon) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
 	changed, err := d.publishLocalProtocols(false)
 	if err != nil {
@@ -1552,8 +1564,8 @@ func (d *DaemonService) handleEndpointTimerEvent() (bool, error) {
 	return changed, nil
 }
 
-func (d *DaemonService) prepareStartupState() (bool, error) {
-	commit, authority, err := d.StateStore.RefreshCommonManagedAuthority(context.Background(), d.Sync.now())
+func (d *Daemon) prepareStartupState() (bool, error) {
+	commit, authority, err := d.StateStore.RefreshCommonManagedAuthority(context.Background(), d.now())
 	if err != nil {
 		return false, err
 	}
@@ -1567,8 +1579,8 @@ func (d *DaemonService) prepareStartupState() (bool, error) {
 	return commit.Committed || published, err
 }
 
-func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil {
+func (d *Daemon) publishLocalProtocols(updateAdmission bool) (bool, error) {
+	if d == nil || d.StateStore == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
 	common, runtime := d.StateStore.readCommonAndRuntime()
@@ -1577,17 +1589,17 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	}
 	revision := uint64(common.Revision)
 	if updateAdmission {
-		updateAdmissionOnPending(common.State, runtime, d.Sync.now())
+		updateAdmissionOnPending(common.State, runtime, d.now())
 	}
 	var intents []corestate.LocalIntent
-	endpoint, err := d.Sync.endpointProtocolIntent(common.State)
+	endpoint, err := d.endpointProtocolIntent(common.State)
 	if err != nil {
 		return false, fmt.Errorf("plan endpoint record: %w", err)
 	}
 	if endpoint != nil {
 		intents = append(intents, *endpoint)
 	}
-	ipsecPlan, err := d.Sync.ipsecProtocolPlan(common.State, runtime)
+	ipsecPlan, err := d.ipsecProtocolPlan(common.State, runtime)
 	if err != nil {
 		return false, fmt.Errorf("plan IPsec records: %w", err)
 	}
@@ -1605,13 +1617,13 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	if routingIntent != nil {
 		intents = append(intents, *routingIntent)
 	}
-	result, err := d.StateStore.publishLocalProtocols(context.Background(), revision, intents, runtime, d.Sync.now())
+	result, err := d.StateStore.publishLocalProtocols(context.Background(), revision, intents, runtime, d.now())
 	if err != nil {
 		return false, err
 	}
 	changed := result.RuntimeCommitted || result.Common.Committed
 	if changed {
-		if d.Sync.Transport != nil {
+		if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 			d.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
@@ -1619,7 +1631,7 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	return changed, nil
 }
 
-func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
+func (d *Daemon) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
 	if event == nil {
 		return 0, errors.New("record_put event is nil")
 	}
@@ -1635,11 +1647,11 @@ func (d *DaemonService) handleRecordPutEvent(event *daemonRecordPut) (uint64, er
 	return recordMutationVersion(result), err
 }
 
-func (d *DaemonService) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
-	if d == nil || d.Sync == nil || d.StateStore == nil {
+func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
+	if d == nil || d.StateStore == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
-	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, dryRun, d.Sync.now())
+	result, err := d.StateStore.ApplyCommonLocalIntent(context.Background(), intent, dryRun, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1648,7 +1660,7 @@ func (d *DaemonService) handleCommonRecordMutationEvent(intent corestate.LocalIn
 		out.Zone, out.Key, out.Version = result.Record.Zone, result.Record.Key, result.Record.Version
 	}
 	if result.Committed {
-		if d.Sync.Transport != nil {
+		if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
 			d.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
@@ -1663,13 +1675,13 @@ func recordMutationVersion(result *recordMutationResult) uint64 {
 	return result.Version
 }
 
-func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
+func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 	common, runtime := d.StateStore.readCommonAndRuntime()
 	if common.State == nil || runtime == nil {
 		return nil, errors.New("daemon state is not initialized")
 	}
 	revision := uint64(common.Revision)
-	record, portRuntime, result, err := planLocalIPsecPortRotation(d.Sync.App.Config, common.State, runtime, d.Sync.now())
+	record, portRuntime, result, err := planLocalIPsecPortRotation(d.App.Config, common.State, runtime, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1680,7 +1692,7 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 	runtime.IPsecPortRecord = portRuntime
 	committed, err := d.StateStore.publishLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
-	}, runtime, d.Sync.now())
+	}, runtime, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1690,7 +1702,7 @@ func (d *DaemonService) handleIPsecPortRotateEvent() (*manualPortRotateResult, e
 	return result, nil
 }
 
-func (d *DaemonService) notifyStateChanged() {
+func (d *Daemon) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged()
 	}
@@ -1738,7 +1750,7 @@ func (d *DaemonService) notifyStateChanged() {
 	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 }
 
-func (d *DaemonService) publishStateStoreRuntimeFlags() {
+func (d *Daemon) publishStateStoreRuntimeFlags() {
 	if d == nil || d.StateStore == nil {
 		return
 	}
@@ -1749,7 +1761,7 @@ func (d *DaemonService) publishStateStoreRuntimeFlags() {
 	})
 }
 
-func (d *DaemonService) noteReconcileFlush(layer string) {
+func (d *Daemon) noteReconcileFlush(layer string) {
 	if d != nil && d.Hooks.OnReconcileFlush != nil {
 		d.Hooks.OnReconcileFlush(layer)
 	}
@@ -1761,14 +1773,14 @@ func (d *DaemonService) noteReconcileFlush(layer string) {
 // observed paths, backoff or object-pull candidates. The entry itself is
 // retained with a "revoked" marker for diagnostics; it is removed via the
 // normal offline cleanup policy after the cleanup_after retention window.
-func (d *DaemonService) flushRevocationCleanup() {
-	if d == nil || d.StateStore == nil || d.Sync == nil {
+func (d *Daemon) flushRevocationCleanup() {
+	if d == nil || d.StateStore == nil {
 		return
 	}
 	// This function is called after every sync-state update. Most calls have no
 	// revocations, so check the immutable committed state first and avoid the
 	// copy-on-write transaction (which deep-copies the whole state through JSON).
-	now := d.Sync.now()
+	now := d.now()
 	view := d.StateStore.common.ReadView()
 	if view.State == nil {
 		return
@@ -1799,7 +1811,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 				ObservedGrace:    corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
 				BackoffUntilUnix: corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
 				LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
-					Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: d.Sync.now().Unix(),
+					Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: d.now().Unix(),
 				}},
 			}
 		}
@@ -1815,7 +1827,7 @@ func (d *DaemonService) flushRevocationCleanup() {
 	}
 }
 
-func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
+func (d *Daemon) recoverIPsecLinksOnStart(ctx context.Context) {
 	if d == nil {
 		return
 	}
@@ -1825,7 +1837,7 @@ func (d *DaemonService) recoverIPsecLinksOnStart(ctx context.Context) {
 	d.flushIPsecReconcile(ctx)
 }
 
-func (d *DaemonService) recoverRoutingOnStart(ctx context.Context) {
+func (d *Daemon) recoverRoutingOnStart(ctx context.Context) {
 	if d == nil {
 		return
 	}
@@ -1833,7 +1845,7 @@ func (d *DaemonService) recoverRoutingOnStart(ctx context.Context) {
 	d.flushRoutingReconcile(ctx)
 }
 
-func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
+func (d *Daemon) flushRoutingReconcile(ctx context.Context) bool {
 	flushed, err := d.flushRoutingReconcileResult(ctx)
 	if err != nil {
 		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
@@ -1841,7 +1853,7 @@ func (d *DaemonService) flushRoutingReconcile(ctx context.Context) bool {
 	return flushed
 }
 
-func (d *DaemonService) flushRoutingReconcileResult(ctx context.Context) (bool, error) {
+func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) {
 	if d == nil || !d.routingDirty {
 		return false, nil
 	}
@@ -1853,11 +1865,11 @@ func (d *DaemonService) flushRoutingReconcileResult(ctx context.Context) (bool, 
 	return true, err
 }
 
-func (d *DaemonService) routingReconcileInterval() time.Duration {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) routingReconcileInterval() time.Duration {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return 0
 	}
-	instances := routingInstancesEnabled(d.Sync.App.Config)
+	instances := routingInstancesEnabled(d.App.Config)
 	if len(instances) == 0 {
 		return 0
 	}
@@ -1881,7 +1893,7 @@ func boundedReconcileContext(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(ctx, defaultReconcileOperationTimeout)
 }
 
-func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
+func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
 	if d == nil || !d.ipsecDirty {
 		return false
 	}
@@ -1899,7 +1911,7 @@ func (d *DaemonService) flushIPsecReconcile(ctx context.Context) bool {
 	return true
 }
 
-func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
+func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
 	if d == nil || d.linuxRuntime == nil {
 		return func() {}
 	}
@@ -1913,7 +1925,7 @@ func (d *DaemonService) startIPsecLifecycleEventWatcher(ctx context.Context) fun
 // attempt is bounded by a timeout and retried with backoff: a wedged VICI
 // daemon (accepting connections but never answering) must degrade to warning
 // logs instead of blocking daemon startup, which a synchronous subscribe did.
-func (d *DaemonService) runIPsecLifecycleEventWatcher(ctx context.Context, runtime *photonlinux.Runtime) {
+func (d *Daemon) runIPsecLifecycleEventWatcher(ctx context.Context, runtime *photonlinux.Runtime) {
 	backoff := time.Second
 	for {
 		subscribeCtx, cancelSubscribe := context.WithTimeout(ctx, ipsecLifecycleSubscribeTimeout)
@@ -1951,7 +1963,7 @@ func (d *DaemonService) runIPsecLifecycleEventWatcher(ctx context.Context, runti
 // forwardIPsecLifecycleEvents pumps lifecycle events into the daemon event
 // loop until ctx ends (returns true) or the event stream closes (returns
 // false, caller should resubscribe).
-func (d *DaemonService) forwardIPsecLifecycleEvents(ctx context.Context, events <-chan ipsec.VICIEvent) bool {
+func (d *Daemon) forwardIPsecLifecycleEvents(ctx context.Context, events <-chan ipsec.VICIEvent) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1990,7 +2002,7 @@ func nextRetryBackoff(current time.Duration) time.Duration {
 	return next
 }
 
-func (d *DaemonService) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
+func (d *Daemon) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
 	d.ipsecDirty = true
 	d.logDebug("ipsec", "vici_lifecycle_event", map[string]any{
 		"event_name": ev.Name,
@@ -2006,11 +2018,11 @@ func (d *DaemonService) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
 	})
 }
 
-func (d *DaemonService) ipsecReconcileInterval() time.Duration {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) ipsecReconcileInterval() time.Duration {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return 0
 	}
-	groups := d.Sync.App.Config.IPsec.LinkGroups
+	groups := d.App.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
 		hasLinkInstances := false
 		if d.StateStore != nil {
@@ -2044,11 +2056,11 @@ func nextIPsecReconcileTime(now time.Time, interval time.Duration) time.Time {
 }
 
 func daemonRun(ctx context.Context, interval time.Duration) error {
-	rt, err := NewRuntime()
+	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemonService(rt, interval)
+	service, boltStore, err := openDaemon(rt, interval)
 	if err != nil {
 		return err
 	}
@@ -2056,11 +2068,11 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 	return service.Run(ctx)
 }
 
-func (d *DaemonService) configureLinuxRuntimeFromConfig() error {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+func (d *Daemon) configureLinuxRuntimeFromConfig() error {
+	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	runtime, err := newConfiguredLinuxRuntime(d.Sync.App.Config.IPsec, d.Sync.App.Config.Netns.Names, d.Log)
+	runtime, err := newConfiguredLinuxRuntime(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
 	if err != nil {
 		return err
 	}
@@ -2125,7 +2137,7 @@ func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]
 	}
 }
 
-func (d *DaemonService) installLinuxRuntime(runtime *photonlinux.Runtime) error {
+func (d *Daemon) installLinuxRuntime(runtime *photonlinux.Runtime) error {
 	if d == nil {
 		if runtime != nil {
 			_ = runtime.Close()
@@ -2139,13 +2151,13 @@ func (d *DaemonService) installLinuxRuntime(runtime *photonlinux.Runtime) error 
 		return err
 	}
 	d.linuxRuntime = runtime
-	if d.health == nil || d.healthRuntimeManaged {
+	if d.health == nil || d.health.Manager == nil || d.health.runtimeManaged {
 		d.configureHealthManager()
 	}
 	return nil
 }
 
-func (d *DaemonService) closeLinuxRuntime() error {
+func (d *Daemon) closeLinuxRuntime() error {
 	if d == nil || d.linuxRuntime == nil {
 		return nil
 	}
@@ -2154,39 +2166,39 @@ func (d *DaemonService) closeLinuxRuntime() error {
 	return runtime.Close()
 }
 
-func (d *DaemonService) logDebug(component, event string, fields map[string]any) {
+func (d *Daemon) logDebug(component, event string, fields map[string]any) {
 	if d != nil && d.Log != nil {
 		d.Log.Debug(component, event, fields)
 	}
 }
 
-func (d *DaemonService) logInfo(component, event string, fields map[string]any) {
+func (d *Daemon) logInfo(component, event string, fields map[string]any) {
 	if d != nil && d.Log != nil {
 		d.Log.Info(component, event, fields)
 	}
 }
 
-func (d *DaemonService) logWarn(component, event string, fields map[string]any) {
+func (d *Daemon) logWarn(component, event string, fields map[string]any) {
 	if d != nil && d.Log != nil {
 		d.Log.Warn(component, event, fields)
 	}
 }
 
-func (d *DaemonService) logError(component, event string, fields map[string]any) {
+func (d *Daemon) logError(component, event string, fields map[string]any) {
 	if d != nil && d.Log != nil {
 		d.Log.Error(component, event, fields)
 	}
 }
 
-func (d *DaemonService) scheduleDaemonTimer(key string, deadline time.Time) error {
-	if d == nil || d.hostRuntime == nil {
+func (d *Daemon) scheduleDaemonTimer(key string, deadline time.Time) error {
+	if d == nil || d.daemonTimers == nil {
 		return corehost.ErrRuntimeStopped
 	}
 	id := corehost.TimerID{Namespace: daemonRuntimeNamespace, Owner: daemonTimerOwner, Key: key}
 	if deadline.IsZero() {
-		d.hostRuntime.CancelTimer(id)
+		d.daemonTimers.Cancel(id)
 		return nil
 	}
-	_, err := d.hostRuntime.ScheduleTimer(id, deadline)
+	_, err := d.daemonTimers.Schedule(id, deadline)
 	return err
 }

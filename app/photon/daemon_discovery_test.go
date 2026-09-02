@@ -44,8 +44,8 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	verified, checkpoint, runtimeState, config := buildTestDaemonOwners(t)
 	now := time.Now().Truncate(time.Second)
 	putVerifiedEndpointRecord(t, verified, "203.0.113.10", 33434, now)
-	runtime := &Runtime{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newTestDaemonServiceFromOwners(runtime, verified, checkpoint, runtimeState, config, time.Second)
+	runtime := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	service := newTestDaemonFromOwners(runtime, verified, checkpoint, runtimeState, config, time.Second)
 	transport := &gossip.Transport{}
 	setTestGossipTransport(t, service, transport)
 
