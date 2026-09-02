@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
@@ -50,7 +51,7 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if !reflect.DeepEqual(candidate.Verified.TrustedRootPublicKey, trustedRoot) || candidate.Gossip.Peers["peer.catofes."].BackoffUntilUnix != 20 {
 			t.Fatalf("common state projection = %+v", candidate)
 		}
-		runtime, found, err := loadLinuxRuntimeStateTx(tx)
+		runtime, found, err := photonlinux.LoadRuntimeStateTx(tx)
 		if err != nil {
 			return err
 		}
@@ -108,7 +109,7 @@ func TestLegacyRuntimeStateMigrationFailureRollsBack(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if found || tx.Bucket(bucketLinuxRuntime) != nil {
+		if found || tx.Bucket([]byte(photonlinux.RuntimeStateBucketName)) != nil {
 			t.Fatal("failed migration retained new buckets")
 		}
 		legacyNetwork, err := zone.LoadNetworkTx(tx)
@@ -157,21 +158,6 @@ func TestLegacyRuntimeStateMigrationRejectsCoexistingRepresentations(t *testing.
 		return err
 	}); !errors.Is(err, errLegacyStateConflict) {
 		t.Fatalf("coexisting representations error = %v, want errLegacyStateConflict", err)
-	}
-}
-
-func TestLinuxRuntimeStateOwnsOnlyPlatformFields(t *testing.T) {
-	typeOf := reflect.TypeOf(linuxRuntimeState{})
-	got := make([]string, 0, typeOf.NumField())
-	for i := 0; i < typeOf.NumField(); i++ {
-		got = append(got, typeOf.Field(i).Name)
-	}
-	want := []string{
-		"IdentityKeyPath", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
-		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("linuxRuntimeState fields = %v, want %v", got, want)
 	}
 }
 

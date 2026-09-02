@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -126,7 +127,7 @@ func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
 			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
 		},
 	}
-	next := cloneIPsecReconcileState(base)
+	next := photonstate.CloneIPsecReconcileState(base)
 	next.LastRunUnix = 200
 	next.SourceRevision = 12
 	next.ActualSAs[0].IKEAgeSeconds = 110

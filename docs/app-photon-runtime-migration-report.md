@@ -192,11 +192,11 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `routing_config.go` | netns/BIRD/Babel/upstream config | `internal/photonlinux/routing/config` |
 | `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | Linux reconcile 进 routing controller；授权留 pkg/routing；公共 announce 用 state intent |
 | `routing_upstream_routes.go` | Linux `ip` 安装 upstream 地址/路由 | `internal/photonlinux/routing` driver |
-| `runtime_state_migration.go` | Linux runtime schema/codec 和旧 state 拆分 | codec/type 进 Linux state；旧转换进 migration；启动事务完成单向升级，只有明确停止支持旧 schema 时才删除 |
+| `runtime_state_migration.go` | 旧 `stateFile/stateMeta` 单向 decoder | current RuntimeState/type/clone/codec/commit 已归 `internal/photonlinux`；本文件只保留旧 schema 拆分与原子迁移，停止支持旧库时删除 |
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
-| `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | `stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump；Linux runtime aliases 及当前类型随 owner 迁入 platform 包 |
-| `state_clone.go` | Linux runtime typed clone | aggregate clone 已删除；剩余 detached candidate clone 随 Linux runtime owner 迁入 platform 包 |
+| `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | `stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump；current runtime 类型已由 `internal/photonlinux.RuntimeState` 拥有，app alias 仅待调用签名逐步显式化 |
+| `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.RuntimeState` 共用；不在迁移后保留两套深拷贝实现 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
 | `sync.go` | SyncRuntime、Linux UDP open、endpoint publish、chunk、统计和 CLI | daemon、`sync serve`、`sync once` 已共用 HostRuntime 的 event consumer，启动 peer/endpoint/observed 恢复也统一走 HostRuntime discovery；剩余 Linux UDP open 下沉平台 runtime，FSM/wire 留 gossip，统计留 observability，CLI 进 photoncli，最终删除 SyncRuntime |
@@ -256,8 +256,9 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 - `app/photon` 的 CLI flag、Unix control、composition、完整 daemon 顺序和 root smoke 测试仍属于 executable 集成边界，不能迁成底层包单测；
 - 普通测试已经使用 typed owners；只有旧 schema migration/codec 测试可以继续构造 `stateFile`，不得把该 fixture 用回在线行为测试。
 
-HostRuntime 公共 gossip 闭环与 aggregate 清理已完成。下一批迁移 Linux runtime state 的 type/clone/codec/commit owner；
-旧 schema decoder 留在 app migration 边界，不能随 current codec 一起误搬成在线兼容层。
+HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux runtime state owner 迁移已完成。旧 schema decoder 仍留在 app migration
+边界，不能随 current codec 一起误搬成在线兼容层。下一批审计 live runtime state 是否应由唯一 `photonlinux.Runtime` 直接持有，
+以缩小 `DaemonStateStore`，但不得再创建一个并列 lifecycle Runtime 或 capability bag。
 
 ### 5.3 推荐顺序的当前进度
 
@@ -266,6 +267,8 @@ HostRuntime 公共 gossip 闭环与 aggregate 清理已完成。下一批迁移 
    `daemon.go` 仍保留 composition、部分 status/CLI 和 health completion 接线。HostRuntime 已直接持有 common Store 和同一个
    gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
 3. Linux runtime：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；主体完成。
+   current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 也已归 `internal/photonlinux`；app 旧库迁移只负责
+   `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

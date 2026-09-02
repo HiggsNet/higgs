@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
@@ -189,8 +190,8 @@ func TestBoltStateStoreLinuxMetadataOnlyWritesKeepVerifiedRevision(t *testing.T)
 
 	runtimeOnly := *snapshot.Runtime
 	runtimeOnly.IdentityKeyPath = "/runtime-only-change"
-	if err := commitLinuxRuntime(store, snapshot.Revision, &runtimeOnly); err != nil {
-		t.Fatalf("commitLinuxRuntime: %v", err)
+	if err := photonlinux.CommitRuntimeState(store, snapshot.Revision, &runtimeOnly); err != nil {
+		t.Fatalf("CommitRuntimeState: %v", err)
 	}
 	reloaded, found, err := loadAndMigrateLinuxState(store, trustedRoot)
 	if err != nil || !found {
@@ -230,8 +231,8 @@ func TestBoltStateStoreLinuxRejectsStaleRuntimeCompletion(t *testing.T) {
 	}
 	stale := *snapshot.Runtime
 	stale.IdentityKeyPath = "/stale-completion"
-	if err := commitLinuxRuntime(store, snapshot.Revision, &stale); !errors.Is(err, errRuntimeStateSourceRevisionMismatch) {
-		t.Fatalf("commitLinuxRuntime stale error = %v", err)
+	if err := photonlinux.CommitRuntimeState(store, snapshot.Revision, &stale); !errors.Is(err, photonlinux.ErrRuntimeStateSourceRevisionMismatch) {
+		t.Fatalf("CommitRuntimeState stale error = %v", err)
 	}
 	reloaded, _, err := loadAndMigrateLinuxState(store, trustedRoot)
 	if err != nil {
@@ -255,7 +256,7 @@ func TestBoltStateStoreLinuxRejectsNilPlatformState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAndMigrate: %v", err)
 	}
-	if err := commitLinuxRuntime(store, snapshot.Revision, nil); err == nil {
+	if err := photonlinux.CommitRuntimeState(store, snapshot.Revision, nil); err == nil {
 		t.Fatal("nil Linux runtime state unexpectedly committed")
 	}
 }

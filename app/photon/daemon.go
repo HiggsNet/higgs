@@ -20,6 +20,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -991,7 +992,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
-		birdInstances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+		birdInstances := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
 		if view.State == nil || view.State.Network == nil {
@@ -1010,7 +1011,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
-		admission := cloneAdmissionState(d.StateStore.runtime.Admission)
+		admission := photonstate.CloneAdmissionState(d.StateStore.runtime.Admission)
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
 		if view.State == nil {
@@ -1021,7 +1022,7 @@ func (d *DaemonService) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		d.StateStore.mu.RLock()
-		fwSnapshot := cloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)
+		fwSnapshot := photonstate.CloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)
 		d.StateStore.mu.RUnlock()
 		instances := []FirewallInstanceConfig(nil)
 		var appCfg *appConfig
@@ -1585,10 +1586,10 @@ func (d *DaemonService) publishLocalProtocols(updateAdmission bool) (bool, error
 	}
 	intents = append(intents, ipsecPlan.Intents...)
 	if ipsecPlan.TransportKey != nil {
-		runtime.IPsecTransportKey = cloneIPsecTransportKeyState(ipsecPlan.TransportKey)
+		runtime.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(ipsecPlan.TransportKey)
 	}
 	if ipsecPlan.PortRecord != nil {
-		runtime.IPsecPortRecord = cloneIPsecPortRecordState(ipsecPlan.PortRecord)
+		runtime.IPsecPortRecord = photonstate.CloneIPsecPortRecordState(ipsecPlan.PortRecord)
 	}
 	routingIntent, err := d.routingNetnsProtocolIntent(common.State)
 	if err != nil {

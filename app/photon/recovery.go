@@ -363,14 +363,14 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	plan := mergePurgePlan(commonPlan, startup.Runtime)
 	if apply {
 		view := startup.Common.ReadView()
-		runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+		runtimeCandidate := photonlinux.CloneRuntimeState(startup.Runtime)
 		if err := cleanupPurgePlanIPsecLinks(ctx, rt, runtimeCandidate, plan); err != nil {
 			return err
 		}
 		for _, peerID := range plan.SyncPeers {
 			delete(runtimeCandidate.PeerCleanups, peerID)
 		}
-		if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
+		if err := photonlinux.CommitRuntimeState(boltStore, view.Revision, runtimeCandidate); err != nil {
 			return err
 		}
 		if _, err := startup.Common.PurgeRevoked(ctx, now, target); err != nil {

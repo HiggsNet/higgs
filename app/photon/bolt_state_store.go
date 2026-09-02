@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	bolt "go.etcd.io/bbolt"
 )
@@ -35,7 +36,7 @@ func loadOfflineOwnerViews(rt *Runtime) (corestate.View, *linuxRuntimeState, err
 		return corestate.View{}, nil, err
 	}
 	view := startup.Common.ReadView()
-	runtime := cloneLinuxRuntimeState(startup.Runtime)
+	runtime := photonlinux.CloneRuntimeState(startup.Runtime)
 	startup.Common.Close()
 	boltCloseErr := boltStore.Close()
 	if boltCloseErr != nil {
@@ -45,8 +46,6 @@ func loadOfflineOwnerViews(rt *Runtime) (corestate.View, *linuxRuntimeState, err
 }
 
 const daemonBoltLockTimeout = time.Second
-
-var errRuntimeStateSourceRevisionMismatch = errors.New("runtime state source verified revision does not match current state")
 
 // linuxStateSnapshot is the complete persisted input needed to start the
 // Linux runtime. Candidate owns the cross-platform trusted/checkpoint state;
@@ -118,9 +117,9 @@ func openLinuxDaemonState(rt *Runtime) (*corestate.BoltStore, linuxStartupState,
 		return nil, linuxStartupState{}, err
 	}
 	if keyPath != "" && startup.Runtime.IdentityKeyPath == "" {
-		nextRuntime := cloneLinuxRuntimeState(startup.Runtime)
+		nextRuntime := photonlinux.CloneRuntimeState(startup.Runtime)
 		nextRuntime.IdentityKeyPath = keyPath
-		if err := commitLinuxRuntime(store, startup.Common.VerifiedRevision(), nextRuntime); err != nil {
+		if err := photonlinux.CommitRuntimeState(store, startup.Common.VerifiedRevision(), nextRuntime); err != nil {
 			startup.Common.Close()
 			_ = store.Close()
 			return nil, linuxStartupState{}, err
@@ -164,12 +163,12 @@ func loadLinuxStateTx(tx *bolt.Tx) (linuxStateSnapshot, bool, error) {
 	if err != nil || !found {
 		return linuxStateSnapshot{}, found, err
 	}
-	runtimeState, runtimeFound, err := loadLinuxRuntimeStateTx(tx)
+	runtimeState, runtimeFound, err := photonlinux.LoadRuntimeStateTx(tx)
 	if err != nil {
 		return linuxStateSnapshot{}, false, err
 	}
 	if !runtimeFound {
-		return linuxStateSnapshot{}, false, fmt.Errorf("%w: runtime bucket is missing", errLinuxRuntimeStateCorrupt)
+		return linuxStateSnapshot{}, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrRuntimeStateCorrupt)
 	}
 	return linuxStateSnapshot{
 		Candidate:    candidate,
@@ -207,28 +206,6 @@ func loadAndRestoreLinuxState(store *corestate.BoltStore, trustedRoot ed25519.Pu
 	return startup, true, nil
 }
 
-// commitLinuxRuntime persists a Linux-only completion without modifying the
-// common candidate or VerifiedRevision. sourceRevision is the sole verified
-// revision from which the controller planned its work.
-func commitLinuxRuntime(store *corestate.BoltStore, sourceRevision corestate.VerifiedRevision, runtimeState *linuxRuntimeState) error {
-	if store == nil {
-		return errors.New("bbolt state store is nil")
-	}
-	return store.Update(func(tx *bolt.Tx) (bool, error) {
-		_, currentRevision, _, found, err := corestate.LoadBoltState(tx)
-		if err != nil {
-			return false, err
-		}
-		if !found {
-			return false, errors.New("common state is not initialized")
-		}
-		if sourceRevision != currentRevision {
-			return false, fmt.Errorf("%w: completion=%d current=%d", errRuntimeStateSourceRevisionMismatch, sourceRevision, currentRevision)
-		}
-		return saveLinuxRuntimeStateTx(tx, runtimeState)
-	})
-}
-
 // initializeLinuxState atomically creates the common and Linux runtime
 // partitions for a previously empty database. Identity validation happens in
 // the public Store before this function is called; this boundary only ensures
@@ -242,7 +219,7 @@ func initializeLinuxState(store *corestate.BoltStore, candidate *corestate.Commi
 		if err != nil {
 			return false, err
 		}
-		if found || tx.Bucket(bucketLinuxRuntime) != nil || tx.Bucket(bucketLegacyMeta) != nil {
+		if found || tx.Bucket([]byte(photonlinux.RuntimeStateBucketName)) != nil || tx.Bucket(bucketLegacyMeta) != nil {
 			return false, errors.New("daemon state is already initialized")
 		}
 		commonChanged, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{
@@ -253,7 +230,7 @@ func initializeLinuxState(store *corestate.BoltStore, candidate *corestate.Commi
 		if err != nil {
 			return false, err
 		}
-		runtimeChanged, err := saveLinuxRuntimeStateTx(tx, runtimeState)
+		runtimeChanged, err := photonlinux.SaveRuntimeStateTx(tx, runtimeState)
 		return commonChanged || runtimeChanged, err
 	})
 }

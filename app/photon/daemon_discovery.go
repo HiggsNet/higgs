@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
@@ -23,7 +24,7 @@ func (d *DaemonService) currentGossipSuppressions() map[string]bool {
 		return nil
 	}
 	d.StateStore.mu.RLock()
-	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
+	cleanups := photonstate.ClonePeerLifecycleCleanups(d.StateStore.runtime.PeerCleanups)
 	d.StateStore.mu.RUnlock()
 	return peerCleanupSuppressions(cleanups)
 }

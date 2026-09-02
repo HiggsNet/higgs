@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -409,8 +410,8 @@ func ipsecReconcileSummaryEqual(base, next *ipsecReconcileState) bool {
 	if base == nil || next == nil {
 		return base == nil && next == nil
 	}
-	base = cloneIPsecReconcileState(base)
-	next = cloneIPsecReconcileState(next)
+	base = photonstate.CloneIPsecReconcileState(base)
+	next = photonstate.CloneIPsecReconcileState(next)
 	normalizeIPsecReconcileForComparison(base)
 	normalizeIPsecReconcileForComparison(next)
 	return reflect.DeepEqual(base, next)
@@ -463,7 +464,7 @@ func (d *DaemonService) recordIPsecReconcileError(rev uint64, unix int64, err er
 		})
 		return
 	}
-	reconcile := cloneIPsecReconcileState(runtime.IPsecReconcile)
+	reconcile := photonstate.CloneIPsecReconcileState(runtime.IPsecReconcile)
 	if reconcile == nil {
 		reconcile = &ipsecReconcileState{}
 	}

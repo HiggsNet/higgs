@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -103,7 +104,7 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 			t.Fatalf("runtime commit candidate = revision %d, state %+v", revision, candidate.RoutingReconcile)
 		}
 		store.mu.RLock()
-		published := cloneRoutingReconcileState(store.runtime.RoutingReconcile)
+		published := photonstate.CloneRoutingReconcileState(store.runtime.RoutingReconcile)
 		store.mu.RUnlock()
 		if published != nil {
 			t.Fatal("runtime view published before persistence callback")

@@ -1,42 +1,43 @@
-package main
+package photonlinux
 
 import (
 	"reflect"
 	"testing"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func TestCloneLinuxRuntimeStateDeepCopiesMutableFields(t *testing.T) {
-	original := &linuxRuntimeState{
+func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
+	original := &RuntimeState{
 		IdentityKeyPath: "/keys/identity.json",
-		PeerCleanups: map[string]peerLifecycleCleanupState{
-			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: peerCleanupReasonOffline},
+		PeerCleanups: map[string]photonstate.PeerLifecycleCleanupState{
+			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: "offline"},
 		},
-		IPsecTransportKey: &ipsecTransportKeyState{PublicKey: []byte("public"), PrivateKey: []byte("private")},
-		IPsecPortRecord:   &ipsecPortRecordState{Range: &ipsec.PortRange{From: 4500, To: 4510}},
-		LinkInstances:     map[string]linkInstanceState{"link-a": {ID: "link-a", Owner: linkOwnerState{Token: "token-a"}}},
-		IPsecReconcile: &ipsecReconcileState{
-			Desired:   []desiredLinkState{{InstanceID: "link-a", Endpoint: "198.51.100.10:4500"}},
-			ActualSAs: []linkSAState{{Name: "sa-a"}},
-			Actions:   []linkActionState{{Action: "create"}},
-			Skipped:   []linkSkipState{{Reason: "revoked"}},
+		IPsecTransportKey: &photonstate.IPsecTransportKeyState{PublicKey: []byte("public"), PrivateKey: []byte("private")},
+		IPsecPortRecord:   &photonstate.IPsecPortRecordState{Range: &ipsec.PortRange{From: 4500, To: 4510}},
+		LinkInstances:     map[string]photonstate.LinkInstanceState{"link-a": {ID: "link-a", Owner: photonstate.LinkOwnerState{Token: "token-a"}}},
+		IPsecReconcile: &photonstate.IPsecReconcileState{
+			Desired:   []photonstate.DesiredLinkState{{InstanceID: "link-a", Endpoint: "198.51.100.10:4500"}},
+			ActualSAs: []photonstate.LinkSAState{{Name: "sa-a"}},
+			Actions:   []photonstate.LinkActionState{{Action: "create"}},
+			Skipped:   []photonstate.LinkSkipState{{Reason: "revoked"}},
 		},
-		RoutingReconcile: &routingReconcileState{LastError: "routing-error"},
-		FirewallReconcile: &firewallReconcileState{Instances: map[string]*firewallInstanceReconcileStateEntry{
+		RoutingReconcile: &photonstate.RoutingReconcileState{LastError: "routing-error"},
+		FirewallReconcile: &photonstate.FirewallReconcileState{Instances: map[string]*photonstate.FirewallReconcileInstance{
 			"fw-a": {PolicyHash: "hash-a"},
 			"nil":  nil,
 		}},
-		EndpointACLs: map[string]endpointACL{"api": {Selectors: []string{"zone:catofes."}}},
-		BirdInstances: map[string]*BirdInstanceState{
+		EndpointACLs: map[string]photonstate.EndpointACL{"api": {Selectors: []string{"zone:catofes."}}},
+		BirdInstances: map[string]*photonstate.BirdInstanceState{
 			"mesh": {Overlays: []string{"main"}},
 			"nil":  nil,
 		},
-		Admission: &admissionState{Pending: true, PendingReason: "missing_delegation"},
+		Admission: &photonstate.AdmissionState{Pending: true, PendingReason: "missing_delegation"},
 	}
 
-	cloned := cloneLinuxRuntimeState(original)
-	cloned.PeerCleanups["peer-a"] = peerLifecycleCleanupState{Reason: "changed"}
+	cloned := CloneRuntimeState(original)
+	cloned.PeerCleanups["peer-a"] = photonstate.PeerLifecycleCleanupState{Reason: "changed"}
 	cloned.IPsecTransportKey.PublicKey[0] = 'P'
 	cloned.IPsecTransportKey.PrivateKey[0] = 'S'
 	cloned.IPsecPortRecord.Range.From = 4600
@@ -53,7 +54,7 @@ func TestCloneLinuxRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	cloned.BirdInstances["mesh"].Overlays[0] = "changed"
 	cloned.Admission.PendingReason = "changed"
 
-	if original.PeerCleanups["peer-a"].Reason != peerCleanupReasonOffline ||
+	if original.PeerCleanups["peer-a"].Reason != "offline" ||
 		string(original.IPsecTransportKey.PublicKey) != "public" ||
 		string(original.IPsecTransportKey.PrivateKey) != "private" ||
 		original.IPsecPortRecord.Range.From != 4500 ||
@@ -78,16 +79,16 @@ func TestCloneLinuxRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	}
 }
 
-func TestCloneLinuxRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
-	original := &linuxRuntimeState{
-		PeerCleanups:      map[string]peerLifecycleCleanupState{},
-		LinkInstances:     map[string]linkInstanceState{},
-		EndpointACLs:      map[string]endpointACL{"empty": {Selectors: []string{}}},
-		BirdInstances:     map[string]*BirdInstanceState{},
-		IPsecReconcile:    &ipsecReconcileState{Desired: []desiredLinkState{}, Actions: []linkActionState{}},
-		FirewallReconcile: &firewallReconcileState{Instances: map[string]*firewallInstanceReconcileStateEntry{}},
+func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
+	original := &RuntimeState{
+		PeerCleanups:      map[string]photonstate.PeerLifecycleCleanupState{},
+		LinkInstances:     map[string]photonstate.LinkInstanceState{},
+		EndpointACLs:      map[string]photonstate.EndpointACL{"empty": {Selectors: []string{}}},
+		BirdInstances:     map[string]*photonstate.BirdInstanceState{},
+		IPsecReconcile:    &photonstate.IPsecReconcileState{Desired: []photonstate.DesiredLinkState{}, Actions: []photonstate.LinkActionState{}},
+		FirewallReconcile: &photonstate.FirewallReconcileState{Instances: map[string]*photonstate.FirewallReconcileInstance{}},
 	}
-	cloned := cloneLinuxRuntimeState(original)
+	cloned := CloneRuntimeState(original)
 	if cloned.PeerCleanups == nil || cloned.LinkInstances == nil || cloned.EndpointACLs == nil ||
 		cloned.EndpointACLs["empty"].Selectors == nil || cloned.BirdInstances == nil ||
 		cloned.IPsecReconcile.Desired == nil || cloned.IPsecReconcile.ActualSAs != nil ||
@@ -95,23 +96,23 @@ func TestCloneLinuxRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 		cloned.FirewallReconcile.Instances == nil {
 		t.Fatalf("nil/empty shape changed: %#v", cloned)
 	}
-	if got := cloneLinuxRuntimeState(nil); got == nil || !reflect.DeepEqual(got, &linuxRuntimeState{}) {
+	if got := CloneRuntimeState(nil); got == nil || !reflect.DeepEqual(got, &RuntimeState{}) {
 		t.Fatalf("nil runtime clone = %#v, want empty runtime", got)
 	}
 }
 
-func TestCloneLinuxRuntimeStateSchemaGuard(t *testing.T) {
+func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
 		"IdentityKeyPath", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
 		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission",
 	}
-	typ := reflect.TypeOf(linuxRuntimeState{})
+	typ := reflect.TypeOf(RuntimeState{})
 	if typ.NumField() != len(want) {
-		t.Fatalf("linuxRuntimeState field count = %d, want %d (%v)", typ.NumField(), len(want), want)
+		t.Fatalf("RuntimeState field count = %d, want %d (%v)", typ.NumField(), len(want), want)
 	}
 	for index, name := range want {
 		if got := typ.Field(index).Name; got != name {
-			t.Fatalf("linuxRuntimeState field %d = %s, want %s", index, got, name)
+			t.Fatalf("RuntimeState field %d = %s, want %s", index, got, name)
 		}
 	}
 }

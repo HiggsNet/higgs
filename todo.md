@@ -1175,6 +1175,12 @@ package dependency: app -> host -> gossip -> state -> zone
           - 删除 `DaemonStateStore` 对 common revision 与 `SnapshotTime` 的重复缓存：revision 始终从唯一 common Store 读取；旧时间字段
             无法覆盖 HostRuntime 的直接提交，不能冒充完整快照时间。common mutation wrapper 只保留与 Linux runtime completion 共用的
             提交顺序锁，不再承担 aggregate read-view 刷新。普通测试最后一个借 legacy projector 构造空 checkpoint 的 helper 同步删除。
+          - Linux current runtime owner 已从 app 拆出：`internal/photonlinux.RuntimeState` 定义平台字段，平台包直接拥有 detached clone、
+            bbolt schema/load/save 与 verified-revision guarded commit；peer cleanup marker 归入 `internal/state` DTO。app 的启动、direct cleanup、
+            recovery、GC 和 daemon completion 均直接调用该 owner，原 app codec/commit/clone 实现及 app clone 测试删除。旧 `stateFile/stateMeta`
+            decoder 仍留在 app 单向 migration 边界，只把解码结果交给新 codec，不提供反向兼容写入。
+            为避免搬包后复制一套字段 clone，IPsec/firewall/routing/BIRD 等 DTO 的 clone 已统一归 `internal/state`，app planner 与完整
+            RuntimeState clone 直接复用；`app/photon/state_clone.go` 整体删除。
 - [x] 按 2026-08-29 架构审计更新 `docs/photon-windows/design.md`：明确 HostRuntime 是唯一 common runtime、
   composition root 持有 Store/平台 runtime、photonclient 只负责未来用户态数据面；撤回迁移报告中提前宣称进入 F、
   client runtime 已定型及下一步直接接 Windows UDP 的文字。代码纠偏和双节点验收完成前不得开始 Windows 专属分支。
@@ -1703,8 +1709,8 @@ package dependency: app -> host -> gossip -> state -> zone
 ## 下一步
 
 1. F0a-F0e 已完成：没有第二个 client runtime；HostRuntime 独占公共 gossip receive/timer/object-pull/event queue，直接持有 common Store/Transport；Linux daemon 不再保留公共协议 executor 或 aggregate state view。
-2. 下一批把当前 Linux runtime state 的 type/clone/codec/commit owner 从 `app/photon` 移到 `internal/photonlinux`，旧 `stateFile` 只留在 app 的单向 migration decoder；不得为搬迁重新建立 aggregate adapter。
-3. Linux runtime owner 边界稳定并通过 race/root smoke 与 Windows compile guard 后，实现 Windows composition root 和真实 UDP adapter；不按文件数量搬迁 Linux CLI/config/test。
+2. Linux runtime state 的 type/clone/codec/commit owner 已迁到 `internal/photonlinux`；app 只保留旧 schema 单向 decoder 和 Linux executable composition，不再实现 current platform codec。
+3. 下一步在不新增 lifecycle wrapper 的前提下审计 `DaemonStateStore` 剩余 live runtime owner：先让唯一 `photonlinux.Runtime` 持有 current runtime state/commit capability，再删除 app 中仅用于转发 runtime read/commit 的部分；完成后实现 Windows composition root 和真实 UDP adapter。
 4. Windows 数据面按共享 UDP/ESP 基础 -> IKEv2 initiator/StrongSwan interop -> Babel/SADR/route authorization -> Wintun pipeline 推进；每个真实 consumer 出现时再提取窄接口。
 5. 随后接 IP Helper address/route ownership、SCM service、named-pipe IPC 和 network-change/rebind；每层验证 restart/adopt/cleanup。
 6. Photon Android 保持独立后续项目；只复用已经由 Windows 真实使用并稳定的用户态协议/packet core，不预建 Android 工程或抽象。

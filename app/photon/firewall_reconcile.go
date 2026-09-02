@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -57,7 +58,7 @@ func (d *DaemonService) reconcileFirewall(ctx context.Context) error {
 	}
 
 	now := d.Sync.now()
-	summary := cloneFirewallReconcileState(runtime.FirewallReconcile)
+	summary := photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile)
 	if summary == nil {
 		summary = &firewallReconcileState{}
 	}
@@ -216,8 +217,8 @@ func firewallReconcileResultEqual(baseACLs map[string]endpointACL, base *firewal
 	if base == nil || next == nil {
 		return base == nil && next == nil
 	}
-	base = cloneFirewallReconcileState(base)
-	next = cloneFirewallReconcileState(next)
+	base = photonstate.CloneFirewallReconcileState(base)
+	next = photonstate.CloneFirewallReconcileState(next)
 	base.LastRunUnix = 0
 	next.LastRunUnix = 0
 	for _, entry := range base.Instances {

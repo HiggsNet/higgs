@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -414,8 +415,8 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 	service := &DaemonService{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
 	common, workspace := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
-	baseBird := cloneBirdInstances(workspace.BirdInstances)
-	baseReconcile := cloneRoutingReconcileState(workspace.RoutingReconcile)
+	baseBird := photonstate.CloneBirdInstances(workspace.BirdInstances)
+	baseReconcile := photonstate.CloneRoutingReconcileState(workspace.RoutingReconcile)
 	workspace.RoutingReconcile.LastRunUnix = 20
 
 	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace.BirdInstances, workspace.RoutingReconcile); err != nil {

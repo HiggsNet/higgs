@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -51,7 +53,7 @@ func newPersistedDaemonStateStore(common *corestate.Store, runtime *linuxRuntime
 		return nil, errors.New("bbolt state store is nil")
 	}
 	return newDaemonStateStore(common, runtime, func(revision corestate.VerifiedRevision, candidate *linuxRuntimeState) error {
-		return commitLinuxRuntime(boltStore, revision, candidate)
+		return photonlinux.CommitRuntimeState(boltStore, revision, candidate)
 	})
 }
 
@@ -61,7 +63,7 @@ func newDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, co
 	}
 	store := &DaemonStateStore{
 		common:        common,
-		runtime:       cloneLinuxRuntimeState(runtime),
+		runtime:       photonlinux.CloneRuntimeState(runtime),
 		commitRuntime: commitRuntime,
 	}
 	return store, nil
@@ -146,19 +148,19 @@ func (s *DaemonStateStore) publishLocalProtocols(ctx context.Context, sourceRevi
 
 	currentRevision := uint64(s.common.VerifiedRevision())
 	s.mu.RLock()
-	currentRuntime := cloneLinuxRuntimeState(s.runtime)
+	currentRuntime := photonlinux.CloneRuntimeState(s.runtime)
 	s.mu.RUnlock()
 	if currentRevision != sourceRevision {
 		return out, errDaemonStateRevisionStale
 	}
 	if runtime != nil && !reflect.DeepEqual(currentRuntime, runtime) {
 		if s.commitRuntime != nil {
-			if err := s.commitRuntime(corestate.VerifiedRevision(sourceRevision), cloneLinuxRuntimeState(runtime)); err != nil {
+			if err := s.commitRuntime(corestate.VerifiedRevision(sourceRevision), photonlinux.CloneRuntimeState(runtime)); err != nil {
 				return out, err
 			}
 		}
 		s.mu.Lock()
-		s.runtime = cloneLinuxRuntimeState(runtime)
+		s.runtime = photonlinux.CloneRuntimeState(runtime)
 		s.mu.Unlock()
 		out.RuntimeCommitted = true
 	}
@@ -183,18 +185,18 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 	defer s.writeMu.Unlock()
 	currentRevision := uint64(s.common.VerifiedRevision())
 	s.mu.RLock()
-	baseRuntime := cloneLinuxRuntimeState(s.runtime)
+	baseRuntime := photonlinux.CloneRuntimeState(s.runtime)
 	s.mu.RUnlock()
 	if currentRevision != sourceRevision {
 		return currentRevision, false, nil
 	}
-	candidate := cloneLinuxRuntimeState(baseRuntime)
+	candidate := photonlinux.CloneRuntimeState(baseRuntime)
 	mutate(candidate)
 	if reflect.DeepEqual(baseRuntime, candidate) {
 		return sourceRevision, false, nil
 	}
 	if s.commitRuntime != nil {
-		if err := s.commitRuntime(corestate.VerifiedRevision(sourceRevision), cloneLinuxRuntimeState(candidate)); err != nil {
+		if err := s.commitRuntime(corestate.VerifiedRevision(sourceRevision), photonlinux.CloneRuntimeState(candidate)); err != nil {
 			return sourceRevision, false, err
 		}
 	}
@@ -206,24 +208,24 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 
 func (s *DaemonStateStore) commitRoutingIfRevision(revision uint64, birdInstances map[string]*BirdInstanceState, reconcile *routingReconcileState) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.BirdInstances = cloneBirdInstances(birdInstances)
-		runtime.RoutingReconcile = cloneRoutingReconcileState(reconcile)
+		runtime.BirdInstances = photonstate.CloneBirdInstances(birdInstances)
+		runtime.RoutingReconcile = photonstate.CloneRoutingReconcileState(reconcile)
 	})
 }
 
 func (s *DaemonStateStore) commitIPsecIfRevision(revision uint64, transportKey *ipsecTransportKeyState, portRecord *ipsecPortRecordState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.IPsecTransportKey = cloneIPsecTransportKeyState(transportKey)
-		runtime.IPsecPortRecord = cloneIPsecPortRecordState(portRecord)
-		runtime.LinkInstances = cloneLinkInstances(linkInstances)
-		runtime.IPsecReconcile = cloneIPsecReconcileState(reconcile)
+		runtime.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(transportKey)
+		runtime.IPsecPortRecord = photonstate.CloneIPsecPortRecordState(portRecord)
+		runtime.LinkInstances = photonstate.CloneLinkInstances(linkInstances)
+		runtime.IPsecReconcile = photonstate.CloneIPsecReconcileState(reconcile)
 	})
 }
 
 func (s *DaemonStateStore) commitFirewallIfRevision(revision uint64, endpointACLs map[string]endpointACL, reconcile *firewallReconcileState) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.EndpointACLs = cloneEndpointACLs(endpointACLs)
-		runtime.FirewallReconcile = cloneFirewallReconcileState(reconcile)
+		runtime.EndpointACLs = photonstate.CloneEndpointACLs(endpointACLs)
+		runtime.FirewallReconcile = photonstate.CloneFirewallReconcileState(reconcile)
 	})
 }
 
@@ -248,7 +250,7 @@ func (s *DaemonStateStore) commitPurgeRuntimeIfRevision(revision uint64, linkIDs
 
 func (s *DaemonStateStore) commitPeerCleanupsIfRevision(revision uint64, cleanups map[string]peerLifecycleCleanupState) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.PeerCleanups = clonePeerCleanups(cleanups)
+		runtime.PeerCleanups = photonstate.ClonePeerLifecycleCleanups(cleanups)
 	})
 }
 
@@ -262,7 +264,7 @@ func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntime
 	defer s.writeMu.Unlock()
 	common := s.common.ReadView()
 	s.mu.RLock()
-	runtime := cloneLinuxRuntimeState(s.runtime)
+	runtime := photonlinux.CloneRuntimeState(s.runtime)
 	s.mu.RUnlock()
 	return common, runtime
 }

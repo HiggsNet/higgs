@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -64,7 +65,7 @@ func (sr *SyncRuntime) ipsecProtocolPlan(verified *corestate.VerifiedState, runt
 	if err != nil {
 		return plan, err
 	}
-	plan.TransportKey = cloneIPsecTransportKeyState(key)
+	plan.TransportKey = photonstate.CloneIPsecTransportKeyState(key)
 	records, err := localIPsecRecords(config, verified, runtime, keyRecord, now)
 	if err != nil {
 		return plan, err

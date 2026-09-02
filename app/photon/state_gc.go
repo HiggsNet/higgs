@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/HiggsNet/photon/internal/photonlinux"
 )
 
 // stateGCPlan lists local runtime state that no current configuration can
@@ -91,10 +93,10 @@ func garbageCollectStateDirect(rt *Runtime, apply bool) (*stateGCPlan, error) {
 	}
 	defer boltStore.Close()
 	defer startup.Common.Close()
-	runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+	runtimeCandidate := photonlinux.CloneRuntimeState(startup.Runtime)
 	plan := buildStateGCPlan(rt.Config, runtimeCandidate.BirdInstances)
 	if apply && applyStateGCPlan(runtimeCandidate, plan) {
-		if err := commitLinuxRuntime(boltStore, startup.Common.VerifiedRevision(), runtimeCandidate); err != nil {
+		if err := photonlinux.CommitRuntimeState(boltStore, startup.Common.VerifiedRevision(), runtimeCandidate); err != nil {
 			return nil, err
 		}
 	}

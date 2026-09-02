@@ -15,6 +15,7 @@ import (
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
@@ -473,7 +474,7 @@ func (p *observerProvider) Bird() (any, error) {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	d.StateStore.mu.RLock()
-	instances := cloneBirdInstances(d.StateStore.runtime.BirdInstances)
+	instances := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
 	lastRoutingError := ""
 	if d.StateStore.runtime.RoutingReconcile != nil {
 		lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError

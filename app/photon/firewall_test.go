@@ -12,6 +12,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observer"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -32,7 +33,7 @@ func TestFirewallReconcileResultEqualityIgnoresRunTimestamps(t *testing.T) {
 			},
 		},
 	}
-	next := cloneFirewallReconcileState(base)
+	next := photonstate.CloneFirewallReconcileState(base)
 	next.LastRunUnix = 200
 	next.Instances["overlay"].LastRunUnix = 200
 	if !firewallReconcileResultEqual(nil, base, nil, next) {
@@ -56,7 +57,7 @@ func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
 	rt := &Runtime{Config: defaultAppConfig()}
 	service := newTestDaemonServiceFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	rev := service.StateStore.Meta().Revision
-	next := cloneFirewallReconcileState(runtime.FirewallReconcile)
+	next := photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile)
 	next.LastRunUnix = 200
 	next.Instances["overlay"].LastRunUnix = 200
 	if err := service.commitFirewallReconcileResult(rev, runtime.EndpointACLs, next); err != nil {

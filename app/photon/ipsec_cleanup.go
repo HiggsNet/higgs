@@ -53,11 +53,11 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 	defer boltStore.Close()
 	defer startup.Common.Close()
 	view := startup.Common.ReadView()
-	runtimeCandidate := cloneLinuxRuntimeState(startup.Runtime)
+	runtimeCandidate := photonlinux.CloneRuntimeState(startup.Runtime)
 	now := rt.Now()
 	if len(runtimeCandidate.LinkInstances) == 0 && !includeOrphans {
 		runtimeCandidate.IPsecReconcile = markIPsecCleanupReconcile(runtimeCandidate.IPsecReconcile, now)
-		if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
+		if err := photonlinux.CommitRuntimeState(boltStore, view.Revision, runtimeCandidate); err != nil {
 			return 0, 0, err
 		}
 		return 0, 0, nil
@@ -90,7 +90,7 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *Runtime, includeOrphans
 	if err != nil {
 		return cleaned, orphans, err
 	}
-	if err := commitLinuxRuntime(boltStore, view.Revision, runtimeCandidate); err != nil {
+	if err := photonlinux.CommitRuntimeState(boltStore, view.Revision, runtimeCandidate); err != nil {
 		return cleaned, orphans, err
 	}
 	return cleaned, orphans, nil

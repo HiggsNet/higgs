@@ -44,8 +44,8 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 	}
 	rev := uint64(common.Revision)
 	verified := common.State
-	baseBird := cloneBirdInstances(runtime.BirdInstances)
-	baseReconcile := cloneRoutingReconcileState(runtime.RoutingReconcile)
+	baseBird := photonstate.CloneBirdInstances(runtime.BirdInstances)
+	baseReconcile := photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile)
 	config := d.Sync.App.Config
 	routingInstances := config.Routing.Instances
 	if len(routingInstances) == 0 {
@@ -94,8 +94,8 @@ func (d *DaemonService) reconcileRouting(ctx context.Context) error {
 		}
 		rev = uint64(common.Revision)
 		verified = common.State
-		baseBird = cloneBirdInstances(runtime.BirdInstances)
-		baseReconcile = cloneRoutingReconcileState(runtime.RoutingReconcile)
+		baseBird = photonstate.CloneBirdInstances(runtime.BirdInstances)
+		baseReconcile = photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile)
 		if runtime.RoutingReconcile == nil {
 			runtime.RoutingReconcile = &routingReconcileState{}
 		}

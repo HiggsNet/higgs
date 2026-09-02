@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -58,49 +59,7 @@ type admissionState = photonstate.AdmissionState
 
 type BirdInstanceState = photonstate.BirdInstanceState
 
-func cloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstanceState {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]*BirdInstanceState, len(in))
-	for id, inst := range in {
-		out[id] = cloneBirdInstance(inst)
-	}
-	return out
-}
-
-func cloneBirdInstance(inst *BirdInstanceState) *BirdInstanceState {
-	if inst == nil {
-		return nil
-	}
-	out := *inst
-	if inst.Overlays != nil {
-		out.Overlays = make([]string, len(inst.Overlays))
-		copy(out.Overlays, inst.Overlays)
-	}
-	return &out
-}
-
 type routingReconcileState = photonstate.RoutingReconcileState
-
-func cloneFirewallReconcileState(in *firewallReconcileState) *firewallReconcileState {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	if in.Instances != nil {
-		out.Instances = make(map[string]*firewallInstanceReconcileStateEntry, len(in.Instances))
-		for id, entry := range in.Instances {
-			if entry == nil {
-				out.Instances[id] = nil
-				continue
-			}
-			copyEntry := *entry
-			out.Instances[id] = &copyEntry
-		}
-	}
-	return &out
-}
 
 type ipsecTransportKeyState = photonstate.IPsecTransportKeyState
 type ipsecPortRecordState = photonstate.IPsecPortRecordState
@@ -118,15 +77,8 @@ type syncPeerState = photonstate.PeerRuntimeState
 type observedGraceAddrState = photonstate.PeerObservedGraceAddrState
 type rejectedDigestState = photonstate.PeerRejectedDigest
 
-// peerLifecycleCleanupState is a local, persisted suppression marker. It is
-// deliberately separate from SyncPeers so cleanup_after can remove the peer
-// cache without allowing still-valid, stale Zone records to recreate data-plane
-// links before the peer has successfully synchronized again.
-type peerLifecycleCleanupState struct {
-	LastActiveUnix int64  `json:"last_active_unix,omitempty"`
-	CleanupUnix    int64  `json:"cleanup_unix"`
-	Reason         string `json:"reason"`
-}
+type peerLifecycleCleanupState = photonstate.PeerLifecycleCleanupState
+type linuxRuntimeState = photonlinux.RuntimeState
 
 type syncConfigFile struct {
 	PeerID                 string           `json:"peer_id"`

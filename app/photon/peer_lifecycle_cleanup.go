@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -149,7 +150,7 @@ func (d *DaemonService) flushPeerLifecycleCleanup() bool {
 	d.StateStore.writeMu.Lock()
 	view := d.StateStore.common.ReadView()
 	d.StateStore.mu.RLock()
-	cleanups := clonePeerCleanups(d.StateStore.runtime.PeerCleanups)
+	cleanups := photonstate.ClonePeerLifecycleCleanups(d.StateStore.runtime.PeerCleanups)
 	d.StateStore.mu.RUnlock()
 	d.StateStore.writeMu.Unlock()
 	if view.State == nil {
