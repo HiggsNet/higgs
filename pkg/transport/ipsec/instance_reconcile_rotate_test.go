@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+func TestStagedInitiateBackoff(t *testing.T) {
+	wants := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 30 * time.Second, 30 * time.Second}
+	for i, want := range wants {
+		if got := stagedInitiateBackoff(i + 1); got != want {
+			t.Fatalf("attempt %d backoff = %s, want %s", i+1, got, want)
+		}
+	}
+}
+
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -82,6 +91,9 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	if inst.StagedGeneration != 2 {
 		t.Fatalf("staged generation = %d, want 2", inst.StagedGeneration)
 	}
+	if inst.StagedAttemptCount != 1 || inst.StagedNextAttempt != now.Add(5*time.Second).Unix() {
+		t.Fatalf("staged retry state = %d/%d, want first attempt with 5s backoff", inst.StagedAttemptCount, inst.StagedNextAttempt)
+	}
 	if inst.StagedIKEName != RuntimeConnectionID(existing.LinkID, 2, existing.TransportKind) {
 		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
 	}
@@ -99,6 +111,84 @@ func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	}
 	if inst.RemoteGeneration != 1 {
 		t.Fatalf("remote generation changed before commit = %d", inst.RemoteGeneration)
+	}
+}
+
+func TestReconcileTestingRotateRetriesWithBoundedBackoff(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-link-r2",
+		InitiatorRole: InitiatorRolePrimary,
+		ContactPoints: []ContactPoint{{
+			AddressID:  "b-public",
+			Address:    "198.51.100.20",
+			Generation: 2,
+			IKEPort:    DefaultIKEPort,
+			NATTPort:   4501,
+		}},
+	}
+	existing := NewLinkInstance(spec, LinkStateConnecting, now.Add(-time.Minute))
+	existing.RemoteGeneration = 1
+	existing.StagedGeneration = 2
+	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedChildSAName = existing.StagedIKEName + "-child"
+	existing.RotatePhase = RotatePhaseTestingNew
+	existing.RotateDeadline = now.Add(time.Minute).Unix()
+	existing.StagedAttemptCount = 1
+	existing.StagedNextAttempt = now.Add(5 * time.Second).Unix()
+	existing.LastTransition = now.Add(-time.Minute).Unix()
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: existing},
+		SAs:       []SAState{{Name: existing.IKEName, Established: true}},
+		Now:       now,
+	})
+
+	if action := firstAction(result, ReconcileActionPrepareRotate); action != nil {
+		t.Fatalf("testing rotation reinitiated before deadline: %+v", action)
+	}
+	action := firstAction(result, ReconcileActionNoop)
+	if action == nil || action.Reason != "staged retry backoff active" {
+		t.Fatalf("actions = %+v, want staged retry backoff noop", result.Actions)
+	}
+	if inst := result.Instances[existing.ID]; inst.LastTransition != existing.LastTransition {
+		t.Fatalf("last transition = %d, want unchanged %d", inst.LastTransition, existing.LastTransition)
+	}
+
+	retryAt := now.Add(5 * time.Second)
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: result.Instances,
+		SAs:       []SAState{{Name: existing.IKEName, Established: true}},
+		Now:       retryAt,
+	})
+	action = firstAction(result, ReconcileActionInitiateRotate)
+	if action == nil || action.Reason != "retry staged sa" {
+		t.Fatalf("actions = %+v, want bounded staged retry", result.Actions)
+	}
+	inst := result.Instances[existing.ID]
+	if inst.StagedAttemptCount != 2 || inst.StagedNextAttempt != retryAt.Add(10*time.Second).Unix() {
+		t.Fatalf("staged retry state = %d/%d, want second attempt with 10s backoff", inst.StagedAttemptCount, inst.StagedNextAttempt)
+	}
+
+	inst.StagedAttemptCount = maxStagedInitiateAttempts
+	inst.StagedNextAttempt = retryAt.Unix()
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: map[string]LinkInstance{existing.ID: inst},
+		SAs:       []SAState{{Name: existing.IKEName, Established: true}},
+		Now:       retryAt.Add(time.Second),
+	})
+	if action := firstAction(result, ReconcileActionInitiateRotate); action != nil {
+		t.Fatalf("rotation exceeded retry limit: %+v", action)
+	}
+	if action := firstAction(result, ReconcileActionNoop); action == nil || action.Reason != "staged retry limit reached" {
+		t.Fatalf("actions = %+v, want staged retry limit noop", result.Actions)
 	}
 }
 

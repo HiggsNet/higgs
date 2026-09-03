@@ -31,6 +31,8 @@ type LinkInstanceState struct {
 	StagedLocalTunnelAddr string         `json:"staged_local_tunnel_addr,omitempty"`
 	StagedPeerTunnelAddr  string         `json:"staged_peer_tunnel_addr,omitempty"`
 	RotateDeadline        int64          `json:"rotate_deadline,omitempty"`
+	StagedAttemptCount    int            `json:"staged_attempt_count,omitempty"`
+	StagedNextAttempt     int64          `json:"staged_next_attempt,omitempty"`
 	LastError             string         `json:"last_error,omitempty"`
 	FailureCount          int            `json:"failure_count,omitempty"`
 	BackoffUntil          int64          `json:"backoff_until,omitempty"`

@@ -33,6 +33,7 @@ const (
 	ReconcileActionTeardown           = "teardown"
 	ReconcileActionNoop               = "noop"
 	ReconcileActionPrepareRotate      = "prepare_rotate"
+	ReconcileActionInitiateRotate     = "initiate_rotate"
 	ReconcileActionCommitRotate       = "commit_rotate"
 	ReconcileActionRollbackRotate     = "rollback_rotate"
 	ReconcileActionCleanupRotate      = "cleanup_rotate"
@@ -53,7 +54,10 @@ const (
 	TakeoverPhaseActive   = "active"
 	TakeoverPhaseCooldown = "cooldown"
 
-	defaultLinkEstablishGrace = 3 * time.Minute
+	defaultLinkEstablishGrace    = 3 * time.Minute
+	maxStagedInitiateAttempts    = 5
+	initialStagedInitiateBackoff = 5 * time.Second
+	maximumStagedInitiateBackoff = 30 * time.Second
 )
 
 type LinkInstance struct {
@@ -84,6 +88,8 @@ type LinkInstance struct {
 	StagedLocalTunnelAddr netip.Addr
 	StagedPeerTunnelAddr  netip.Addr
 	RotateDeadline        int64
+	StagedAttemptCount    int
+	StagedNextAttempt     int64
 	LastError             string
 	FailureCount          int
 	BackoffUntil          int64
@@ -389,6 +395,20 @@ func findStagedSA(states []SAState, inst LinkInstance) SAState {
 
 func rotateTimeout() time.Duration {
 	return 2 * time.Minute
+}
+
+func stagedInitiateBackoff(attemptCount int) time.Duration {
+	if attemptCount < 1 {
+		attemptCount = 1
+	}
+	delay := initialStagedInitiateBackoff
+	for i := 1; i < attemptCount; i++ {
+		delay *= 2
+		if delay >= maximumStagedInitiateBackoff {
+			return maximumStagedInitiateBackoff
+		}
+	}
+	return delay
 }
 
 func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
@@ -775,10 +795,6 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 		r.add(ReconcileActionCleanupRotate, &stagedSpec, &inst, "stale staged generation")
 		return
 	}
-	if inLinkBackoff(existing, now) {
-		r.add(ReconcileActionNoop, &spec, &existing, "rotate backoff active")
-		return
-	}
 	if existing.StagedGeneration == desiredGen {
 		stagedSA := findStagedSA(sas, existing)
 		stagedSpec := rotateSpecForRoleWithGroup(spec, existing.StagedGeneration, initiatorRole, group)
@@ -862,6 +878,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedXFRMIfID = 0
 			inst.StagedLocalTunnelAddr = netip.Addr{}
 			inst.StagedPeerTunnelAddr = netip.Addr{}
+			inst.StagedAttemptCount = 0
+			inst.StagedNextAttempt = 0
 			inst.RotatePhase = RotatePhaseIdle
 			inst.RotateDeadline = 0
 			inst.FailureCount = 0
@@ -892,6 +910,8 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedXFRMIfID = 0
 			inst.StagedLocalTunnelAddr = netip.Addr{}
 			inst.StagedPeerTunnelAddr = netip.Addr{}
+			inst.StagedAttemptCount = 0
+			inst.StagedNextAttempt = 0
 			inst.RotatePhase = RotatePhaseRollback
 			inst.RotateDeadline = 0
 			inst.LastError = "staged sa not established by deadline"
@@ -902,11 +922,46 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			r.add(ReconcileActionRollbackRotate, &stagedSpec, &inst, "staged sa deadline exceeded")
 			return
 		}
+		if inLinkBackoff(existing, now) {
+			r.add(ReconcileActionNoop, &stagedSpec, &existing, "rotate backoff active")
+			return
+		}
+		if existing.RotatePhase == RotatePhasePreparing {
+			r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "resume staged sa preparation")
+			return
+		}
+		if !IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
+			r.add(ReconcileActionNoop, &stagedSpec, &existing, "awaiting staged sa")
+			return
+		}
 		inst := existing
-		inst.RotatePhase = RotatePhaseTestingNew
+		// State written by older versions has no staged attempt metadata. Treat
+		// the already prepared connection as the first attempt and wait before
+		// retrying it, so an upgrade cannot immediately recreate the old loop.
+		if inst.StagedAttemptCount == 0 {
+			inst.StagedAttemptCount = 1
+			inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(inst.StagedAttemptCount)).Unix()
+			r.Instances[id] = inst
+			r.add(ReconcileActionNoop, &stagedSpec, &inst, "staged retry backoff active")
+			return
+		}
+		if inst.StagedAttemptCount >= maxStagedInitiateAttempts {
+			r.add(ReconcileActionNoop, &stagedSpec, &inst, "staged retry limit reached")
+			return
+		}
+		if inst.StagedNextAttempt != 0 && now.Before(time.Unix(inst.StagedNextAttempt, 0)) {
+			r.add(ReconcileActionNoop, &stagedSpec, &inst, "staged retry backoff active")
+			return
+		}
+		inst.StagedAttemptCount++
+		inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(inst.StagedAttemptCount)).Unix()
 		inst.LastTransition = now.Unix()
 		r.Instances[id] = inst
-		r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "awaiting staged sa")
+		r.add(ReconcileActionInitiateRotate, &stagedSpec, &inst, "retry staged sa")
+		return
+	}
+	if inLinkBackoff(existing, now) {
+		r.add(ReconcileActionNoop, &spec, &existing, "rotate backoff active")
 		return
 	}
 	inst := existing
@@ -920,6 +975,10 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.StagedPeerTunnelAddr = stagedSpec.PeerTunnelAddr
 	inst.RotatePhase = RotatePhasePreparing
 	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+	if IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
+		inst.StagedAttemptCount = 1
+		inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(inst.StagedAttemptCount)).Unix()
+	}
 	inst.LastTransition = now.Unix()
 	r.Instances[id] = inst
 	r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "remote port generation changed")
@@ -949,6 +1008,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 		inst.StagedXFRMIfID = 0
 		inst.StagedLocalTunnelAddr = netip.Addr{}
 		inst.StagedPeerTunnelAddr = netip.Addr{}
+		inst.StagedAttemptCount = 0
+		inst.StagedNextAttempt = 0
 		inst.RotatePhase = RotatePhaseDualRunning
 		inst.RotateDeadline = 0
 		inst.LastTransition = now.Unix()
@@ -971,6 +1032,8 @@ func (r *ReconcileResult) clearStagedIfIdle(existing LinkInstance, sas []SAState
 	inst.StagedXFRMIfID = 0
 	inst.StagedLocalTunnelAddr = netip.Addr{}
 	inst.StagedPeerTunnelAddr = netip.Addr{}
+	inst.StagedAttemptCount = 0
+	inst.StagedNextAttempt = 0
 	inst.RotatePhase = RotatePhaseIdle
 	inst.RotateDeadline = 0
 	r.Instances[existing.ID] = inst
@@ -1338,6 +1401,15 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			_ = ipsec.UnloadConnection(ctx, action.Instance.IKEName)
 		}
 		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
+	case ReconcileActionInitiateRotate:
+		if action.Spec == nil {
+			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
+		}
+		plan := ApplyPlan{}
+		if err := InitiateTransportChild(ctx, ipsec, *action.Spec, &plan); err != nil {
+			return plan, err
+		}
+		return plan, nil
 	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)

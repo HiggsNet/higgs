@@ -101,3 +101,19 @@ func TestDaemonIPsecRotateCutoverReadyUsesHealthManager(t *testing.T) {
 		t.Fatalf("nil health readiness = %#v, want nil", got)
 	}
 }
+
+func TestLinkInstanceConversionPreservesStagedRetryState(t *testing.T) {
+	input := ipsec.LinkInstance{
+		ID:                 "link-a",
+		StagedAttemptCount: 3,
+		StagedNextAttempt:  1717171732,
+	}
+	persisted := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{input.ID: input})
+	if got := persisted[input.ID]; got.StagedAttemptCount != input.StagedAttemptCount || got.StagedNextAttempt != input.StagedNextAttempt {
+		t.Fatalf("persisted staged retry state = %d/%d", got.StagedAttemptCount, got.StagedNextAttempt)
+	}
+	restored := linkInstancesToIPsec(persisted)[input.ID]
+	if restored.StagedAttemptCount != input.StagedAttemptCount || restored.StagedNextAttempt != input.StagedNextAttempt {
+		t.Fatalf("restored staged retry state = %d/%d", restored.StagedAttemptCount, restored.StagedNextAttempt)
+	}
+}
