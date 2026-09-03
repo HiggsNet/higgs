@@ -39,9 +39,17 @@ type GossipRuntimeLog struct {
 	Fields map[string]any
 }
 
+func cloneGossipRuntimeConfig(config GossipRuntimeConfig) GossipRuntimeConfig {
+	config.Discovery.Bootstrap = cloneBootstrapPeers(config.Discovery.Bootstrap)
+	config.Discovery.BootstrapPeers = append([]string(nil), config.Discovery.BootstrapPeers...)
+	config.Discovery.SourceOrder = append([]string(nil), config.Discovery.SourceOrder...)
+	return config
+}
+
 func (runtime *Runtime) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
-	if runtime != nil && runtime.gossipConfig.Log != nil {
-		runtime.gossipConfig.Log(GossipRuntimeLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
+	config := runtime.GossipConfig()
+	if config.Log != nil {
+		config.Log(GossipRuntimeLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
 	}
 }
 
@@ -72,7 +80,7 @@ func (runtime *Runtime) gossipStateView() GossipStateView {
 		Loaded:       true,
 		ManagedZone:  view.State.ManagedZone,
 		Digests:      corestate.ZoneDigests(view.State.Network),
-		SenderPeerID: runtime.gossipConfig.PeerID,
+		SenderPeerID: runtime.GossipConfig().PeerID,
 	}
 }
 
@@ -106,7 +114,7 @@ func (runtime *Runtime) applyGossipSnapshots(
 			runtime.logGossip("debug", "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 			continue
 		}
-		limits := runtime.gossipConfig.Limits
+		limits := runtime.GossipConfig().Limits
 		if limits.MaxZones <= 0 || limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
 			limits = corestate.DefaultSyncLimits()
 		}

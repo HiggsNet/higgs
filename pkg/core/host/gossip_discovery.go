@@ -56,11 +56,12 @@ func (runtime *Runtime) GossipDiscoveryInput(suppressed map[string]bool) GossipD
 	if runtime == nil {
 		return input
 	}
-	input.LocalPeerID = runtime.gossipConfig.PeerID
-	input.Bootstrap = cloneBootstrapPeers(runtime.gossipConfig.Discovery.Bootstrap)
-	input.BootstrapPeers = append([]string(nil), runtime.gossipConfig.Discovery.BootstrapPeers...)
-	input.EndpointGrace = runtime.gossipConfig.Discovery.EndpointGrace
-	input.SourceOrder = append([]string(nil), runtime.gossipConfig.Discovery.SourceOrder...)
+	config := runtime.GossipConfig()
+	input.LocalPeerID = config.PeerID
+	input.Bootstrap = config.Discovery.Bootstrap
+	input.BootstrapPeers = config.Discovery.BootstrapPeers
+	input.EndpointGrace = config.Discovery.EndpointGrace
+	input.SourceOrder = config.Discovery.SourceOrder
 	if runtime.gossipState == nil {
 		return input
 	}

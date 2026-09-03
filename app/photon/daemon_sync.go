@@ -80,7 +80,7 @@ func (d *Daemon) EnableEventLoopSync(clock corehost.Clock) {
 		}
 	}
 	if d.hostRuntime == nil {
-		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipHostRuntimeConfig(d.GossipConfig))
+		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipHostRuntimeConfig(d.currentGossipConfig()))
 		return
 	}
 	d.hostRuntime.ResetScheduler(clock)

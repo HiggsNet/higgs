@@ -43,7 +43,7 @@ Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是�
 | `WindowsDriver` | `internal/photonwindows` 后续真实平台实现 | 只按真实调用点增加 API，不要求与 Linux 方法对称 |
 | `WindowsState` | Windows 平台持久分区 | 只在有真实跨重启数据时增加字段 |
 | `BoltStore` | `pkg/core/state.BoltStore` | 每进程唯一 bbolt handle/事务/关闭边界 |
-| 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有 AppContext、gossip config/transport 和注入依赖 |
+| 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有 AppContext；GossipDriver 持有 detached 协议配置和唯一 transport/address book |
 | `AppContext` | 原 `app/photon.Runtime` | 已改名；只承载 CLI/config/state-path/clock，不是产品 Runtime |
 | 删除 | `app/photon.DaemonStateStore` | 迁移期 common/Linux 顺序协调器，不属于终态 |
 

@@ -20,7 +20,7 @@ func TestNewDaemonDefaultsInterval(t *testing.T) {
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
-	if service.App == nil || service.GossipConfig == nil {
+	if service.App == nil || service.currentGossipConfig() == nil {
 		t.Fatal("daemon app or gossip config is nil")
 	}
 }
@@ -257,8 +257,8 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
 		t.Fatalf("ipsec reconcile after reload = %+v, want create", latest.IPsecReconcile)
 	}
-	if len(service.App.Config.IPsec.LinkGroups) != 1 || service.GossipConfig.PeerID != config.PeerID {
-		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, service.GossipConfig)
+	if current := service.currentGossipConfig(); len(service.App.Config.IPsec.LinkGroups) != 1 || current.PeerID != config.PeerID {
+		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, current)
 	}
 }
 

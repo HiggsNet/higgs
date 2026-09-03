@@ -87,7 +87,7 @@ func NewRuntime(clock Clock, eventBuffer int, gossipState GossipStateStore, goss
 		Gossip:           gossip.NewEngine(),
 		Observability:    observability.NewPeerObservabilityStore(DefaultPeerObservabilityLimit, DefaultPeerObservabilityTTL),
 		gossipState:      gossipState,
-		gossipConfig:     gossipConfig,
+		gossipConfig:     cloneGossipRuntimeConfig(gossipConfig),
 		events:           make(chan Event, eventBuffer),
 		gossipChunks:     gossip.NewChunkAssemblyStore(),
 		gossipSentChunks: gossip.NewSentChunkCache(),
@@ -108,6 +108,32 @@ func (runtime *Runtime) PendingEventCount() int {
 		return 0
 	}
 	return len(runtime.events)
+}
+
+// GossipConfig returns a detached snapshot of the protocol configuration
+// currently owned by Runtime.
+func (runtime *Runtime) GossipConfig() GossipRuntimeConfig {
+	if runtime == nil {
+		return GossipRuntimeConfig{}
+	}
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	return cloneGossipRuntimeConfig(runtime.gossipConfig)
+}
+
+// ReplaceGossipConfig atomically replaces protocol/discovery configuration
+// during a daemon-controlled reload.
+func (runtime *Runtime) ReplaceGossipConfig(config GossipRuntimeConfig) error {
+	if runtime == nil {
+		return ErrRuntimeStopped
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.stopped {
+		return ErrRuntimeStopped
+	}
+	runtime.gossipConfig = cloneGossipRuntimeConfig(config)
+	return nil
 }
 
 // PostGossip enqueues an external protocol event without blocking. Producers

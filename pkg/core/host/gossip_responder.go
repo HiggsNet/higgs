@@ -91,7 +91,7 @@ func (runtime *Runtime) buildGossipSnapshotChunks(peerID string, snapshot *cores
 	if _, err := rand.Read(transferID); err != nil {
 		return nil, fmt.Errorf("create gossip chunk transfer id: %w", err)
 	}
-	chunks, err := gossip.BuildZoneSnapshotChunks(snapshot, budget, runtime.gossipConfig.PeerID, transferID)
+	chunks, err := gossip.BuildZoneSnapshotChunks(snapshot, budget, runtime.GossipConfig().PeerID, transferID)
 	if err != nil {
 		return nil, err
 	}

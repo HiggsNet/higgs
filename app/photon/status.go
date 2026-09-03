@@ -106,9 +106,9 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	}
 	peerID := ""
 	listenAddr := ""
-	if d.GossipConfig != nil {
-		peerID = d.GossipConfig.PeerID
-		listenAddr = d.GossipConfig.ListenAddr
+	if config := d.currentGossipConfig(); config != nil {
+		peerID = config.PeerID
+		listenAddr = config.ListenAddr
 	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,

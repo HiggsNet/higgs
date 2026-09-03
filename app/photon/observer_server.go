@@ -213,7 +213,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	}
 	now := d.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.GossipConfig, observabilitySnapshots, now))
+	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.currentGossipConfig(), observabilitySnapshots, now))
 	if peerFilter != "" {
 		for _, peer := range peers.Peers {
 			if peer.PeerID == peerFilter {

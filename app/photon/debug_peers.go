@@ -82,5 +82,5 @@ func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
 	if view.State == nil {
 		return nil
 	}
-	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.GossipConfig, d.peerObservabilitySnapshots(), d.now()))
+	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.currentGossipConfig(), d.peerObservabilitySnapshots(), d.now()))
 }

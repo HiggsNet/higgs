@@ -233,7 +233,7 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
 	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.GossipConfig.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	srv.daemon.App.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -333,8 +333,8 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
 	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.GossipConfig.PeerID = "node-a.catofes."
-	srv.daemon.GossipConfig.Bootstrap = []syncConfigPeer{
+	srv.daemon.App.Config.PeerID = "node-a.catofes."
+	srv.daemon.App.Config.Bootstrap = []syncConfigPeer{
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
@@ -377,7 +377,7 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
 	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.GossipConfig.PeerID = "node-a.catofes."
+	srv.daemon.App.Config.PeerID = "node-a.catofes."
 	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()

@@ -31,7 +31,6 @@ import (
 
 type Daemon struct {
 	App                    *AppContext
-	GossipConfig           *syncConfigFile
 	Interval               time.Duration
 	ControlSocketPath      string
 	Events                 chan daemonEvent
@@ -171,7 +170,6 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *sy
 	hostRuntime := corehost.NewRuntime(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config))
 	d := &Daemon{
 		App:               rt,
-		GossipConfig:      config,
 		Interval:          interval,
 		ControlSocketPath: socketPath,
 		Events:            make(chan daemonEvent, 64),
@@ -240,7 +238,7 @@ func (d *Daemon) configureHealthManager() {
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
-	if d == nil || d.StateStore == nil || d.GossipConfig == nil {
+	if d == nil || d.StateStore == nil || d.currentGossipConfig() == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	if initial := d.StateStore.common.ReadView(); initial.State == nil {
@@ -306,7 +304,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer func() { d.health.asyncRunning = false }()
 	}
 	startFields := map[string]any{
-		"peer_id":  d.GossipConfig.PeerID,
+		"peer_id":  d.currentGossipConfig().PeerID,
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
 	}
@@ -453,7 +451,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 							return err
 						}
 					}
-					interval := d.GossipConfig.ReflectorInterval
+					interval := d.currentGossipConfig().ReflectorInterval
 					if interval <= 0 {
 						interval = 5 * time.Minute
 					}
@@ -765,7 +763,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.GossipConfig, d.now(), request.Verbose))
+		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.currentGossipConfig(), d.now(), request.Verbose))
 		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common, _ := d.StateStore.readCommonAndRuntime()
@@ -773,7 +771,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.GossipConfig, d.peerObservabilitySnapshots(), d.now()), request.Zone)
+		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.currentGossipConfig(), d.peerObservabilitySnapshots(), d.now()), request.Zone)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return
@@ -1081,7 +1079,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if request.Zone != "" {
 			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, zone.ZonePath(request.Zone), d.now())}
 		} else {
-			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, d.GossipConfig, d.now())
+			impacts = AllRevocationImpact(view.State.Network, d.StateStore.runtime.LinkInstances, view.Gossip, d.currentGossipConfig(), d.now())
 		}
 		d.StateStore.mu.RUnlock()
 		d.StateStore.writeMu.Unlock()
@@ -1322,7 +1320,10 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	}
 	d.App.Config = config
 	d.App.StatePath = statePath
-	d.GossipConfig = syncConfig
+	if err := d.hostRuntime.ReplaceGossipConfig(gossipHostRuntimeConfig(syncConfig)); err != nil {
+		_ = linuxRuntime.Close()
+		return err
+	}
 	if err := d.installLinuxRuntime(linuxRuntime); err != nil {
 		return err
 	}
@@ -1422,7 +1423,7 @@ func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now t
 func (d *Daemon) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
 	result, err := d.StateStore.ImportCommonRecovery(context.Background(), corestate.RecoveryImport{
 		Snapshot: snapshot,
-		Limits:   syncLimits(d.GossipConfig),
+		Limits:   syncLimits(d.currentGossipConfig()),
 	}, d.now())
 	if err != nil {
 		return nil, 0, err

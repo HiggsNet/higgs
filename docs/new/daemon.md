@@ -84,7 +84,7 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 | 字段 | 类型 | 作用 |
 |------|------|------|
 | `App` | `*AppContext` | config、state path、clock 等应用上下文；不是产品 Runtime |
-| `GossipConfig` | `*syncConfigFile` | GossipDriver 的固定配置输入 |
+| `hostRuntime` | `*corehost.Runtime` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
 | `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
 | `StateStore` | `*DaemonStateStore` | 迁移期 common/Linux 顺序协调器，最终删除 |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |

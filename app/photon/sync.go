@@ -89,7 +89,7 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	defer boltStore.Close()
-	config := service.GossipConfig
+	config := service.currentGossipConfig()
 	logger := newAppLogger(config)
 	transport, err := service.openGossipTransport()
 	if err != nil {
@@ -143,7 +143,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	service.updateDiscoveredPeers()
-	logger := newAppLogger(service.GossipConfig)
+	logger := newAppLogger(service.currentGossipConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
 	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
@@ -240,8 +240,12 @@ func (e *syncPendingZonesError) PendingZones() []string {
 }
 
 func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
-	deps := defaultSyncTransportDeps(d.GossipConfig)
-	listenAddr := d.GossipConfig.ListenAddr
+	config := d.currentGossipConfig()
+	if config == nil {
+		return nil, errors.New("gossip configuration is not initialized")
+	}
+	deps := defaultSyncTransportDeps(config)
+	listenAddr := config.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
 	}
@@ -249,7 +253,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := gossip.NewTransport(gossipTransportConfig(d.GossipConfig, deps, d.now), datagram)
+	transport, err := gossip.NewTransport(gossipTransportConfig(config, deps, d.now), datagram)
 	if err != nil {
 		_ = datagram.Close()
 		return nil, err
@@ -286,9 +290,15 @@ func listenPortFromAddr(addr string) uint16 {
 }
 
 func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	config := d.GossipConfig
+	var config *syncConfigFile
+	if d != nil && d.App != nil && d.App.Config != nil {
+		config = syncConfigFromAppConfig(d.App.Config, verified)
+	}
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || autoJoinPendingVerified(verified) {
 		return nil, nil
+	}
+	if config == nil {
+		return nil, errors.New("gossip configuration is not initialized")
 	}
 	if config != nil && config.DisableEndpointPublish {
 		return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{

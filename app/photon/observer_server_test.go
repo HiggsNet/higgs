@@ -32,9 +32,8 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	d := &Daemon{
-		StateStore:   newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
-		GossipConfig: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
-		App: &AppContext{Config: &appConfig{Observer: observerConfig{
+		StateStore: newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
+		App: &AppContext{Config: &appConfig{PeerID: "test-node", ListenAddr: "127.0.0.1:33434", Observer: observerConfig{
 			Enabled:  true,
 			BindAddr: "127.0.0.1",
 			Port:     port,

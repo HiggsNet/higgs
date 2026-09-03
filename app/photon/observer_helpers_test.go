@@ -16,9 +16,10 @@ import (
 func newTestObserverServer() *observerServer {
 	store := newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
 	d := &Daemon{
-		StateStore:   store,
-		GossipConfig: &syncConfigFile{PeerID: "test-node", ListenAddr: "127.0.0.1:33434"},
-		App:          &AppContext{Config: &appConfig{}},
+		StateStore: store,
+		App: &AppContext{Config: &appConfig{
+			PeerID: "test-node", ListenAddr: "127.0.0.1:33434",
+		}},
 	}
 	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store.common, corehost.GossipRuntimeConfig{})
 	cfg := defaultObserverConfig()

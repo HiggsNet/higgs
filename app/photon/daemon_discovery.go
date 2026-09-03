@@ -11,12 +11,51 @@ import (
 // selection, endpoint ordering, checkpoint patches and address-book updates
 // are common runtime responsibilities.
 func (d *Daemon) updateDiscoveredPeers() {
-	if d == nil || d.GossipConfig == nil || d.StateStore == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
+	if d == nil || d.StateStore == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
 		return
 	}
 	if err := d.hostRuntime.RefreshGossipDiscovery(context.Background(), d.currentGossipSuppressions(), d.now(), d.hostRuntime.Transport()); err != nil {
 		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
 	}
+}
+
+// currentGossipConfig derives app/platform gossip settings from the current
+// app config and verified identity. Protocol execution keeps its own detached
+// configuration inside host.Runtime.
+func (d *Daemon) currentGossipConfig() *syncConfigFile {
+	if d == nil || d.App == nil || d.App.Config == nil {
+		return nil
+	}
+	config := syncConfigFromAppConfig(d.App.Config, nil)
+	if d.hostRuntime != nil {
+		driverConfig := d.hostRuntime.GossipConfig()
+		if driverConfig.PeerID != "" {
+			config.PeerID = driverConfig.PeerID
+		}
+		if driverConfig.Limits.MaxZones > 0 {
+			config.MaxSyncZones = driverConfig.Limits.MaxZones
+		}
+		if driverConfig.Limits.MaxRecords > 0 {
+			config.MaxSyncRecords = driverConfig.Limits.MaxRecords
+		}
+		if len(driverConfig.Discovery.BootstrapPeers) > 0 {
+			config.Bootstrap = make([]syncConfigPeer, 0, len(driverConfig.Discovery.BootstrapPeers))
+			for _, peerID := range driverConfig.Discovery.BootstrapPeers {
+				peer := syncConfigPeer{ID: peerID}
+				if addr := driverConfig.Discovery.Bootstrap[peerID]; addr != nil {
+					peer.Addr = addr.String()
+				}
+				config.Bootstrap = append(config.Bootstrap, peer)
+			}
+		}
+		if driverConfig.Discovery.EndpointGrace > 0 {
+			config.EndpointGrace = driverConfig.Discovery.EndpointGrace
+		}
+		if len(driverConfig.Discovery.SourceOrder) > 0 {
+			config.EndpointSourceOrder = append([]string(nil), driverConfig.Discovery.SourceOrder...)
+		}
+	}
+	return config
 }
 
 func (d *Daemon) currentGossipSuppressions() map[string]bool {

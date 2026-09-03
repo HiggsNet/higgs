@@ -139,7 +139,7 @@ func applyPeerLifecycleCleanup(network *zone.NetworkState, peers map[string]core
 }
 
 func (d *Daemon) flushPeerLifecycleCleanup() bool {
-	if d == nil || d.StateStore == nil || d.GossipConfig == nil {
+	if d == nil || d.StateStore == nil || d.currentGossipConfig() == nil {
 		return false
 	}
 	cfg := inspect.PeerLifecycleConfig{}

@@ -42,7 +42,7 @@ Daemon
 
 - [x] 将目标所有权、`CommonRuntime` 历史含义、State/Observation 持久化规则写入设计文档。
 - [x] 将 `DaemonService` 直接改名并收敛为唯一顶层 `Daemon`，没有在外面增加 supervisor 或兼容 alias。
-- [x] 删除 `SyncRuntime`：Daemon 直接持有 AppContext、gossip config/transport 和测试注入依赖，clock/logger 直接使用真实 owner。
+- [x] 删除 `SyncRuntime`：Daemon 直接持有 AppContext，clock/logger 使用真实 owner；gossip transport/config 随后继续归回 GossipDriver。
 - [x] 将 `app/photon.Runtime` 改名为 `AppContext`，明确它只承载 CLI/config/state-path/clock，不再冒充产品 Runtime。
 - [ ] 将 `pkg/core/host.Runtime` 的对外概念收敛为 GossipDriver/GossipHost；先整理职责和调用关系，再决定是否直接重命名 Go 类型。
 - [ ] 将 `internal/photonlinux.Runtime` 收敛为 LinuxDriver；保留具体 Linux API，不增加与 Windows 强行对称的公共接口。
@@ -51,7 +51,8 @@ Daemon
 
 - [ ] GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability。
 - [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 HostRuntime 持有。
-- [ ] 拆分 `syncConfigFile`：协议/transport/discovery 参数进入 canonical GossipDriver config，日志输出和本机 endpoint 发布策略留在 app/platform composition；随后删除 `Daemon.GossipConfig`，不增加 app 级 wrapper。
+- [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 HostRuntime 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
+- [ ] 继续缩减临时 `syncConfigFile` 输入类型：日志输出和本机 endpoint 发布策略明确留在 app/platform composition，避免再次混入协议 config。
 - [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 HostRuntime completion。
 - [ ] 审计剩余平台异步 completion；全部迁回 Daemon，安全 deny-first 仍立即处理。
 - [ ] 保持一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 不复制协议 executor。

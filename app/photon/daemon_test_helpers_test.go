@@ -49,6 +49,9 @@ func newTestDaemonFromOwners(
 	config *syncConfigFile,
 	interval time.Duration,
 ) *Daemon {
+	if rt != nil && rt.Config == nil {
+		rt.Config = testAppConfigFromSyncConfig(config)
+	}
 	if verified == nil {
 		verified = &corestate.VerifiedState{}
 	}
@@ -98,6 +101,34 @@ func newTestDaemonFromOwners(
 	dryRun := &ipsec.DryRunDriver{}
 	installTestIPsecDrivers(service, dryRun, dryRun)
 	return service
+}
+
+func testAppConfigFromSyncConfig(source *syncConfigFile) *appConfig {
+	target := &appConfig{}
+	if source == nil {
+		return target
+	}
+	target.PeerID = source.PeerID
+	target.ListenAddr = source.ListenAddr
+	target.Bootstrap = append([]syncConfigPeer(nil), source.Bootstrap...)
+	target.MaxMessageBytes = source.MaxMessageBytes
+	target.MaxSyncZones = source.MaxSyncZones
+	target.MaxSyncRecords = source.MaxSyncRecords
+	target.LogLevel = source.LogLevel
+	target.Log.Mode = source.LogMode
+	target.Log.File = source.LogFile
+	target.AdvertiseAddrs = append([]string(nil), source.AdvertiseAddrs...)
+	target.Reflectors = append([]string(nil), source.Reflectors...)
+	target.ReflectorInterval = source.ReflectorInterval
+	target.ReflectorTimeout = source.ReflectorTimeout
+	target.EndpointTTL = source.EndpointTTL
+	target.EndpointRefresh = source.EndpointRefresh
+	target.EndpointGrace = source.EndpointGrace
+	target.PublishEndpoints = !source.DisableEndpointPublish
+	target.EndpointDiscovery = source.EndpointDiscovery
+	target.EndpointSourceOrder = append([]string(nil), source.EndpointSourceOrder...)
+	target.FilterPrivateIPv4 = source.FilterPrivateIPv4
+	return target
 }
 
 func installTestIPsecDrivers(service *Daemon, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
