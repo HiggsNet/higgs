@@ -41,7 +41,7 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 		t.Fatalf("NewAppContext: %v", err)
 	}
 	verified, _, _, _ := buildTestDaemonOwners(t)
-	config := syncConfigFromAppConfig(rt.Config, verified)
+	config := gossipStartupConfigFromAppConfig(rt.Config, verified)
 	if config.PeerID != string(verified.ManagedZone) {
 		t.Fatalf("PeerID = %q, want managed zone default %q", config.PeerID, verified.ManagedZone)
 	}
@@ -49,19 +49,19 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}
-	if !debugLogEnabled(config) {
+	if !debugLogEnabled(rt.Config) {
 		t.Fatalf("config log.level=debug should enable debug logs")
 	}
-	if config.LogMode != "stderr+file" || config.LogFile != filepath.Join(dir, "photon.log") {
-		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", config.LogMode, config.LogFile, filepath.Join(dir, "photon.log"))
+	if rt.Config.Log.Mode != "stderr+file" || rt.Config.Log.File != filepath.Join(dir, "photon.log") {
+		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", rt.Config.Log.Mode, rt.Config.Log.File, filepath.Join(dir, "photon.log"))
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "info")
-	if debugLogEnabled(config) {
+	if debugLogEnabled(rt.Config) {
 		t.Fatalf("PHOTON_LOG_LEVEL should override config log.level")
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "debug")
-	config.LogLevel = "info"
-	if !debugLogEnabled(config) {
+	rt.Config.LogLevel = "info"
+	if !debugLogEnabled(rt.Config) {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
 	}
 }

@@ -321,7 +321,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
 	service := newTestDaemonFromOwners(rootRT, rootState.State, rootState.Gossip, rootRuntime,
-		&syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&gossipStartupConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -342,7 +342,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	catofesKey := &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}
 	service = newTestDaemonFromOwners(rootRT, &corestate.VerifiedState{Network: zone.NewNetworkState()},
 		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
-		&syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&gossipStartupConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{
 		Type:       daemonEventJoinAccept,
 		JoinBundle: result.JoinBundle,
@@ -410,7 +410,7 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
-	service := newDaemonWithStore(rt, stateStore, &syncConfigFile{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	service := newDaemonWithStore(rt, stateStore, &gossipStartupConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -457,7 +457,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
 	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime,
-		&syncConfigFile{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&gossipStartupConfig{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -469,7 +469,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	}
 	service = newTestDaemonFromOwners(rt, &corestate.VerifiedState{Network: zone.NewNetworkState()},
 		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
-		&syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&gossipStartupConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
 		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
 	}
@@ -599,14 +599,12 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	runtime.Admission = nil
 	now := time.Unix(7250, 0)
 	rt := &AppContext{
+		Config:    defaultAppConfig(),
 		StatePath: filepath.Join(dir, "photon.db"),
 		Clock:     func() time.Time { return now },
 	}
-	config := &syncConfigFile{
-		PeerID:                 "node-b.catofes.",
-		ListenAddr:             "127.0.0.1:0",
-		DisableEndpointPublish: true,
-	}
+	rt.Config.PublishEndpoints = false
+	config := &gossipStartupConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
 	service := newTestDaemonFromOwners(
 		rt, verified, &corestate.GossipCheckpoint{}, runtime, config, time.Second,
 	)
@@ -647,14 +645,12 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "198.51.100.20:4242"
-	config.AdvertiseAddrs = []string{"198.51.100.20:4242"}
-	config.EndpointRefresh = 30 * time.Minute
-	config.EndpointTTL = time.Hour
-
 	now := time.Unix(1000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	appConfig.EndpointRefresh = 30 * time.Minute
+	appConfig.EndpointTTL = time.Hour
 	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),

@@ -95,7 +95,7 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 	if err != nil {
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
-	syncConfig := syncConfigFromAppConfig(config, startup.Common.ReadView().State)
+	syncConfig := gossipStartupConfigFromAppConfig(config, startup.Common.ReadView().State)
 	service := newDaemonWithStore(rt, stateStore, syncConfig, time.Second)
 	installTestIPsecDrivers(service, &ipsec.DryRunDriver{}, &ipsec.DryRunDriver{})
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")

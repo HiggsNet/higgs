@@ -31,6 +31,8 @@ Daemon 和 GossipDriver 各自拥有队列：GossipDriver 的队列只排序 pac
 
 Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是所有平台必须具备的公共能力。Linux 可安装 healthDriver（manager、spool、运行标志和 Linux prober），Android 可以完全不创建它；同理 HTTP observer 只在需要的平台 composition 中启动。Gossip transport/address book 只由 GossipDriver 持有，Daemon 不保存第二份 transport 指针。
 
+`gossipStartupConfig` 不是另一个配置 owner，只是 composition root 从 AppConfig 与 verified identity 生成的短生命周期构造输入；GossipDriver 创建后持有 detached protocol config。日志、reflector 和本机 endpoint 发布策略属于 app/platform composition，不复制进该输入。
+
 ## 2. 名称与当前实现
 
 | 目标名称 | 当前实现 | 处理方式 |

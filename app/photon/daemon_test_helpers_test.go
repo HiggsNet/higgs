@@ -46,11 +46,11 @@ func newTestDaemonFromOwners(
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *linuxRuntimeState,
-	config *syncConfigFile,
+	config *gossipStartupConfig,
 	interval time.Duration,
 ) *Daemon {
 	if rt != nil && rt.Config == nil {
-		rt.Config = testAppConfigFromSyncConfig(config)
+		rt.Config = testAppConfigFromGossipStartup(config)
 	}
 	if verified == nil {
 		verified = &corestate.VerifiedState{}
@@ -103,8 +103,8 @@ func newTestDaemonFromOwners(
 	return service
 }
 
-func testAppConfigFromSyncConfig(source *syncConfigFile) *appConfig {
-	target := &appConfig{}
+func testAppConfigFromGossipStartup(source *gossipStartupConfig) *appConfig {
+	target := defaultAppConfig()
 	if source == nil {
 		return target
 	}
@@ -114,20 +114,6 @@ func testAppConfigFromSyncConfig(source *syncConfigFile) *appConfig {
 	target.MaxMessageBytes = source.MaxMessageBytes
 	target.MaxSyncZones = source.MaxSyncZones
 	target.MaxSyncRecords = source.MaxSyncRecords
-	target.LogLevel = source.LogLevel
-	target.Log.Mode = source.LogMode
-	target.Log.File = source.LogFile
-	target.AdvertiseAddrs = append([]string(nil), source.AdvertiseAddrs...)
-	target.Reflectors = append([]string(nil), source.Reflectors...)
-	target.ReflectorInterval = source.ReflectorInterval
-	target.ReflectorTimeout = source.ReflectorTimeout
-	target.EndpointTTL = source.EndpointTTL
-	target.EndpointRefresh = source.EndpointRefresh
-	target.EndpointGrace = source.EndpointGrace
-	target.PublishEndpoints = !source.DisableEndpointPublish
-	target.EndpointDiscovery = source.EndpointDiscovery
-	target.EndpointSourceOrder = append([]string(nil), source.EndpointSourceOrder...)
-	target.FilterPrivateIPv4 = source.FilterPrivateIPv4
 	return target
 }
 
@@ -480,7 +466,7 @@ func observedSAForSpec(spec ipsec.TransportLinkSpec, localEndpoint, remoteEndpoi
 	}
 }
 
-func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *syncConfigFile, *corestate.VerifiedState, *syncConfigFile) {
+func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *gossipStartupConfig, *corestate.VerifiedState, *gossipStartupConfig) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -561,8 +547,8 @@ func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *syncCon
 		Network:            buildNetwork("node-b.catofes."),
 		IdentityPrivateKey: nodeBPriv,
 	}
-	configA := &syncConfigFile{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
-	configB := &syncConfigFile{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
+	configA := &gossipStartupConfig{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
+	configB := &gossipStartupConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
 	return verifiedA, configA, verifiedB, configB
 }
 

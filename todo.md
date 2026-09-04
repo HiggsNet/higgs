@@ -52,7 +52,7 @@ Daemon
 - [ ] GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability。
 - [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 HostRuntime 持有。
 - [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 HostRuntime 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
-- [ ] 继续缩减临时 `syncConfigFile` 输入类型：日志输出和本机 endpoint 发布策略明确留在 app/platform composition，避免再次混入协议 config。
+- [x] `syncConfigFile` 已缩减并改名为 `gossipStartupConfig`，只作为 composition root 创建 GossipDriver/transport 的短生命周期输入；日志和本机 endpoint 发布策略直接读取 AppConfig。
 - [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 HostRuntime completion。
 - [ ] 审计剩余平台异步 completion；全部迁回 Daemon，安全 deny-first 仍立即处理。
 - [ ] 保持一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 不复制协议 executor。

@@ -168,7 +168,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(catofes): %v", err)
 	}
-	config := syncConfigFromAppConfig(rt.Config, state.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, state.State)
 	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime, config, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{

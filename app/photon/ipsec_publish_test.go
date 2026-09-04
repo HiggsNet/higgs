@@ -22,14 +22,13 @@ func newPersistedIPsecPublishTestService(
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *linuxRuntimeState,
-	config *syncConfigFile,
+	config *gossipStartupConfig,
 ) (*Daemon, func()) {
 	t.Helper()
 	// These tests isolate IPsec protocol publication. Endpoint publication is
 	// covered separately and can legitimately add a new address family between
 	// the first and second IPsec plans.
 	rt.Config.PublishEndpoints = false
-	config.DisableEndpointPublish = true
 	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)

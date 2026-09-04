@@ -106,7 +106,7 @@ func (f *fakeBirdClient) Raw(ctx context.Context, cmd string) (string, error) {
 
 func boolPtr(v bool) *bool { return &v }
 
-func buildTestRoutingOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile) {
+func buildTestRoutingOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *gossipStartupConfig) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -226,7 +226,7 @@ func buildTestRoutingOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
 	}
@@ -244,7 +244,7 @@ func buildTestRoutingOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config
 }
 
-func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey) {
+func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *gossipStartupConfig, map[zone.ZonePath]ed25519.PrivateKey) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -364,7 +364,7 @@ func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.1.0.0/16", "catofes.", time.Unix(125, 0), rootPriv)
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
 	}
@@ -390,7 +390,7 @@ func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config, signers
 }
 
-func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile, map[zone.ZonePath]ed25519.PrivateKey, *AppContext) {
+func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *gossipStartupConfig, map[zone.ZonePath]ed25519.PrivateKey, *AppContext) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -481,7 +481,7 @@ func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *cores
 	}
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/8", zone.RootZone, time.Unix(123, 0), rootPriv)
 	addIPAMPool(t, verified.Network, zone.RootZone, "10.0.0.0/16", "catofes.", time.Unix(124, 0), rootPriv)
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
 	}

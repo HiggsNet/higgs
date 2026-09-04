@@ -21,8 +21,8 @@ func TestPlanDaemonDiscoveryKeepsLifecycleCleanedCacheAbsent(t *testing.T) {
 	}
 	input := corehost.GossipDiscoveryInput{
 		LocalPeerID: config.PeerID, ManagedZone: verified.ManagedZone, Network: verified.Network,
-		Bootstrap: configuredKnownPeers(config), EndpointGrace: config.EndpointGrace,
-		SourceOrder: append([]string(nil), config.EndpointSourceOrder...),
+		Bootstrap: configuredKnownPeers(config), EndpointGrace: gossip.DefaultEndpointGrace,
+		SourceOrder: append([]string(nil), defaultAppConfig().EndpointSourceOrder...),
 		Suppressed:  peerCleanupSuppressions(runtimeState.PeerCleanups),
 	}
 	if checkpoint != nil {

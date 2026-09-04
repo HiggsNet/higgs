@@ -358,7 +358,7 @@ func TestRoutingReconcileInterval(t *testing.T) {
 		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
 		t.Fatalf("routingReconcileInterval = %s, want 30s", got)
@@ -371,7 +371,7 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)

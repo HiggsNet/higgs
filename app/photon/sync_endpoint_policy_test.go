@@ -6,7 +6,7 @@ import (
 )
 
 func TestFilterEndpointDiscoveryInputsLoopbackOnly(t *testing.T) {
-	config := &syncConfigFile{
+	config := &appConfig{
 		ListenAddr:        ":33434",
 		AdvertiseAddrs:    []string{"127.0.0.1:33434", "203.0.113.10:33434"},
 		Reflectors:        []string{"auto"},
@@ -31,7 +31,7 @@ func TestFilterEndpointDiscoveryInputsLoopbackOnly(t *testing.T) {
 }
 
 func TestFilterEndpointDiscoveryInputsAdvertiseOnly(t *testing.T) {
-	config := &syncConfigFile{
+	config := &appConfig{
 		ListenAddr:        "127.0.0.1:33434",
 		AdvertiseAddrs:    []string{"203.0.113.10:33434"},
 		Reflectors:        []string{"auto"},
@@ -47,7 +47,7 @@ func TestFilterEndpointDiscoveryInputsAdvertiseOnly(t *testing.T) {
 }
 
 func TestFilterEndpointDiscoveryInputsAutoLoopbackBootstrap(t *testing.T) {
-	config := &syncConfigFile{
+	config := &appConfig{
 		ListenAddr: ":33434",
 		Bootstrap: []syncConfigPeer{
 			{ID: "peer-a", Addr: "127.0.0.1:33435"},
@@ -67,7 +67,7 @@ func TestFilterEndpointDiscoveryInputsAutoLoopbackBootstrap(t *testing.T) {
 }
 
 func TestFilterEndpointDiscoveryInputsAutoPublicBootstrap(t *testing.T) {
-	config := &syncConfigFile{
+	config := &appConfig{
 		ListenAddr: ":33434",
 		Bootstrap: []syncConfigPeer{
 			{ID: "peer-a", Addr: "203.0.113.10:33435"},

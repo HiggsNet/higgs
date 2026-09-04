@@ -45,7 +45,7 @@ func TestDaemonGossipTransportConfigUsesInjectedDeps(t *testing.T) {
 }
 
 func TestDefaultSyncTransportDeps(t *testing.T) {
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		PeerID:          "node-a.catofes.",
 		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: 4096,
@@ -55,7 +55,7 @@ func TestDefaultSyncTransportDeps(t *testing.T) {
 		}},
 	}
 
-	deps := defaultSyncTransportDeps(config)
+	deps := defaultSyncTransportDeps(config, nil)
 	if deps.Replay == nil {
 		t.Fatalf("Replay is nil")
 	}

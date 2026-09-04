@@ -1088,36 +1088,22 @@ func statePathOverride() string {
 	return os.Getenv("PHOTON_STATE")
 }
 
-func syncConfigFromAppConfig(config *appConfig, verified *corestate.VerifiedState) *syncConfigFile {
+func gossipStartupConfigFromAppConfig(config *appConfig, verified *corestate.VerifiedState) *gossipStartupConfig {
 	peerID := config.PeerID
 	if peerID == "" {
 		peerID = defaultPeerID(verified)
 	}
-	return &syncConfigFile{
-		PeerID:                 peerID,
-		ListenAddr:             config.ListenAddr,
-		Bootstrap:              config.Bootstrap,
-		MaxMessageBytes:        config.MaxMessageBytes,
-		MaxSyncZones:           config.MaxSyncZones,
-		MaxSyncRecords:         config.MaxSyncRecords,
-		LogLevel:               config.LogLevel,
-		LogMode:                config.Log.Mode,
-		LogFile:                config.Log.File,
-		AdvertiseAddrs:         config.AdvertiseAddrs,
-		Reflectors:             config.Reflectors,
-		ReflectorInterval:      config.ReflectorInterval,
-		ReflectorTimeout:       config.ReflectorTimeout,
-		EndpointTTL:            config.EndpointTTL,
-		EndpointRefresh:        config.EndpointRefresh,
-		EndpointGrace:          config.EndpointGrace,
-		DisableEndpointPublish: !config.PublishEndpoints,
-		EndpointDiscovery:      config.EndpointDiscovery,
-		EndpointSourceOrder:    config.EndpointSourceOrder,
-		FilterPrivateIPv4:      config.FilterPrivateIPv4,
+	return &gossipStartupConfig{
+		PeerID:          peerID,
+		ListenAddr:      config.ListenAddr,
+		Bootstrap:       config.Bootstrap,
+		MaxMessageBytes: config.MaxMessageBytes,
+		MaxSyncZones:    config.MaxSyncZones,
+		MaxSyncRecords:  config.MaxSyncRecords,
 	}
 }
 
-func configuredKnownPeers(config *syncConfigFile) map[string]*net.UDPAddr {
+func configuredKnownPeers(config *gossipStartupConfig) map[string]*net.UDPAddr {
 	peers := make(map[string]*net.UDPAddr, len(config.Bootstrap))
 	for _, peer := range config.Bootstrap {
 		if peer.ID == "" || peer.Addr == "" {

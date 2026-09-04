@@ -14,7 +14,6 @@ func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
 	config.ListenAddr = "127.0.0.1:33434"
-	config.EndpointTTL = time.Hour
 	now := time.Unix(1000, 0)
 	oldCollect := collectSyncLocalEndpoints
 	collectSyncLocalEndpoints = func(port uint16, _ []string, _ []string, _ time.Duration, _ bool) ([]gossip.LocalEndpoint, error) {
@@ -23,8 +22,9 @@ func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
 	t.Cleanup(func() { collectSyncLocalEndpoints = oldCollect })
 
 	daemon := &Daemon{
-		App: &AppContext{Config: testAppConfigFromSyncConfig(config), Clock: func() time.Time { return now }},
+		App: &AppContext{Config: testAppConfigFromGossipStartup(config), Clock: func() time.Time { return now }},
 	}
+	daemon.App.Config.EndpointTTL = time.Hour
 	intent, err := daemon.endpointProtocolIntent(verified)
 	if err != nil || intent == nil {
 		t.Fatalf("endpoint intent/error = %#v/%v", intent, err)

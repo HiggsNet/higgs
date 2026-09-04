@@ -19,9 +19,8 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	managed := state.ManagedZone
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	state.Network.Zones[managed.Parent()].Delegations[managed] = cloneDelegationForJoinBundle(snapshot.Delegations[managed])
-	config.DisableEndpointPublish = true
-
 	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
+	rt.Config.PublishEndpoints = false
 	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
@@ -79,7 +78,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	}
 }
 
-func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, *syncConfigFile, ed25519.PrivateKey) {
+func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, *gossipStartupConfig, ed25519.PrivateKey) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -122,7 +121,7 @@ func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, 
 	network.Zones["catofes."].ParentProof = []*zone.Delegation{cloneDelegationForJoinBundle(delegation)}
 	configureValidation(network)
 	state := &corestate.VerifiedState{ManagedZone: "catofes.", IdentityPrivateKey: managedPriv, Network: network}
-	config := &syncConfigFile{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}
+	config := &gossipStartupConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}
 	return state, config, rootPriv
 }
 

@@ -55,7 +55,7 @@ func showPeers(filter string, verbose bool) error {
 		return nil
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
-	config := syncConfigFromAppConfig(rt.Config, common.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 

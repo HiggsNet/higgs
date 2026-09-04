@@ -40,11 +40,11 @@ const (
 	logModeStderrSyslog logMode = "stderr+syslog"
 )
 
-func newAppLogger(config *syncConfigFile) *appLogger {
+func newAppLogger(config *appConfig) *appLogger {
 	level := logLevelInfo
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("PHOTON_LOG_LEVEL")))
 	if raw == "" && config != nil {
-		raw = strings.ToLower(strings.TrimSpace(config.effectiveLogLevel()))
+		raw = strings.ToLower(strings.TrimSpace(config.LogLevel))
 	}
 	switch logLevel(raw) {
 	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:
@@ -55,20 +55,10 @@ func newAppLogger(config *syncConfigFile) *appLogger {
 	mode := logModeStderr
 	file := ""
 	if config != nil {
-		mode = parseLogMode(config.LogMode)
-		file = strings.TrimSpace(config.LogFile)
+		mode = parseLogMode(config.Log.Mode)
+		file = strings.TrimSpace(config.Log.File)
 	}
 	return &appLogger{level: level, out: os.Stderr, now: time.Now, mode: mode, file: file}
-}
-
-func (c *syncConfigFile) effectiveLogLevel() string {
-	if c == nil {
-		return ""
-	}
-	if strings.TrimSpace(c.LogLevel) != "" {
-		return c.LogLevel
-	}
-	return ""
 }
 
 func parseLogMode(raw string) logMode {

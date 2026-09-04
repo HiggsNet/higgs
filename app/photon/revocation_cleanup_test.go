@@ -580,7 +580,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		Bootstrap: []syncConfigPeer{
 			{ID: "node-b.catofes.", Addr: "192.0.2.1:33434"},
 		},

@@ -7,7 +7,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/observability"
 )
 
-func gossipPeersOptions(config *syncConfigFile, diagnostics map[string]observability.PeerDiagnostics, now time.Time) inspect.GossipPeersOptions {
+func gossipPeersOptions(config *gossipStartupConfig, diagnostics map[string]observability.PeerDiagnostics, now time.Time) inspect.GossipPeersOptions {
 	options := inspect.GossipPeersOptions{Diagnostics: diagnostics, Now: now}
 	if config == nil {
 		return options

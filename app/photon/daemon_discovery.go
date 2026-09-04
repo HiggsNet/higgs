@@ -22,11 +22,11 @@ func (d *Daemon) updateDiscoveredPeers() {
 // currentGossipConfig derives app/platform gossip settings from the current
 // app config and verified identity. Protocol execution keeps its own detached
 // configuration inside host.Runtime.
-func (d *Daemon) currentGossipConfig() *syncConfigFile {
+func (d *Daemon) currentGossipConfig() *gossipStartupConfig {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	config := syncConfigFromAppConfig(d.App.Config, nil)
+	config := gossipStartupConfigFromAppConfig(d.App.Config, nil)
 	if d.hostRuntime != nil {
 		driverConfig := d.hostRuntime.GossipConfig()
 		if driverConfig.PeerID != "" {
@@ -47,12 +47,6 @@ func (d *Daemon) currentGossipConfig() *syncConfigFile {
 				}
 				config.Bootstrap = append(config.Bootstrap, peer)
 			}
-		}
-		if driverConfig.Discovery.EndpointGrace > 0 {
-			config.EndpointGrace = driverConfig.Discovery.EndpointGrace
-		}
-		if len(driverConfig.Discovery.SourceOrder) > 0 {
-			config.EndpointSourceOrder = append([]string(nil), driverConfig.Discovery.SourceOrder...)
 		}
 	}
 	return config
@@ -76,7 +70,7 @@ func peerCleanupSuppressions(cleanups map[string]peerLifecycleCleanupState) map[
 	return suppressed
 }
 
-func gossipHostRuntimeConfig(config *syncConfigFile) corehost.GossipRuntimeConfig {
+func gossipHostRuntimeConfig(config *gossipStartupConfig, app *appConfig, logger *appLogger) corehost.GossipRuntimeConfig {
 	if config == nil {
 		return corehost.GossipRuntimeConfig{}
 	}
@@ -84,17 +78,20 @@ func gossipHostRuntimeConfig(config *syncConfigFile) corehost.GossipRuntimeConfi
 	for _, peer := range config.Bootstrap {
 		bootstrapPeers = append(bootstrapPeers, peer.ID)
 	}
-	return corehost.GossipRuntimeConfig{
+	runtimeConfig := corehost.GossipRuntimeConfig{
 		PeerID: config.PeerID,
 		Limits: syncLimits(config),
-		Log:    gossipRuntimeLogger(newAppLogger(config)),
+		Log:    gossipRuntimeLogger(logger),
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(config),
 			BootstrapPeers: bootstrapPeers,
-			EndpointGrace:  config.EndpointGrace,
-			SourceOrder:    append([]string(nil), config.EndpointSourceOrder...),
 		},
 	}
+	if app != nil {
+		runtimeConfig.Discovery.EndpointGrace = app.EndpointGrace
+		runtimeConfig.Discovery.SourceOrder = append([]string(nil), app.EndpointSourceOrder...)
+	}
+	return runtimeConfig
 }
 
 func gossipRuntimeLogger(logger *appLogger) func(corehost.GossipRuntimeLog) {

@@ -199,7 +199,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.RuntimeState` 共用；不在迁移后保留两套深拷贝实现 |
 | `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
 | `status.go` | status CLI | inspect read model + photoncli |
-| `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime`、Daemon 重复 GossipConfig/transport/deps 已删除；协议配置与 transport/address book 由 GossipDriver 持有，app 侧 endpoint/log/展示配置按需派生；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
+| `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime`、Daemon 重复 GossipConfig/transport/deps 已删除；协议配置与 transport/address book 由 GossipDriver 持有，短生命周期 `gossipStartupConfig` 只负责 composition 输入，endpoint/log 直接读取 AppConfig；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
 | `verify.go` | chain 验证 CLI | 验证留 crypto/state；CLI 进 photoncli |
 | `version.go` | build info | `internal/buildinfo` 供 Linux/Windows 复用 |
 | `zone.go` | zone/record 列表 CLI | Store read API + inspect/text + photoncli |

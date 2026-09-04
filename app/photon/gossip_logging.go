@@ -6,7 +6,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
+func syncDebugLogger(config *appConfig) func(gossip.Event) {
 	if !debugLogEnabled(config) {
 		return nil
 	}
@@ -40,6 +40,6 @@ func syncDebugLogger(config *syncConfigFile) func(gossip.Event) {
 	}
 }
 
-func debugLogEnabled(config *syncConfigFile) bool {
+func debugLogEnabled(config *appConfig) bool {
 	return newAppLogger(config).debugEnabled()
 }

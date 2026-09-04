@@ -243,7 +243,7 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	runtime := &linuxRuntimeState{}
 	runtime.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
 	rt := &AppContext{Config: appConfig, StatePath: statePath}
-	config := syncConfigFromAppConfig(appConfig, verified)
+	config := gossipStartupConfigFromAppConfig(appConfig, verified)
 	service := newTestDaemonFromOwners(rt, verified, nil, runtime, config, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)

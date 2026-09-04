@@ -150,7 +150,7 @@ type daemonEventResult struct {
 	Error          error
 }
 
-func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *syncConfigFile, interval time.Duration) *Daemon {
+func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *gossipStartupConfig, interval time.Duration) *Daemon {
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
@@ -167,13 +167,18 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *sy
 	if rt != nil {
 		clock = rt.Now
 	}
-	hostRuntime := corehost.NewRuntime(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config))
+	var loggerConfig *appConfig
+	if rt != nil {
+		loggerConfig = rt.Config
+	}
+	logger := newAppLogger(loggerConfig)
+	hostRuntime := corehost.NewRuntime(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config, loggerConfig, logger))
 	d := &Daemon{
 		App:               rt,
 		Interval:          interval,
 		ControlSocketPath: socketPath,
 		Events:            make(chan daemonEvent, 64),
-		Log:               newAppLogger(config),
+		Log:               logger,
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
 		StateStore:        stateStore,
 		health:            &healthDriver{spool: healthspool.New(spoolConfig)},
@@ -208,7 +213,7 @@ func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, *corestate.Bol
 		_ = boltStore.Close()
 		return nil, nil, errors.New("daemon common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, common.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
 	return newDaemonWithStore(rt, stateStore, config, interval), boltStore, nil
 }
 
@@ -451,7 +456,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 							return err
 						}
 					}
-					interval := d.currentGossipConfig().ReflectorInterval
+					interval := d.App.Config.ReflectorInterval
 					if interval <= 0 {
 						interval = 5 * time.Minute
 					}
@@ -1312,15 +1317,15 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	if currentIdentityKeyPath != "" && requestedIdentityKeyPath != "" && requestedIdentityKeyPath != currentIdentityKeyPath {
 		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
 	}
-	syncConfig := syncConfigFromAppConfig(config, common.State)
-	nextLogger := newAppLogger(syncConfig)
+	syncConfig := gossipStartupConfigFromAppConfig(config, common.State)
+	nextLogger := newAppLogger(config)
 	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, config.Netns.Names, nextLogger)
 	if err != nil {
 		return err
 	}
 	d.App.Config = config
 	d.App.StatePath = statePath
-	if err := d.hostRuntime.ReplaceGossipConfig(gossipHostRuntimeConfig(syncConfig)); err != nil {
+	if err := d.hostRuntime.ReplaceGossipConfig(gossipHostRuntimeConfig(syncConfig, config, nextLogger)); err != nil {
 		_ = linuxRuntime.Close()
 		return err
 	}

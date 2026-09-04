@@ -21,7 +21,7 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	parent := managed.Parent()
 	removeIPAMPoolForTest(committed.State.Network, parent, "10.0.0.0/16")
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	beforeRevision := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -66,7 +66,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 	removeIPAMPoolForTest(olderDisk.State.Network, managed.Parent(), "10.0.0.0/16")
 	replacePersistedCommonForTest(t, rt, olderDisk.State)
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -115,7 +115,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	}
 	replacePersistedCommonForTest(t, rt, activeDisk)
 
-	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, state), time.Second)
+	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, state), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:  daemonEventRouteMutation,
@@ -154,7 +154,7 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	}
 	replacePersistedCommonForTest(t, rt, disk)
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, syncConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
 	before := service.StateStore.Meta()
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventServiceMutation,
@@ -186,7 +186,7 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
 	before := service.StateStore.Meta().Revision
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
@@ -223,7 +223,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
 	}
 	_, directErr := applyAuthoritativeVerifiedTestIntent(view.State, commonIPAMIntentForTest(t, request), rt.Now())
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
 	if directErr == nil || result.Error == nil {
 		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
@@ -317,7 +317,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, syncConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 

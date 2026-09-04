@@ -31,12 +31,12 @@ type SyncTransportDeps struct {
 	Log        func(gossip.Event)
 }
 
-func defaultSyncTransportDeps(config *syncConfigFile) *SyncTransportDeps {
+func defaultSyncTransportDeps(config *gossipStartupConfig, loggerConfig *appConfig) *SyncTransportDeps {
 	return &SyncTransportDeps{
 		KnownPeers: configuredKnownPeers(config),
 		Replay:     gossip.NewReplayWindow(0),
 		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
-		Log:        syncDebugLogger(config),
+		Log:        syncDebugLogger(loggerConfig),
 	}
 }
 
@@ -65,11 +65,11 @@ func syncStatus(verbose bool) error {
 	if common.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, common.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
 	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(config, rt.Now(), verbose)))
 }
 
-func syncStatusOptions(config *syncConfigFile, now time.Time, verbose bool) inspect.SyncStatusOptions {
+func syncStatusOptions(config *gossipStartupConfig, now time.Time, verbose bool) inspect.SyncStatusOptions {
 	peers := gossipPeersOptions(config, nil, now)
 	options := inspect.SyncStatusOptions{
 		PeerID: config.PeerID, ListenAddr: config.ListenAddr,
@@ -90,7 +90,7 @@ func syncServe(ctx context.Context) error {
 	}
 	defer boltStore.Close()
 	config := service.currentGossipConfig()
-	logger := newAppLogger(config)
+	logger := newAppLogger(rt.Config)
 	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
@@ -143,7 +143,7 @@ func syncOnce(peerID string) error {
 		return err
 	}
 	service.updateDiscoveredPeers()
-	logger := newAppLogger(service.currentGossipConfig())
+	logger := service.Log
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
 	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
@@ -244,7 +244,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	if config == nil {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
-	deps := defaultSyncTransportDeps(config)
+	deps := defaultSyncTransportDeps(config, d.App.Config)
 	listenAddr := config.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
@@ -265,7 +265,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	return transport, nil
 }
 
-func gossipTransportConfig(config *syncConfigFile, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
+func gossipTransportConfig(config *gossipStartupConfig, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
 	return gossip.Config{
 		PeerID:          config.PeerID,
 		KnownPeers:      deps.KnownPeers,
@@ -290,9 +290,9 @@ func listenPortFromAddr(addr string) uint16 {
 }
 
 func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	var config *syncConfigFile
+	var config *appConfig
 	if d != nil && d.App != nil && d.App.Config != nil {
-		config = syncConfigFromAppConfig(d.App.Config, verified)
+		config = d.App.Config
 	}
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || autoJoinPendingVerified(verified) {
 		return nil, nil
@@ -300,7 +300,7 @@ func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*cor
 	if config == nil {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
-	if config != nil && config.DisableEndpointPublish {
+	if !config.PublishEndpoints {
 		return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
 			Verified: verified, Disabled: true, Now: d.now(), TTL: config.EndpointTTL,
 		})
@@ -327,7 +327,7 @@ func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*cor
 // deployments: if every configured bootstrap peer uses a loopback address, it
 // behaves like loopback_only to avoid publishing unreachable public IPs that
 // would starve loopback bootstrap paths.
-func filterEndpointDiscoveryInputs(config *syncConfigFile, port uint16) (advertiseAddrs, reflectors []string) {
+func filterEndpointDiscoveryInputs(config *appConfig, port uint16) (advertiseAddrs, reflectors []string) {
 	mode := strings.ToLower(strings.TrimSpace(config.EndpointDiscovery))
 	if mode == "" && allBootstrapAddrsLoopback(config.Bootstrap) {
 		mode = "loopback_only"
@@ -381,7 +381,7 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func syncLimits(config *syncConfigFile) corestate.SyncLimits {
+func syncLimits(config *gossipStartupConfig) corestate.SyncLimits {
 	limits := corestate.DefaultSyncLimits()
 	if config == nil {
 		return limits

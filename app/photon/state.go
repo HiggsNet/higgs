@@ -80,27 +80,13 @@ type rejectedDigestState = photonstate.PeerRejectedDigest
 type peerLifecycleCleanupState = photonstate.PeerLifecycleCleanupState
 type linuxRuntimeState = photonlinux.RuntimeState
 
-type syncConfigFile struct {
-	PeerID                 string           `json:"peer_id"`
-	ListenAddr             string           `json:"listen_addr"`
-	Bootstrap              []syncConfigPeer `json:"bootstrap"`
-	MaxMessageBytes        int              `json:"max_message_bytes"`
-	MaxSyncZones           int              `json:"max_sync_zones"`
-	MaxSyncRecords         int              `json:"max_sync_records"`
-	LogLevel               string           `json:"log_level,omitempty"`
-	LogMode                string           `json:"log_mode,omitempty"`
-	LogFile                string           `json:"log_file,omitempty"`
-	AdvertiseAddrs         []string         `json:"advertise_addrs,omitempty"`
-	Reflectors             []string         `json:"reflectors,omitempty"`
-	ReflectorInterval      time.Duration    `json:"reflector_interval,omitempty"`
-	ReflectorTimeout       time.Duration    `json:"reflector_timeout,omitempty"`
-	EndpointTTL            time.Duration    `json:"endpoint_ttl,omitempty"`
-	EndpointRefresh        time.Duration    `json:"endpoint_refresh,omitempty"`
-	EndpointGrace          time.Duration    `json:"endpoint_grace,omitempty"`
-	DisableEndpointPublish bool             `json:"disable_endpoint_publish,omitempty"`
-	EndpointDiscovery      string           `json:"endpoint_discovery,omitempty"`
-	EndpointSourceOrder    []string         `json:"endpoint_source_order,omitempty"`
-	FilterPrivateIPv4      bool             `json:"filter_private_ipv4,omitempty"`
+type gossipStartupConfig struct {
+	PeerID          string           `json:"peer_id"`
+	ListenAddr      string           `json:"listen_addr"`
+	Bootstrap       []syncConfigPeer `json:"bootstrap"`
+	MaxMessageBytes int              `json:"max_message_bytes"`
+	MaxSyncZones    int              `json:"max_sync_zones"`
+	MaxSyncRecords  int              `json:"max_sync_records"`
 }
 
 type syncConfigPeer struct {

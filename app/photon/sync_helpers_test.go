@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *syncConfigFile) {
+func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *gossipStartupConfig) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -101,7 +101,7 @@ func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.G
 		Network:            ns,
 		IdentityPrivateKey: nodeBPriv,
 	}
-	config := &syncConfigFile{
+	config := &gossipStartupConfig{
 		PeerID:     "node-a.catofes.",
 		ListenAddr: "127.0.0.1:0",
 	}

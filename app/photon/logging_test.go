@@ -144,7 +144,7 @@ func TestAppLoggerWritesToConfiguredFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "photon.log")
 	var stderr bytes.Buffer
-	logger := newAppLogger(&syncConfigFile{LogMode: "stderr+file", LogFile: path}).withOutput(&stderr).withNow(func() time.Time {
+	logger := newAppLogger(&appConfig{Log: logConfig{Mode: "stderr+file", File: path}}).withOutput(&stderr).withNow(func() time.Time {
 		return time.Unix(100, 0).UTC()
 	})
 

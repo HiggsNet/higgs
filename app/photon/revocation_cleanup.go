@@ -107,7 +107,7 @@ func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, _ t
 
 // isConfiguredBootstrapPeerWithConfig checks if a peer ID appears in the
 // bootstrap config. This is the config-aware version called by the daemon.
-func isConfiguredBootstrapPeerWithConfig(config *syncConfigFile, peerID string) bool {
+func isConfiguredBootstrapPeerWithConfig(config *gossipStartupConfig, peerID string) bool {
 	if config == nil {
 		return false
 	}
@@ -194,7 +194,7 @@ func mergePurgePlan(common corestate.PurgeRevokedPlan, runtime *linuxRuntimeStat
 
 // AllRevocationImpact computes impact for all currently-revoked zones and
 // returns a combined result for debug/diagnostic output.
-func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, config *syncConfigFile, now time.Time) []inspect.RevocationImpact {
+func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, config *gossipStartupConfig, now time.Time) []inspect.RevocationImpact {
 	if network == nil {
 		return nil
 	}

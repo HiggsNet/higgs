@@ -15,7 +15,7 @@ import (
 
 func TestNewDaemonDefaultsInterval(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, 0,
+		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, 0,
 	)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
@@ -38,7 +38,7 @@ func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsUsesDryRunObservation(t *te
 
 func TestDaemonReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &syncConfigFile{}, time.Second,
+		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
 	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
@@ -93,7 +93,7 @@ func TestDaemonStateChangedHook(t *testing.T) {
 		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
 		nil,
 		&linuxRuntimeState{},
-		&syncConfigFile{},
+		&gossipStartupConfig{},
 		time.Second,
 	)
 	var called bool

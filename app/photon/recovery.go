@@ -195,7 +195,7 @@ func recoveryImportZone(input string, direct bool) error {
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, view.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, view.State)
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
 	imported, err := startup.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
@@ -268,10 +268,10 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := syncConfigFromAppConfig(rt.Config, view.State)
+	config := gossipStartupConfigFromAppConfig(rt.Config, view.State)
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
-	hostRuntime := corehost.NewRuntime(corehost.NewClock(rt.Now), corehost.DefaultEventBuffer, startup.Common, gossipHostRuntimeConfig(config))
+	hostRuntime := corehost.NewRuntime(corehost.NewClock(rt.Now), corehost.DefaultEventBuffer, startup.Common, gossipHostRuntimeConfig(config, rt.Config, newAppLogger(rt.Config)))
 	defer hostRuntime.Stop()
 
 	deadline := time.Now().Add(timeout)
