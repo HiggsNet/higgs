@@ -524,6 +524,9 @@ func checkIPAMWriteCapability(state *stateFile, path zone.ZonePath, key string) 
 	if zs == nil || zs.Authority == nil {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
+	if path == zone.RootZone {
+		return nil
+	}
 	for _, authorizedKey := range zs.Authority.Keys {
 		for _, capability := range authorizedKey.Capabilities {
 			if capability.KeyPrefix != "" && !strings.HasPrefix(key, capability.KeyPrefix) {

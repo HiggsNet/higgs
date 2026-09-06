@@ -30,17 +30,7 @@ func buildTestNetworkState(t testing.TB) (*stateFile, *syncConfigFile) {
 		t.Fatalf("GenerateKey(node-b): %v", err)
 	}
 
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: 1,
-		Keys: []zone.AuthorizedKey{{
-			Key: rootPub,
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate},
-			}},
-		}},
-	}
+	rootAuthority := configuredRootAuthority(rootPub)
 	catofesAuthority := &zone.ZoneAuthority{
 		Zone:      "catofes.",
 		Epoch:     1,

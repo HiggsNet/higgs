@@ -315,6 +315,9 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	if err := validateRecoveryRootSnapshot(rt, state, snapshot); err != nil {
 		return nil, err
 	}
+	if snapshot.Zone == zone.RootZone && rt.Config != nil {
+		pinConfiguredRootAuthority(state.Network, rt.Config.TrustedRootPublicKey)
+	}
 
 	config, err := rt.SyncConfig(state)
 	if err != nil {
@@ -322,7 +325,7 @@ func applyRecoveryZoneSnapshot(rt *Runtime, state *stateFile, snapshot *gossip.Z
 	}
 	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
-	nextNetwork, result, err := gossip.ApplySnapshot(state.Network, snapshot, rt.Now(), limits)
+	nextNetwork, result, err := gossip.ApplyRecoverySnapshot(state.Network, snapshot, rt.Now(), limits)
 	if err != nil {
 		return nil, err
 	}
@@ -345,12 +348,11 @@ func validateRecoveryRootSnapshot(rt *Runtime, state *stateFile, snapshot *gossi
 		return errors.New("root recovery snapshot has no authority")
 	}
 	if rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {
-		for _, key := range snapshot.Authority.Keys {
-			if equalPublicKey(key.Key, rt.Config.TrustedRootPublicKey) {
-				return nil
-			}
+		want := configuredRootAuthority(rt.Config.TrustedRootPublicKey)
+		if bytes.Equal(photoncrypto.AuthorityHash(snapshot.Authority), photoncrypto.AuthorityHash(want)) {
+			return nil
 		}
-		return errors.New("root recovery snapshot does not match trusted_root_public_key")
+		return errors.New("root recovery snapshot does not exactly match the immutable authority derived from trusted_root_public_key")
 	}
 	root := state.Network.Zones[zone.RootZone]
 	if root == nil || root.Authority == nil {

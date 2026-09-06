@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func initRootState() error {
@@ -34,15 +33,7 @@ func initRootStateInRuntime(rt *Runtime) (ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: photoncrypto.SupportedThreshold,
-		Keys: []zone.AuthorizedKey{{
-			Key:          rootPub,
-			Capabilities: defaultRootCapabilities(),
-		}},
-	}
+	rootAuthority := configuredRootAuthority(rootPub)
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	state := &stateFile{

@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"path/filepath"
 	"testing"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestRuntimeCachesConfigForStateIO(t *testing.T) {
@@ -125,5 +127,35 @@ func TestVerifyConfiguredRootTrustAt(t *testing.T) {
 	}
 	if err := verifyConfiguredRootTrustAt(state.Network, nil); err != nil {
 		t.Fatalf("verifyConfiguredRootTrustAt(nil): %v", err)
+	}
+
+	root := state.Network.Zones[zone.RootZone]
+	root.Authority.Keys = append(root.Authority.Keys, zone.AuthorizedKey{Key: wrongRoot})
+	if err := verifyConfiguredRootTrustAt(state.Network, rootKey); err == nil {
+		t.Fatal("verifyConfiguredRootTrustAt accepted an extra root key")
+	}
+}
+
+func TestPinConfiguredRootAuthorityRepairsLegacyBootstrapShape(t *testing.T) {
+	rootKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys: []zone.AuthorizedKey{{Key: rootKey, Capabilities: []zone.Capability{{
+			Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate},
+		}}}},
+	})
+
+	pinConfiguredRootAuthority(ns, rootKey)
+	if err := verifyConfiguredRootTrustAt(ns, rootKey); err != nil {
+		t.Fatalf("pinned authority: %v", err)
+	}
+	if len(ns.Zones[zone.RootZone].Authority.Keys[0].Capabilities) != 0 {
+		t.Fatal("pinned authority retained legacy root capabilities")
 	}
 }

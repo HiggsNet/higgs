@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
@@ -304,6 +305,7 @@ func loadStateAtWithConfig(path string, config *appConfig) (*stateFile, error) {
 		return state, nil
 	}
 	normalizeState(state.Network)
+	pinConfiguredRootAuthority(state.Network, config.TrustedRootPublicKey)
 	normalizeSyncPeers(&state)
 	if err := verifyConfiguredRootTrustAt(state.Network, config.TrustedRootPublicKey); err != nil {
 		return nil, err
@@ -453,12 +455,30 @@ func verifyConfiguredRootTrustAt(ns *zone.NetworkState, trustRoot ed25519.Public
 	if root == nil || root.Authority == nil {
 		return errors.New("trusted root public key configured but root authority is missing")
 	}
-	for _, key := range root.Authority.Keys {
-		if equalPublicKey(key.Key, trustRoot) {
-			return nil
-		}
+	want := configuredRootAuthority(trustRoot)
+	if bytes.Equal(photoncrypto.AuthorityHash(root.Authority), photoncrypto.AuthorityHash(want)) {
+		return nil
 	}
-	return errors.New("root authority does not match trusted_root_public_key in config.yaml")
+	return errors.New("root authority does not exactly match the immutable authority derived from trusted_root_public_key")
+}
+
+func pinConfiguredRootAuthority(ns *zone.NetworkState, trustRoot ed25519.PublicKey) {
+	if ns == nil || len(trustRoot) == 0 {
+		return
+	}
+	root := ns.Zones[zone.RootZone]
+	if root == nil || root.Authority == nil {
+		return
+	}
+	// Repair only the legacy bootstrap capability mismatch. A key, epoch,
+	// threshold, or cardinality mismatch means this state belongs to another
+	// network and must not be silently adopted.
+	if root.Authority.Zone != zone.RootZone || root.Authority.Epoch != 1 ||
+		root.Authority.Threshold != photoncrypto.SupportedThreshold || len(root.Authority.Keys) != 1 ||
+		!equalPublicKey(root.Authority.Keys[0].Key, trustRoot) {
+		return
+	}
+	root.Authority = configuredRootAuthority(trustRoot)
 }
 
 func equalPublicKey(a, b ed25519.PublicKey) bool {

@@ -22,17 +22,7 @@ func createConfiguredBootstrapState(path string, config *appConfig) (*stateFile,
 	if err != nil {
 		return nil, err
 	}
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: photoncrypto.SupportedThreshold,
-		Keys: []zone.AuthorizedKey{{
-			Key: append(ed25519.PublicKey(nil), config.TrustedRootPublicKey...),
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
-			}},
-		}},
-	}
+	rootAuthority := configuredRootAuthority(config.TrustedRootPublicKey)
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	configureValidation(ns)

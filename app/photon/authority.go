@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,16 +11,18 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func allAuthorityPermissions() []zone.Permission {
-	return []zone.Permission{
-		zone.PermWrite,
-		zone.PermDelegate,
-		zone.PermAllocateIP,
+// configuredRootAuthority is the protocol's immutable root trust anchor. Root
+// key rotation intentionally requires a new network. Its sole key is implicitly
+// privileged, so future permissions do not alter this authority's hash.
+func configuredRootAuthority(publicKey ed25519.PublicKey) *zone.ZoneAuthority {
+	return &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: photoncrypto.SupportedThreshold,
+		Keys: []zone.AuthorizedKey{{
+			Key: append(ed25519.PublicKey(nil), publicKey...),
+		}},
 	}
-}
-
-func defaultRootCapabilities() []zone.Capability {
-	return []zone.Capability{{Permissions: allAuthorityPermissions()}}
 }
 
 func defaultDelegationCapabilities() []zone.Capability {
@@ -115,6 +118,9 @@ func grantDelegationPermissionsInState(rt *Runtime, state *stateFile, path zone.
 	if !path.Valid() {
 		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}
+	if path == zone.RootZone {
+		return nil, errors.New("root authority is immutable and its key is implicitly privileged")
+	}
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
@@ -128,18 +134,6 @@ func grantDelegationPermissionsInState(rt *Runtime, state *stateFile, path zone.
 	}
 	grantPermissionsToAuthority(authority, permissions)
 	authority.Epoch++
-
-	if path == zone.RootZone {
-		if !authorityHasPrivateKey(authority, state.RootPrivateKey) {
-			return nil, errors.New("root private key does not match root authority")
-		}
-		zs.Authority = authority
-		configureValidation(state.Network)
-		if err := photoncrypto.VerifyChain(state.Network, zone.RootZone, rt.Now()); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
 
 	parent := path.Parent()
 	parentState := state.Network.Zones[parent]

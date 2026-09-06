@@ -41,6 +41,8 @@ type joinAcceptResult struct {
 	RootPublicKey ed25519.PublicKey
 }
 
+var errDelegationAlreadyExists = errors.New("delegation already exists")
+
 func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid join zone: %s", path)
@@ -142,6 +144,11 @@ func issueDelegationInState(rt *Runtime, state *stateFile, request *joinRequest,
 	parentState := state.Network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
 		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	}
+	if state.Network.ActiveRevocation(request.Zone, rt.Now()) == nil {
+		if parentState.Delegations[request.Zone] != nil || state.Network.Zones[request.Zone] != nil {
+			return nil, fmt.Errorf("%w for %s; use gossip delegate grant to add permissions", errDelegationAlreadyExists, request.Zone)
+		}
 	}
 	signer, err := signerForParent(state, parent)
 	if err != nil {
@@ -374,6 +381,16 @@ func prepareJoinAcceptedState(rt *Runtime, existing *stateFile, bundle *joinBund
 	bundleNetwork := zone.CloneNetworkState(bundle.Network)
 	configureValidation(bundleNetwork)
 	normalizeState(bundleNetwork)
+	trustedRoot := bundle.RootPublicKey
+	if rt.Config != nil && len(rt.Config.TrustedRootPublicKey) > 0 {
+		trustedRoot = rt.Config.TrustedRootPublicKey
+		if !equalPublicKey(bundle.RootPublicKey, trustedRoot) {
+			return nil, nil, errors.New("join bundle root does not match trusted_root_public_key")
+		}
+	}
+	if err := verifyConfiguredRootTrustAt(bundleNetwork, trustedRoot); err != nil {
+		return nil, nil, fmt.Errorf("join bundle root authority: %w", err)
+	}
 	if err := photoncrypto.VerifyChain(bundleNetwork, bundle.Zone, rt.Now()); err != nil {
 		return nil, nil, err
 	}
